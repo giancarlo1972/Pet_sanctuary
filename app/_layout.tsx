@@ -57,6 +57,9 @@ export default function RootLayout() {
         <Stack.Screen name="incident-report" />
         <Stack.Screen name="reports-search" />
         <Stack.Screen name="reports-tracking" />
+        <Stack.Screen name="api-configuration" />
+        <Stack.Screen name="organizations-list" />
+        <Stack.Screen name="organization-details" />
         <Stack.Screen name="+not-found" />
       </Stack>
       <StatusBar style="dark" backgroundColor="transparent" />

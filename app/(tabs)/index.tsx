@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import { Heart, MapPin, Filter, Plus, Search, Camera, TriangleAlert as AlertTriangle, Scan } from 'lucide-react-native';
+import { Heart, MapPin, Filter, Plus, Search, Camera, TriangleAlert as AlertTriangle, Scan, Server, Database } from 'lucide-react-native';
 import { Colors, Gradients } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { mockPets } from '@/constants/mockData';
@@ -193,6 +193,18 @@ export default function HomeScreen() {
               onPress={() => router.push('/search')}
               color={Colors.primary}
             />
+            <QuickAccess
+              icon={<Server color={Colors.secondary} size={20} />}
+              title="Organizations"
+              onPress={() => router.push('/api-configuration')}
+              color={Colors.secondary}
+            />
+            <QuickAccess
+              icon={<Database color={Colors.accent} size={20} />}
+              title="API Config"
+              onPress={() => router.push('/organizations-list')}
+              color={Colors.accent}
+            />
           </View>
         </View>
       </ScrollView>
@@ -294,10 +306,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     paddingHorizontal: 20,
-    gap: 12,
+    gap: 8,
   },
   quickAccess: {
-    width: '48%',
+    width: '31%',
     alignItems: 'center',
     backgroundColor: Colors.white,
     borderRadius: 16,

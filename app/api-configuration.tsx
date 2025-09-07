@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { ArrowLeft, Server, CheckCircle, AlertCircle, RefreshCw, Database, Zap } from 'lucide-react-native';
+import { ArrowLeft, Server, CircleCheck as CheckCircle, CircleAlert as AlertCircle, RefreshCw, Database, Zap } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import ApiConfiguration from '@/components/ApiConfiguration';

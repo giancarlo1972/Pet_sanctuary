@@ -234,11 +234,6 @@ class DatabaseManager {
 
   // Store an organization in the local database
   async storeOrganization(organization: ExternalOrganizationData): Promise<string> {
-   // Handle RescueGroups.org data format
-   if (organization.metadata?.source === 'RescueGroups.org') {
-     return this.storeRescueGroupsOrganization(organization);
-   }
-
     try {
       if (!this.db) {
         if (Platform.OS === 'web') {
@@ -341,6 +336,126 @@ class DatabaseManager {
         await this.executeSql('ROLLBACK');
       }
       console.error('Failed to store organization:', error);
+      throw error;
+    }
+  }
+
+  // Store RescueGroups organization with enhanced metadata
+  private async storeRescueGroupsOrganization(organization: ExternalOrganizationData): Promise<string> {
+    try {
+      if (!this.db) {
+        if (Platform.OS === 'web') {
+          this.storeRescueGroupsInLocalStorage(organization);
+          return organization.id;
+        } else {
+          throw new Error('Database not initialized');
+        }
+      }
+
+      const localId = `rg_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+      // Enhanced mapping for RescueGroups data
+      const localOrg: LocalOrganization = {
+        id: localId,
+        external_id: organization.id,
+        name: organization.name,
+        description: organization.description,
+        type: organization.type,
+        email: organization.contactInfo.email,
+        phone: organization.contactInfo.phone,
+        website: organization.contactInfo.website,
+        address: `${organization.location.address.street}, ${organization.location.address.city}, ${organization.location.address.state} ${organization.location.address.postalCode}`,
+        city: organization.location.address.city,
+        state: organization.location.address.state,
+        postal_code: organization.location.address.postalCode,
+        country: organization.location.address.country,
+        latitude: organization.location.coordinates.latitude,
+        longitude: organization.location.coordinates.longitude,
+        animal_capacity: organization.animalCapacity,
+        staff_count: organization.staffCount,
+        operating_hours: JSON.stringify(organization.operationalHours),
+        last_updated: organization.lastUpdated,
+        synced_at: new Date().toISOString()
+      };
+
+      // Begin transaction
+      await this.executeSql('BEGIN TRANSACTION');
+
+      // Insert organization with RescueGroups tag
+      await this.executeSql(
+        `INSERT OR REPLACE INTO ${TABLES.ORGANIZATIONS} 
+         (id, external_id, name, description, type, email, phone, website, address, 
+          city, state, postal_code, country, latitude, longitude, animal_capacity, 
+          staff_count, operating_hours, last_updated, synced_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          localOrg.id, localOrg.external_id, localOrg.name, localOrg.description,
+          localOrg.type, localOrg.email, localOrg.phone, localOrg.website, localOrg.address,
+          localOrg.city, localOrg.state, localOrg.postal_code, localOrg.country,
+          localOrg.latitude, localOrg.longitude, localOrg.animal_capacity,
+          localOrg.staff_count, localOrg.operating_hours, localOrg.last_updated, localOrg.synced_at
+        ]
+      );
+
+      // Store RescueGroups-specific metadata
+      const metaId = `meta_${Date.now()}_rescuegroups_source`;
+      await this.executeSql(
+        `INSERT OR REPLACE INTO ${TABLES.METADATA} (id, organization_id, key, value)
+         VALUES (?, ?, ?, ?)`,
+        [metaId, localId, 'rescuegroups_source', 'true']
+      );
+
+      // Store services
+      await this.executeSql(
+        `DELETE FROM ${TABLES.SERVICES} WHERE organization_id = ?`,
+        [localId]
+      );
+
+      for (const service of organization.services) {
+        const serviceId = `svc_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+        await this.executeSql(
+          `INSERT INTO ${TABLES.SERVICES} (id, organization_id, service_name)
+           VALUES (?, ?, ?)`,
+          [serviceId, localId, service]
+        );
+      }
+
+      await this.executeSql('COMMIT');
+      console.log(`RescueGroups organization ${organization.name} stored successfully`);
+      return localId;
+    } catch (error) {
+      if (this.db) {
+        await this.executeSql('ROLLBACK');
+      }
+      console.error('Failed to store RescueGroups organization:', error);
+      throw error;
+    }
+  }
+
+  private storeRescueGroupsInLocalStorage(organization: ExternalOrganizationData): void {
+    try {
+      const storedOrgs = localStorage.getItem('rescueGroupsOrganizations');
+      const organizations = storedOrgs ? JSON.parse(storedOrgs) : [];
+      
+      const index = organizations.findIndex((org: any) => org.id === organization.id);
+      
+      const enhancedOrg = {
+        ...organization,
+        source: 'RescueGroups.org',
+        apiKey: '5yZd7GC8',
+        synced_at: new Date().toISOString()
+      };
+      
+      if (index >= 0) {
+        organizations[index] = enhancedOrg;
+      } else {
+        organizations.push(enhancedOrg);
+      }
+      
+      localStorage.setItem('rescueGroupsOrganizations', JSON.stringify(organizations));
+      console.log(`RescueGroups organization ${organization.name} stored in localStorage`);
+    } catch (error) {
+      console.error('Failed to store RescueGroups organization in localStorage:', error);
       throw error;
     }
   }

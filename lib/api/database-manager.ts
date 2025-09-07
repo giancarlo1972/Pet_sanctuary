@@ -234,6 +234,11 @@ class DatabaseManager {
 
   // Store an organization in the local database
   async storeOrganization(organization: ExternalOrganizationData): Promise<string> {
+   // Handle RescueGroups.org data format
+   if (organization.metadata?.source === 'RescueGroups.org') {
+     return this.storeRescueGroupsOrganization(organization);
+   }
+
     try {
       if (!this.db) {
         if (Platform.OS === 'web') {

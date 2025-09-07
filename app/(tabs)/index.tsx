@@ -195,13 +195,13 @@ export default function HomeScreen() {
             />
             <QuickAccess
               icon={<Server color={Colors.secondary} size={20} />}
-              title="Organizations"
-              onPress={() => router.push('/api-configuration')}
+              title="RescueGroups"
+              onPress={() => router.push('/rescuegroups-setup')}
               color={Colors.secondary}
             />
             <QuickAccess
               icon={<Database color={Colors.accent} size={20} />}
-              title="API Config"
+              title="Organizations"
               onPress={() => router.push('/organizations-list')}
               color={Colors.accent}
             />

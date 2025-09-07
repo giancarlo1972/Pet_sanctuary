@@ -60,6 +60,7 @@ export default function RootLayout() {
         <Stack.Screen name="api-configuration" />
         <Stack.Screen name="organizations-list" />
         <Stack.Screen name="organization-details" />
+       <Stack.Screen name="rescuegroups-setup" />
         <Stack.Screen name="+not-found" />
       </Stack>
       <StatusBar style="dark" backgroundColor="transparent" />

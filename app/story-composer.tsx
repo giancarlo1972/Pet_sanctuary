@@ -8,7 +8,6 @@ import {
   Image,
   ActivityIndicator,
   TextInput,
-  Alert,
   Platform,
   KeyboardAvoidingView,
 } from 'react-native';
@@ -27,7 +26,6 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import * as ImagePicker from 'expo-image-picker';
 import type { StoryType } from '@/types';
-import SignedImage from '@/components/SignedImage';
 
 const STORY_TYPES: { id: StoryType; label: string }[] = [
   { id: 'adoption', label: 'Adoption' },
@@ -134,22 +132,19 @@ export default function StoryComposerScreen() {
     } catch { /* ignore */ }
   };
 
-  const uploadImage = async (uri: string, folder: string): Promise<string | null> => {
-    try {
-      const ext = uri.split('.').pop()?.split('?')[0] || 'jpg';
-      const path = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-      const response = await fetch(uri);
-      const arrayBuffer = await response.arrayBuffer();
-      const contentType = ext === 'png' ? 'image/png' : 'image/jpeg';
-      const { error } = await supabase.storage
-        .from('report-photos')
-        .upload(path, arrayBuffer, { contentType, upsert: false });
-      if (error) throw error;
-      const { data } = supabase.storage.from('report-photos').getPublicUrl(path);
-      return data.publicUrl;
-    } catch {
-      return null;
-    }
+  const uploadImage = async (uri: string, storyId: string): Promise<string> => {
+    const ext = uri.split('.').pop()?.split('?')[0] || 'jpg';
+    const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const path = `stories/${storyId}/${fileName}`;
+    const response = await fetch(uri);
+    const arrayBuffer = await response.arrayBuffer();
+    const contentType = ext === 'png' ? 'image/png' : 'image/jpeg';
+    const { error } = await supabase.storage
+      .from('pet-photos')
+      .upload(path, arrayBuffer, { contentType, upsert: false });
+    if (error) throw error;
+    const { data } = supabase.storage.from('pet-photos').getPublicUrl(path);
+    return data.publicUrl;
   };
 
   const handleSave = async (publish: boolean) => {
@@ -161,48 +156,54 @@ export default function StoryComposerScreen() {
     setError(null);
     setSaving(true);
     try {
-      let coverUrl = coverPhoto;
-      if (coverPhoto && !coverPhoto.startsWith('http')) {
-        coverUrl = await uploadImage(coverPhoto, 'story-covers');
-      }
-      const uploadedPhotos: string[] = [];
-      for (const photo of photos) {
-        if (photo.startsWith('http')) {
-          uploadedPhotos.push(photo);
-        } else {
-          const url = await uploadImage(photo, 'story-photos');
-          if (url) uploadedPhotos.push(url);
-        }
-      }
-
-      const payload = {
+      const basePayload = {
         author_id: user.id,
         title: title.trim(),
         body: body.trim(),
         story_type: storyType,
-        cover_photo_url: coverUrl,
-        photo_urls: uploadedPhotos,
         pet_id: selectedPetId,
         status: publish ? 'published' : 'draft',
         published_at: publish ? new Date().toISOString() : null,
       };
 
+      let storyId: string;
+
       if (isEditing && editId) {
-        const { error: updateError } = await supabase
-          .from('stories')
-          .update(payload)
-          .eq('id', editId);
-        if (updateError) throw updateError;
+        storyId = editId;
       } else {
-        const { error: insertError } = await supabase
+        const { data: inserted, error: insertError } = await supabase
           .from('stories')
-          .insert(payload);
+          .insert({ ...basePayload, cover_photo_url: null, photo_urls: [] })
+          .select('id')
+          .single();
         if (insertError) throw insertError;
+        storyId = inserted.id;
       }
 
+      let coverUrl = coverPhoto;
+      if (coverPhoto && !coverPhoto.startsWith('http')) {
+        coverUrl = await uploadImage(coverPhoto, storyId);
+      }
+
+      const uploadedPhotos: string[] = [];
+      for (const photo of photos) {
+        if (photo.startsWith('http')) {
+          uploadedPhotos.push(photo);
+        } else {
+          uploadedPhotos.push(await uploadImage(photo, storyId));
+        }
+      }
+
+      const { error: updateError } = await supabase
+        .from('stories')
+        .update({ ...basePayload, cover_photo_url: coverUrl, photo_urls: uploadedPhotos })
+        .eq('id', storyId);
+      if (updateError) throw updateError;
+
       router.replace('/(tabs)/community');
-    } catch {
-      setError('Could not save your story. Please try again.');
+    } catch (err) {
+      console.error('[story-composer] save failed:', err);
+      setError('Could not save your story. Image upload may have failed — please try again.');
     }
     setSaving(false);
   };
@@ -324,7 +325,7 @@ export default function StoryComposerScreen() {
                     activeOpacity={0.8}
                   >
                     {p.pet_photo ? (
-                      <SignedImage path={p.pet_photo} style={styles.petChipPhoto} />
+                      <Image source={{ uri: p.pet_photo }} style={styles.petChipPhoto} />
                     ) : (
                       <View style={[styles.petChipPhoto, styles.petChipPhotoFallback]}>
                         <PawPrint color={Colors.textTertiary} size={12} />

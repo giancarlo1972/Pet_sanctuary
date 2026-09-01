@@ -137,12 +137,14 @@ export default function StoryComposerScreen() {
     const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
     const path = `stories/${storyId}/${fileName}`;
     const response = await fetch(uri);
-    const arrayBuffer = await response.arrayBuffer();
-    const contentType = ext === 'png' ? 'image/png' : 'image/jpeg';
+    const blob = await response.blob();
     const { error } = await supabase.storage
       .from('pet-photos')
-      .upload(path, arrayBuffer, { contentType, upsert: false });
-    if (error) throw error;
+      .upload(path, blob, { contentType: blob.type || 'image/jpeg', upsert: false });
+    if (error) {
+      console.error('[story-composer] upload failed:', error.message, error.statusCode, error);
+      throw error;
+    }
     const { data } = supabase.storage.from('pet-photos').getPublicUrl(path);
     return data.publicUrl;
   };

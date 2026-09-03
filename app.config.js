@@ -1,52 +1,22 @@
 export default {
   expo: {
-    name: "Pet Sanctuary",
-    slug: "pet-sanctuary",
+    name: "Rescue Army",
+    slug: "rescue-army",
+    scheme: "rescue-army",
     version: "1.0.0",
     orientation: "portrait",
-    icon: "./assets/images/icon.png",
-    scheme: "petsanctuary",
-    userInterfaceStyle: "automatic",
+    userInterfaceStyle: "light",
     newArchEnabled: true,
-    ios: {
-      supportsTablet: true,
-      bundleIdentifier: "com.petsanctuary.app",
-      buildNumber: "1"
-    },
+    ios: { supportsTablet: true },
     android: {
-      adaptiveIcon: {
-        foregroundImage: "./assets/images/adaptive-icon.png",
-        backgroundColor: "#6B46C1"
-      },
-      package: "com.petsanctuary.app",
-      versionCode: 1
+      adaptiveIcon: { backgroundColor: "#FF6B5B" }
     },
     web: {
       bundler: "metro",
-      output: "server",
-      favicon: "./assets/images/favicon.png"
+      output: "static",
+      favicon: "./assets/favicon.png"
     },
-    plugins: [
-      "expo-router", 
-      "expo-font", 
-      "expo-web-browser",
-      [
-        "expo-router",
-        {
-          "origin": process.env.EXPO_PUBLIC_WEBSITE_URL || false
-        }
-      ]
-    ],
-    experiments: {
-      typedRoutes: true
-    },
-    extra: {
-      router: {
-        origin: false
-      },
-      eas: {
-        projectId: process.env.EXPO_PUBLIC_EAS_PROJECT_ID
-      }
-    }
+    plugins: ["expo-router", "expo-font", "expo-secure-store"],
+    experiments: { tsconfigPaths: true }
   }
 };

@@ -16,7 +16,7 @@ export default function SignedImage({ path, style, resizeMode = 'cover', fallbac
 
   if (loading) {
     return (
-      <View style={[style, styles.placeholder]}>
+      <View style={[style as any, styles.placeholder]}>
         <ActivityIndicator color={Colors.textTertiary} size="small" />
       </View>
     );
@@ -24,7 +24,7 @@ export default function SignedImage({ path, style, resizeMode = 'cover', fallbac
 
   if (error || !url) {
     return (
-      <View style={[style, styles.placeholder]}>
+      <View style={[style as any, styles.placeholder]}>
         <ImageOff color={Colors.error || '#EF4444'} size={fallbackIconSize} />
         <Text style={styles.errorText}>Failed to load</Text>
       </View>

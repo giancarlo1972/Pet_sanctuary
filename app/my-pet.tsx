@@ -164,7 +164,7 @@ const URGENCY_STYLE: Record<Urgency, { color: string; bg: string; label: (d: num
 };
 
 function careIcon(type: string): React.ComponentType<{ color?: string; size?: number }> {
-  return CARE_TYPES.find((c) => c.id === type)?.icon ?? NotebookPen;
+  return CARE_TYPES.find((c) => c.id === type)?.icon ?? (NotebookPen as any);
 }
 
 // ── Weight Trend Chart ────────────────────────────────────────────────────────

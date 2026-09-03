@@ -9,6 +9,7 @@ import { ConfirmDialog, type ConfirmConfig } from '@/components/ConfirmDialog';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
+import { extFromAsset } from '@/lib/storage';
 import { useSignedUrl } from '@/hooks/useSignedUrls';
 
 export interface LabPanel {
@@ -160,7 +161,7 @@ export function VetLabResults({
 
     let docUrl: string | null = null;
     if (docFile) {
-      const ext = ((docFile as any).name || docFile.uri.split('.').pop() || 'file').split('.').pop() || 'file';
+      const ext = extFromAsset(docFile as any);
       const filePath = `${userId}/lab-${Date.now()}.${ext}`;
       let upRes;
       if (Platform.OS === 'web') {

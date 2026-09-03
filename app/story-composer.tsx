@@ -26,6 +26,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import * as ImagePicker from 'expo-image-picker';
 import type { StoryType } from '@/types';
+import { extFromAsset } from '@/lib/storage';
 
 const STORY_TYPES: { id: StoryType; label: string }[] = [
   { id: 'adoption', label: 'Adoption' },
@@ -53,7 +54,9 @@ export default function StoryComposerScreen() {
   const [body, setBody] = useState('');
   const [storyType, setStoryType] = useState<StoryType>('rescue');
   const [coverPhoto, setCoverPhoto] = useState<string | null>(null);
+  const [coverAsset, setCoverAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [photos, setPhotos] = useState<string[]>([]);
+  const [photoAssets, setPhotoAssets] = useState<ImagePicker.ImagePickerAsset[]>([]);
   const [selectedPetId, setSelectedPetId] = useState<string | null>(null);
   const [petOptions, setPetOptions] = useState<PetOption[]>([]);
   const [loadingExisting, setLoadingExisting] = useState(isEditing);
@@ -113,6 +116,7 @@ export default function StoryComposerScreen() {
       });
       if (!result.canceled && result.assets[0]) {
         setCoverPhoto(result.assets[0].uri);
+        setCoverAsset(result.assets[0]);
       }
     } catch { /* ignore */ }
   };
@@ -127,20 +131,23 @@ export default function StoryComposerScreen() {
         quality: 0.8,
       });
       if (!result.canceled && result.assets[0]) {
-        setPhotos((prev) => [...prev, result.assets[0].uri]);
+        const asset = result.assets[0];
+        setPhotos((prev) => [...prev, asset.uri]);
+        setPhotoAssets((prev) => [...prev, asset]);
       }
     } catch { /* ignore */ }
   };
 
-  const uploadImage = async (uri: string, storyId: string): Promise<string> => {
-    const ext = uri.split('.').pop()?.split('?')[0] || 'jpg';
+  const uploadImage = async (asset: ImagePicker.ImagePickerAsset, storyId: string): Promise<string> => {
+    const ext = extFromAsset(asset);
     const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
     const path = `stories/${storyId}/${fileName}`;
-    const response = await fetch(uri);
+    const mime = asset.mimeType || 'image/jpeg';
+    const response = await fetch(asset.uri);
     const blob = await response.blob();
     const { error } = await supabase.storage
       .from('pet-photos')
-      .upload(path, blob, { contentType: blob.type || 'image/jpeg', upsert: false });
+      .upload(path, blob, { contentType: mime, upsert: false });
     if (error) {
       console.error('[story-composer] upload failed:', error.message, error.statusCode, error);
       throw error;
@@ -183,16 +190,32 @@ export default function StoryComposerScreen() {
       }
 
       let coverUrl = coverPhoto;
-      if (coverPhoto && !coverPhoto.startsWith('http')) {
-        coverUrl = await uploadImage(coverPhoto, storyId);
+      let photoWarning = false;
+
+      if (coverAsset && coverPhoto && !coverPhoto.startsWith('http')) {
+        try {
+          coverUrl = await uploadImage(coverAsset, storyId);
+        } catch (err) {
+          console.error('[story-composer] cover upload failed:', err);
+          coverUrl = null;
+          photoWarning = true;
+        }
       }
 
       const uploadedPhotos: string[] = [];
-      for (const photo of photos) {
-        if (photo.startsWith('http')) {
-          uploadedPhotos.push(photo);
+      for (let i = 0; i < photos.length; i++) {
+        if (photos[i].startsWith('http')) {
+          uploadedPhotos.push(photos[i]);
         } else {
-          uploadedPhotos.push(await uploadImage(photo, storyId));
+          const asset = photoAssets[i];
+          if (asset) {
+            try {
+              uploadedPhotos.push(await uploadImage(asset, storyId));
+            } catch (err) {
+              console.error('[story-composer] photo upload failed:', err);
+              photoWarning = true;
+            }
+          }
         }
       }
 
@@ -202,12 +225,18 @@ export default function StoryComposerScreen() {
         .eq('id', storyId);
       if (updateError) throw updateError;
 
+      if (photoWarning) {
+        setError('Your story was saved, but some photos could not be uploaded. You can edit and try adding them again.');
+        setSaving(false);
+        return;
+      }
+
       router.replace('/(tabs)/community');
     } catch (err) {
       console.error('[story-composer] save failed:', err);
-      setError('Could not save your story. Image upload may have failed — please try again.');
+      setError('Could not save your story. Please try again.');
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   if (loadingExisting) {
@@ -255,6 +284,8 @@ export default function StoryComposerScreen() {
             placeholder="Give your story a title..."
             placeholderTextColor={Colors.textTertiary}
             maxLength={120}
+            accessibilityLabel="Story title"
+            accessibilityRole="text"
           />
 
           {/* Story type */}
@@ -284,6 +315,8 @@ export default function StoryComposerScreen() {
             placeholderTextColor={Colors.textTertiary}
             multiline
             textAlignVertical="top"
+            accessibilityLabel="Story body"
+            accessibilityRole="text"
           />
 
           {/* Photos */}
@@ -294,7 +327,7 @@ export default function StoryComposerScreen() {
                 <Image source={{ uri }} style={styles.photoThumbImg} />
                 <TouchableOpacity
                   style={styles.photoRemoveBtn}
-                  onPress={() => setPhotos((prev) => prev.filter((_, idx) => idx !== i))}
+                  onPress={() => { setPhotos((prev) => prev.filter((_, idx) => idx !== i)); setPhotoAssets((prev) => prev.filter((_, idx) => idx !== i)); }}
                 >
                   <X color={Colors.white} size={12} />
                 </TouchableOpacity>

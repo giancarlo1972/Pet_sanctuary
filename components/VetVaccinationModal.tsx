@@ -10,6 +10,7 @@ import { ConfirmDialog, type ConfirmConfig } from '@/components/ConfirmDialog';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
+import { extFromAsset } from '@/lib/storage';
 import { useSignedUrl } from '@/hooks/useSignedUrls';
 
 export interface Vaccination {
@@ -203,7 +204,7 @@ export function VetVaccinationModal({
 
     let certificateUrl: string | null = null;
     if (form.certificate_file) {
-      const ext = ((form.certificate_file as any).name || form.certificate_file.uri.split('.').pop() || 'file').split('.').pop() || 'file';
+      const ext = extFromAsset(form.certificate_file as any);
       const filePath = `${userId}/vax-cert-${Date.now()}.${ext}`;
       let upRes;
       if (Platform.OS === 'web') {

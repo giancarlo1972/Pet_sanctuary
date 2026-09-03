@@ -55,7 +55,6 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
-import { extFromAsset, extFromMimeType } from '@/lib/storage';
 
 type Tab = 'overview' | 'medical' | 'labs' | 'clinics' | 'history' | 'people';
 
@@ -797,7 +796,7 @@ export default function PetRecordScreen() {
         const file = (e.target as HTMLInputElement).files?.[0];
         if (!file) return;
         setPhotoUploading(true);
-        const ext = extFromMimeType(file.type);
+        const ext = file.name.split('.').pop() || 'jpg';
         const filePath = `${user.id}/${Date.now()}.${ext}`;
         const { error: upErr } = await supabase.storage.from('pet-documents').upload(filePath, file);
         if (upErr) { console.error('[pet-record] photo upload (web):', upErr); showBanner('Could not upload photo.'); setPhotoUploading(false); return; }
@@ -826,11 +825,10 @@ export default function PetRecordScreen() {
     if (result.canceled || !result.assets?.[0]) return;
     const asset = result.assets[0];
     setPhotoUploading(true);
-    const ext = extFromAsset(asset);
-    const mime = asset.mimeType || 'image/jpeg';
+    const ext = asset.uri.split('.').pop() || 'jpg';
     const filePath = `${user.id}/${Date.now()}.${ext}`;
     const formData = new FormData();
-    formData.append('file', { uri: asset.uri, type: mime, name: `photo.${ext}` } as any);
+    formData.append('file', { uri: asset.uri, type: `image/${ext}`, name: `photo.${ext}` } as any);
     const { error: upErr } = await supabase.storage.from('pet-documents').upload(filePath, formData);
     if (upErr) { console.error('[pet-record] photo upload:', upErr); showBanner('Could not upload photo.'); setPhotoUploading(false); return; }
     const { error: insErr } = await supabase.from('pet_photos').insert({
@@ -914,7 +912,7 @@ export default function PetRecordScreen() {
   const saveDoc = async () => {
     if (!petId || !user || !docFile) return;
     setSavingDoc(true);
-    const ext = extFromAsset(docFile as any);
+    const ext = ((docFile as any).name || docFile.uri.split('.').pop() || 'file').split('.').pop() || 'file';
     const filePath = `${user.id}/${Date.now()}.${ext}`;
     let uploadResult;
     if (Platform.OS === 'web') {

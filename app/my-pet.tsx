@@ -47,7 +47,6 @@ import { supabase } from '@/lib/supabase';
 import { InlineBanner } from '@/components/InlineBanner';
 import { ConfirmDialog, type ConfirmConfig } from '@/components/ConfirmDialog';
 import SignedImage from '@/components/SignedImage';
-import { extFromMimeType } from '@/lib/storage';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -416,13 +415,13 @@ export default function MyPetScreen() {
         quality: 0.7,
       });
       if (result.canceled) { setUploadingDoc(false); return; }
-      const asset = result.assets[0];
-      const resp = await fetch(asset.uri);
-      const blob = await resp.blob();
-      const contentType = asset.mimeType || blob.type || 'application/octet-stream';
-      const ext = extFromMimeType(contentType);
+      const uri = result.assets[0].uri;
+      const resp = await fetch(uri);
+      const arrayBuffer = await resp.arrayBuffer();
+      const contentType = resp.headers.get('content-type') || 'application/octet-stream';
+      const ext = contentType.includes('png') ? 'png' : contentType.includes('pdf') ? 'pdf' : 'jpg';
       const filePath = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-      const { error: upErr } = await supabase.storage.from('pet-documents').upload(filePath, blob, { contentType, upsert: false });
+      const { error: upErr } = await supabase.storage.from('pet-documents').upload(filePath, arrayBuffer, { contentType, upsert: false });
       if (upErr) throw upErr;
       const { error: docErr } = await supabase.from('pet_documents').insert({
         pet_id: pet.id,

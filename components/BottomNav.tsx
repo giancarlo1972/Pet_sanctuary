@@ -8,7 +8,7 @@ const TABS = [
   { href: '/(tabs)', label: 'Home', icon: Home },
   { href: '/(tabs)/pets', label: 'Pets', icon: PawPrint },
   { href: '/(tabs)/community', label: 'Community', icon: Users },
-  { href: '/(tabs)/profile', label: 'Profile', icon: User },
+  { href: '/profile', label: 'Profile', icon: User },
 ];
 
 export default function BottomNav() {
@@ -18,7 +18,11 @@ export default function BottomNav() {
   return (
     <View style={styles.container}>
       {TABS.map((tab) => {
-        const active = pathname === tab.href || (tab.href === '/(tabs)' && pathname === '/');
+        const active =
+          pathname === tab.href ||
+          (tab.href === '/(tabs)' && pathname === '/') ||
+          (tab.href === '/(tabs)/pets' && pathname === '/pets') ||
+          (tab.href === '/(tabs)/community' && pathname === '/community');
         const Icon = tab.icon;
         return (
           <TouchableOpacity

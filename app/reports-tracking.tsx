@@ -56,7 +56,7 @@ export default function ReportsTrackingScreen() {
       const { data, error } = await supabase
         .from('reports')
         .select('id, report_type, status, pet_name, location_address, created_at, severity')
-        .eq('reporter_id', user.id)
+        .eq('user_id', user.id)
         .order('created_at', { ascending: false });
       if (!error && data) setReports(data);
     } catch { /* ignore */ }

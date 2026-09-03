@@ -55,11 +55,12 @@ export default function LostStrayReportScreen() {
         breed: breed.trim() || null,
         description: description.trim(),
         location_address: location.trim(),
+        latitude: 0,
+        longitude: 0,
         contact_name: contactName.trim() || null,
         contact_phone: contactPhone.trim() || null,
         contact_email: contactEmail.trim() || null,
         allow_direct_contact: allowDirectContact,
-        reporter_id: user.id,
         pet_id: prefillPetId || null,
         status: 'active',
       }).select('id').single();

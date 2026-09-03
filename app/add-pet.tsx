@@ -43,7 +43,6 @@ export default function AddPetScreen() {
         location: location.trim() || null,
         is_public: isPublic,
         availability,
-        status: 'available',
       }).select('id').single();
       if (error) throw error;
       router.replace(`/pet-details?id=${data.id}`);

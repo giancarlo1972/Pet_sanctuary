@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { Home, PawPrint, Users } from 'lucide-react-native';
+import { Home, PawPrint, Users, Siren } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 
 export default function TabLayout() {
@@ -35,6 +35,13 @@ export default function TabLayout() {
         options={{
           title: 'Community',
           tabBarIcon: ({ size, color }) => <Users size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="reports"
+        options={{
+          title: 'Reports',
+          tabBarIcon: ({ size, color }) => <Siren size={size} color={color} />,
         }}
       />
     </Tabs>

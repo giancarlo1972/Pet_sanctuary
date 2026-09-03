@@ -6,7 +6,7 @@
     "scheme": "rescue-army",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true
     },
@@ -18,12 +18,11 @@
     "web": {
       "bundler": "metro",
       "output": "static",
-      "favicon": "./assets/favicon.png"
+      "favicon": null
     },
     "plugins": [
       "expo-router",
-      "expo-font",
-      "expo-secure-store"
+      "expo-font"
     ],
     "experiments": {
       "tsconfigPaths": true

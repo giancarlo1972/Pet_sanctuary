@@ -6,7 +6,7 @@ export default {
     version: "1.0.0",
     orientation: "portrait",
     userInterfaceStyle: "light",
-    newArchEnabled: true,
+    newArchEnabled: false,
     ios: { supportsTablet: true },
     android: {
       adaptiveIcon: { backgroundColor: "#FF6B5B" }
@@ -14,9 +14,9 @@ export default {
     web: {
       bundler: "metro",
       output: "static",
-      favicon: "./assets/favicon.png"
+      favicon: null
     },
-    plugins: ["expo-router", "expo-font", "expo-secure-store"],
+    plugins: ["expo-router", "expo-font"],
     experiments: { tsconfigPaths: true }
   }
 };

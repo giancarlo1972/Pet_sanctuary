@@ -7,6 +7,7 @@ export default {
     orientation: "portrait",
     userInterfaceStyle: "light",
     newArchEnabled: false,
+    icon: "./assets/icon.png",
     ios: { supportsTablet: true },
     android: {
       adaptiveIcon: { backgroundColor: "#FF6B5B" }
@@ -14,9 +15,9 @@ export default {
     web: {
       bundler: "metro",
       output: "static",
-      favicon: null
+      favicon: "./assets/favicon.png"
     },
-    plugins: ["expo-router", "expo-font"],
+    plugins: [["expo-router", { origin: "https://rescue-army.app" }], "expo-font"],
     experiments: { tsconfigPaths: true }
   }
 };

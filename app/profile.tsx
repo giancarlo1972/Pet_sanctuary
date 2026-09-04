@@ -28,7 +28,6 @@ import { useAuth } from '@/lib/context/AuthContext';
 import { supabase } from '@/lib/supabase';
 import AppHeader from '@/components/AppHeader';
 import AuthForm from '@/components/AuthForm';
-import BottomNav from '@/components/BottomNav';
 import SignedImage from '@/components/SignedImage';
 
 const DEFAULT_SCREEN_WIDTH = 375;
@@ -1296,8 +1295,6 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
           </View>
         </View>
       </Modal>
-
-      <BottomNav />
     </>
   );
 }

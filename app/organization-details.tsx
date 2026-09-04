@@ -16,14 +16,10 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeBack } from '@/hooks/useSafeBack';
 import {
   ArrowLeft,
-  MapPin,
   Shield,
   Heart,
   Play,
-  Eye,
   PawPrint,
-  Building2,
-  Users,
   Check,
   Share as ShareIcon,
   Link as LinkIcon,
@@ -58,6 +54,9 @@ interface OrgData {
   ein_verified: boolean;
   tax_deductible: boolean;
   address: string;
+  website: string;
+  donation_url: string;
+  contact_email: string;
   data_source: string;
   pets_listed: number;
   adoptions: number;
@@ -68,24 +67,22 @@ interface OrgData {
 const MOCK_ORG: OrgData = {
   id: 'demo',
   name: 'Happy Paws Shelter',
-  description: 'A community-focused shelter dedicated to rescuing, rehabilitating, and rehoming pets in need. We have been operating since 2008 and have placed over 3,000 animals in loving homes.',
+  description: '',
   type: 'Shelter',
-  city: 'Austin, TX',
+  city: '',
   status: 'verified',
-  ein: '47-1234567',
-  ein_verified: true,
-  tax_deductible: true,
-  address: '123 Rescue Lane, Austin, TX 78701',
-  data_source: 'RescueGroups.org API',
-  pets_listed: 24,
-  adoptions: 3120,
-  followers: 5400,
-  pets: [
-    { id: 'p1', name: 'Bella', photo_url: '' },
-    { id: 'p2', name: 'Max', photo_url: '' },
-    { id: 'p3', name: 'Luna', photo_url: '' },
-    { id: 'p4', name: 'Rocky', photo_url: '' },
-  ],
+  ein: '',
+  ein_verified: false,
+  tax_deductible: false,
+  address: '',
+  website: '',
+  donation_url: '',
+  contact_email: '',
+  data_source: 'Unknown',
+  pets_listed: 0,
+  adoptions: 0,
+  followers: 0,
+  pets: [],
 };
 
 const SHARE_CHIPS = [
@@ -94,6 +91,16 @@ const SHARE_CHIPS = [
   { label: 'TikTok', icon: ShareIcon },
   { label: 'Copy link', icon: LinkIcon },
 ];
+
+function openDonate(org: OrgData) {
+  const url =
+    org.donation_url ||
+    (org.contact_email
+      ? `https://www.paypal.com/donate/?business=${encodeURIComponent(org.contact_email)}&currency_code=USD`
+      : org.website);
+  if (!url) return;
+  Linking.openURL(url.startsWith('http') ? url : `https://${url}`);
+}
 
 export default function OrganizationDetailsScreen() {
   const safeBack = useSafeBack('/(tabs)/community');
@@ -107,7 +114,6 @@ export default function OrganizationDetailsScreen() {
   useEffect(() => {
     (async () => {
       if (id) {
-        // First try user-created orgs from the database
         try {
           const { data: dbOrg, error } = await supabase
             .from('organizations')
@@ -133,6 +139,9 @@ export default function OrganizationDetailsScreen() {
               ein_verified: dbOrg.ein_verified || false,
               tax_deductible: dbOrg.tax_deductible || false,
               address: dbOrg.address || '',
+              website: dbOrg.website || '',
+              donation_url: '',
+              contact_email: dbOrg.contact_email || '',
               data_source: 'User registered',
               pets_listed: 0,
               adoptions: 0,
@@ -142,28 +151,31 @@ export default function OrganizationDetailsScreen() {
             setLoading(false);
             return;
           }
-        } catch { /* fall through to external API */ }
+        } catch { /* fall through to RescueGroups */ }
 
         try {
-          const resp = await fetch(`/api/external-organizations?id=${id}`);
-          const result = await resp.json();
-          if (result.success && result.data) {
-            const d = result.data;
+          const resp = await fetch('/api/rescuegroups?state=NY');
+          const json = await resp.json();
+          const d = (json.orgs || []).find((o: any) => o.id === id);
+          if (d) {
             setOrg({
-              id: d.id || id,
-              name: d.name || 'Organization',
-              description: d.description || '',
-              type: d.type || 'Shelter',
-              city: d.location?.address?.city || d.location || '',
+              id: d.id,
+              name: d.name,
+              description: d.description || d.website || '',
+              type: d.org_type || 'Rescue',
+              city: d.location || '',
               status: 'verified',
-              ein: d.metadata?.ein || '',
-              ein_verified: true,
-              tax_deductible: true,
-              address: d.location?.address?.full || d.location || '',
+              ein: '',
+              ein_verified: false,
+              tax_deductible: false,
+              address: d.location || '',
+              website: d.website || '',
+              donation_url: d.donation_url || '',
+              contact_email: d.email || '',
               data_source: 'RescueGroups.org API',
-              pets_listed: d.animalCapacity || 0,
-              adoptions: d.metadata?.adoptions || 0,
-              followers: d.metadata?.followers || 0,
+              pets_listed: 0,
+              adoptions: 0,
+              followers: 0,
               pets: [],
             });
           } else {
@@ -182,7 +194,7 @@ export default function OrganizationDetailsScreen() {
   }, [id, story]);
 
   useEffect(() => {
-    if (!org || !org.id || org.id === 'demo') return;
+    if (!org || !org.id || org.id === 'demo' || String(org.id).startsWith('rg-')) return;
     (async () => {
       try {
         const { data } = await supabase.rpc('get_org_ein', { p_org_id: org.id });
@@ -228,11 +240,11 @@ export default function OrganizationDetailsScreen() {
   }
 
   const brandColor = colorForName(org.name);
+  const canDonate = !!(org.donation_url || org.contact_email || org.website);
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {/* Navy header */}
         <View style={styles.navyHeader}>
           <View style={styles.headerTopRow}>
             <TouchableOpacity style={styles.backButton} onPress={safeBack}>
@@ -241,7 +253,6 @@ export default function OrganizationDetailsScreen() {
             <View style={{ flex: 1 }} />
             <View style={{ width: 40 }} />
           </View>
-
           <View style={styles.headerOrgInfo}>
             <View style={[styles.orgInitialTile, { backgroundColor: brandColor }]}>
               <Text style={styles.orgInitialText}>{org.name.charAt(0).toUpperCase()}</Text>
@@ -259,7 +270,6 @@ export default function OrganizationDetailsScreen() {
               <Text style={styles.headerMeta}>{org.type} · {org.city}</Text>
             </View>
           </View>
-
           <View style={styles.statRow}>
             <View style={styles.statTile}>
               <Text style={styles.statValue}>{org.pets_listed}</Text>
@@ -276,13 +286,11 @@ export default function OrganizationDetailsScreen() {
           </View>
         </View>
 
-        {/* Body */}
         <View style={styles.body}>
           {org.description ? (
             <Text style={styles.description}>{org.description}</Text>
           ) : null}
 
-          {/* Info card */}
           <View style={styles.infoCard}>
             <View style={styles.infoRow}>
               <Text style={styles.infoKey}>Status</Text>
@@ -322,7 +330,6 @@ export default function OrganizationDetailsScreen() {
             </View>
           </View>
 
-          {/* Pet strip */}
           {org.pets.length > 0 && (
             <View style={styles.petStripSection}>
               <Text style={styles.sectionTitle}>Available pets</Text>
@@ -348,7 +355,6 @@ export default function OrganizationDetailsScreen() {
             </View>
           )}
 
-          {/* Story detail section */}
           {story ? (
             <View style={styles.storySection}>
               <View style={styles.storyHero}>
@@ -387,7 +393,6 @@ export default function OrganizationDetailsScreen() {
             </View>
           ) : null}
 
-          {/* Action buttons */}
           <View style={styles.actionRow}>
             <TouchableOpacity
               style={[styles.followBtn, following && styles.followingBtn]}
@@ -404,8 +409,8 @@ export default function OrganizationDetailsScreen() {
               )}
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.donateBtn}
-              onPress={() => router.push('/(tabs)/reports')}
+              style={[styles.donateBtn, !canDonate && { opacity: 0.5 }]}
+              onPress={() => openDonate(org)}
               activeOpacity={0.85}
             >
               <Heart color={Colors.white} size={16} />
@@ -424,7 +429,6 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   errorContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   errorText: { fontSize: FontSizes.lg, fontFamily: Fonts.semibold, color: Colors.critical },
-
   navyHeader: {
     backgroundColor: Colors.navy,
     paddingHorizontal: 20,
@@ -476,12 +480,10 @@ const styles = StyleSheet.create({
   statLabel: {
     fontSize: FontSizes.xs, fontFamily: Fonts.regular, color: 'rgba(255,255,255,0.7)', marginTop: 4,
   },
-
   body: { padding: 20, paddingBottom: 100 },
   description: {
     fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.textBody, lineHeight: 22, marginBottom: 16,
   },
-
   infoCard: {
     backgroundColor: Colors.white, borderRadius: 14, padding: 16,
     borderWidth: 1, borderColor: Colors.border, marginBottom: 24,
@@ -500,7 +502,6 @@ const styles = StyleSheet.create({
   einValueMono: { fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.text, letterSpacing: 1 },
   einPill: { backgroundColor: Colors.surface, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
   einPillText: { fontSize: FontSizes.xs, fontFamily: Fonts.bold, color: Colors.textTertiary },
-
   sectionTitle: {
     fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.text, marginBottom: 12,
   },
@@ -518,7 +519,6 @@ const styles = StyleSheet.create({
   petCardName: {
     fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.text, marginTop: 6, textAlign: 'center',
   },
-
   storySection: { marginBottom: 24 },
   storyHero: {
     height: 250, borderRadius: 14, backgroundColor: Colors.navy,
@@ -551,7 +551,6 @@ const styles = StyleSheet.create({
   storyFootnote: {
     fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, lineHeight: 18,
   },
-
   actionRow: {
     flexDirection: 'row', gap: 12,
   },

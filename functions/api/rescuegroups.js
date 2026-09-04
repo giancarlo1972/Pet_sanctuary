@@ -15,7 +15,7 @@ export async function onRequestGet(context) {
         resultStart: 0,
         resultLimit: 50,
         filters: [{ fieldName: 'orgState', operation: 'equals', criteria: state }],
-        fields: ['orgID', 'orgName', 'orgCity', 'orgState', 'orgType', 'orgWebsite'],
+        fields: ['orgID', 'orgName', 'orgCity', 'orgState', 'orgType', 'orgWebsite', 'orgDonationUrl', 'orgEmail'],
       },
     }),
   });
@@ -30,6 +30,9 @@ export async function onRequestGet(context) {
     status: 'approved',
     ein_verified: false,
     tax_deductible: false,
+    website: o.orgWebsite || null,
+    email: o.orgEmail || null,
+    donation_url: o.orgDonationUrl || null,
   }));
   return Response.json({ orgs, foundRows: json.foundRows || orgs.length });
 }

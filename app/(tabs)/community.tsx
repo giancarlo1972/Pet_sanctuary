@@ -183,24 +183,25 @@ export default function CommunityScreen() {
 
   const loadOrgs = useCallback(async () => {
     try {
+      let local: OrgRow[] = [];
       const { data, error } = await supabase
         .from('organizations')
         .select('id, name, org_type, location, logo_url, description, status, ein_verified, tax_deductible')
         .eq('status', 'approved')
         .order('name');
-      if (!error && data) {
-        setOrgs(data);
-      } else {
-        const { data: shelterData } = await supabase
-          .from('shelters')
-          .select('id, name, location, description')
-          .order('name');
-        if (shelterData) {
-          setOrgs(shelterData.map((s: { id: string; name: string; location: string | null; description: string | null }) => ({
-            id: s.id, name: s.name, org_type: 'shelter', location: s.location, logo_url: null, description: s.description, status: 'approved', ein_verified: false, tax_deductible: false,
-          })));
+      if (!error && data) local = data as OrgRow[];
+
+      let remote: OrgRow[] = [];
+      try {
+        const resp = await fetch('/api/rescuegroups?state=NY');
+        if (resp.ok) {
+          const json = await resp.json();
+          remote = (json.orgs || []) as OrgRow[];
         }
-      }
+      } catch { /* ignore */ }
+
+      const seen = new Set(local.map((o) => o.name.toLowerCase()));
+      setOrgs([...local, ...remote.filter((o) => !seen.has(o.name.toLowerCase()))]);
     } catch { /* ignore */ }
     setLoading(false);
     setRefreshing(false);

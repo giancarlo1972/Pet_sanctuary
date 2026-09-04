@@ -39,6 +39,7 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
       setLoading(false);
     }
   };
+
   const handleGoogle = async () => {
     setLoading(true);
     setError(null);
@@ -53,6 +54,7 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
       setLoading(false);
     }
   };
+
   return (
     <View style={styles.container}>
       {error && (
@@ -82,11 +84,11 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
           <Text style={styles.submitText}>{mode === 'signin' ? 'Sign In' : 'Sign Up'}</Text>
         )}
       </TouchableOpacity>
-      <TouchableOpacity style={styles.switchRow} onPress={() => setMode(mode === 'signin' ? 'signup' : 'signin')} activeOpacity={0.7}>
-        <Text style={styles.switchText}>
-         <TouchableOpacity style={styles.googleBtn} onPress={handleGoogle} disabled={loading} activeOpacity={0.85}>
+      <TouchableOpacity style={styles.googleBtn} onPress={handleGoogle} disabled={loading} activeOpacity={0.85}>
         <Text style={styles.googleText}>Continue with Google</Text>
       </TouchableOpacity>
+      <TouchableOpacity style={styles.switchRow} onPress={() => setMode(mode === 'signin' ? 'signup' : 'signin')} activeOpacity={0.7}>
+        <Text style={styles.switchText}>
           {mode === 'signin' ? "Don't have an account? " : 'Already have an account? '}
           <Text style={styles.switchLink}>{mode === 'signin' ? 'Sign up' : 'Sign in'}</Text>
         </Text>
@@ -144,7 +146,7 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.bold,
     color: Colors.coral,
   },
-    googleBtn: {
+  googleBtn: {
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.borderInput,

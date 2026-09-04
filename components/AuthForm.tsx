@@ -39,7 +39,20 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
       setLoading(false);
     }
   };
-
+  const handleGoogle = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: 'https://rescue-army.com/profile' },
+      });
+      if (error) throw error;
+    } catch (err: any) {
+      setError(err.message || 'Google sign-in failed.');
+      setLoading(false);
+    }
+  };
   return (
     <View style={styles.container}>
       {error && (
@@ -71,6 +84,9 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
       </TouchableOpacity>
       <TouchableOpacity style={styles.switchRow} onPress={() => setMode(mode === 'signin' ? 'signup' : 'signin')} activeOpacity={0.7}>
         <Text style={styles.switchText}>
+         <TouchableOpacity style={styles.googleBtn} onPress={handleGoogle} disabled={loading} activeOpacity={0.85}>
+        <Text style={styles.googleText}>Continue with Google</Text>
+      </TouchableOpacity>
           {mode === 'signin' ? "Don't have an account? " : 'Already have an account? '}
           <Text style={styles.switchLink}>{mode === 'signin' ? 'Sign up' : 'Sign in'}</Text>
         </Text>
@@ -127,5 +143,18 @@ const styles = StyleSheet.create({
   switchLink: {
     fontFamily: Fonts.bold,
     color: Colors.coral,
+  },
+    googleBtn: {
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.borderInput,
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  googleText: {
+    fontSize: FontSizes.md,
+    fontFamily: Fonts.bold,
+    color: Colors.text,
   },
 });

@@ -9,7 +9,6 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
-import BottomNav from '@/components/BottomNav';
 
 const REPORT_TYPE_LABELS: Record<string, string> = {
   lost: 'Lost Pet', stray: 'Stray Pet', foster: 'Foster', support: 'Support',
@@ -136,7 +135,7 @@ export default function ReportsTabScreen() {
           })
         )}
       </ScrollView>
-      <BottomNav />
+
     </SafeAreaView>
   );
 }

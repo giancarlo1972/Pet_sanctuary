@@ -392,7 +392,30 @@ export default function OrganizationDetailsScreen() {
               </Text>
             </View>
           ) : null}
-
+          <Text style={styles.donateDisclaimer}>
+            Donations go directly to {org.name}. Rescue Army does not collect, hold, or process this money.
+          </Text>
+          {(org.donation_url || org.contact_email || org.website) ? (
+            <View style={styles.donateOptions}>
+              {org.donation_url ? (
+                <TouchableOpacity style={styles.donateOption} onPress={() => Linking.openURL(org.donation_url.startsWith('http') ? org.donation_url : `https://${org.donation_url}`)}>
+                  <Text style={styles.donateOptionText}>Donate on their page</Text>
+                </TouchableOpacity>
+              ) : null}
+              {org.contact_email ? (
+                <TouchableOpacity style={styles.donateOption} onPress={() => Linking.openURL(`https://www.paypal.com/donate/?business=${encodeURIComponent(org.contact_email)}&currency_code=USD`)}>
+                  <Text style={styles.donateOptionText}>PayPal</Text>
+                </TouchableOpacity>
+              ) : null}
+              {org.website ? (
+                <TouchableOpacity style={styles.donateOption} onPress={() => Linking.openURL(org.website.startsWith('http') ? org.website : `https://${org.website}`)}>
+                  <Text style={styles.donateOptionText}>Shelter website</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : (
+            <Text style={styles.donateDisclaimer}>This listing has no PayPal or donate link in RescueGroups yet.</Text>
+          )}
           <View style={styles.actionRow}>
             <TouchableOpacity
               style={[styles.followBtn, following && styles.followingBtn]}
@@ -575,4 +598,14 @@ const styles = StyleSheet.create({
   donateText: {
     fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.white,
   },
+    donateDisclaimer: {
+    fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary,
+    lineHeight: 18, marginBottom: 12, textAlign: 'center',
+  },
+  donateOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12, justifyContent: 'center' },
+  donateOption: {
+    paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999,
+    backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border,
+  },
+  donateOptionText: { fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.navy },
 });

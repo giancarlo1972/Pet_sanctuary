@@ -24,7 +24,7 @@ export default function AppHeader({ title, showBack = false, rightAction }: AppH
           </TouchableOpacity>
         ) : (
           <TouchableOpacity style={styles.sideBtn} onPress={() => router.push('/(tabs)')} activeOpacity={0.75}>
-            <Image source={require('@/assets/icon.png')} style={styles.logo} />
+            <Image source={require('../../assets/icon.png')} style={styles.logo} />
           </TouchableOpacity>
         )}
         <Text style={styles.title} numberOfLines={1}>{title}</Text>

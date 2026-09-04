@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ChevronLeft, User } from 'lucide-react-native';
+import { ChevronLeft } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
@@ -23,18 +23,17 @@ export default function AppHeader({ title, showBack = false, rightAction }: AppH
             <ChevronLeft color={Colors.text} size={22} />
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity style={styles.sideBtn} onPress={() => router.push('/(tabs)')} activeOpacity={0.75}>
+          <TouchableOpacity style={styles.brand} onPress={() => router.push('/(tabs)')} activeOpacity={0.8}>
             <Image source={require('../assets/icon.png')} style={styles.logo} />
+            <Text style={styles.brandName}>Rescue Army</Text>
           </TouchableOpacity>
         )}
         <Text style={styles.title} numberOfLines={1}>{title}</Text>
-        <View style={styles.rightAction}>
-          {rightAction ?? (
-            <TouchableOpacity style={styles.sideBtn} onPress={() => router.push('/profile')} activeOpacity={0.75}>
-              <User color={Colors.text} size={22} />
-            </TouchableOpacity>
-          )}
-        </View>
+        {rightAction ?? (
+          <TouchableOpacity style={styles.meBtn} onPress={() => router.push('/profile')} activeOpacity={0.85}>
+            <Text style={styles.meText}>Me</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -45,29 +44,25 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 8,
     backgroundColor: Colors.white,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
+    gap: 8,
   },
   sideBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.surface,
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
+    width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.surface,
+    justifyContent: 'center', alignItems: 'center',
   },
-  logo: { width: 32, height: 32, borderRadius: 16 },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 140 },
+  logo: { width: 28, height: 28, borderRadius: 8 },
+  brandName: { fontSize: FontSizes.md, fontFamily: Fonts.extrabold, color: Colors.navy },
   title: {
-    flex: 1,
-    fontSize: FontSizes.xl,
-    fontFamily: Fonts.bold,
-    color: Colors.text,
-    textAlign: 'center',
+    flex: 1, fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.navy, textAlign: 'center',
   },
-  rightAction: { width: 40, alignItems: 'center' },
+  meBtn: {
+    backgroundColor: Colors.coral, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999,
+  },
+  meText: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.white },
 });

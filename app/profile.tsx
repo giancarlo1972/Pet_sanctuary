@@ -646,14 +646,15 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Trust & Verification</Text>
               <View style={styles.card}>
-                <VerificationRow
+              <VerificationRow
                   icon={<IdCard color={Colors.navy} size={18} />}
-            label="Government ID"
+                  label="Government ID"
                   onPress={uploadId}
                   pill={verifications.id_verified
                     ? { bg: Colors.tealBg, color: Colors.tealDark, text: 'Verified' }
                     : { bg: Colors.surface, color: Colors.textTertiary, text: 'Tap to upload' }}
-              <View style={styles.divider} />
+                />
+                <View style={styles.divider} />
                 <VerificationRow
                   icon={<Phone color={Colors.navy} size={18} />}
                   label="Phone"

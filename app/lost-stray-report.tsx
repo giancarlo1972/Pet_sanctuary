@@ -21,6 +21,12 @@ const REPORT_TYPES = [
   { value: 'emergency', label: 'Emergency', desc: 'Immediate danger', severity: 'critical' },
 ];
 
+const ANIMAL_KINDS = ['Dog', 'Cat', 'Rabbit', 'Bird', 'Wildlife', 'Livestock', 'Other'];
+const BREEDS: Record<string, string[]> = {
+  Dog: ['Unknown / Mix', 'Labrador', 'German Shepherd', 'Pit Bull', 'Golden Retriever', 'Poodle', 'Beagle', 'Chihuahua', 'Other'],
+  Cat: ['Unknown / Mix', 'Domestic Shorthair', 'Domestic Longhair', 'Siamese', 'Maine Coon', 'Tabby', 'Other'],
+};
+
 export default function LostStrayReportScreen() {
   const { prefillPetId } = useLocalSearchParams<{ prefillPetId?: string }>();
   const { user } = useAuth();
@@ -29,6 +35,8 @@ export default function LostStrayReportScreen() {
   const [who, setWho] = useState<'me' | 'other' | 'found'>('me');
   const [petName, setPetName] = useState('');
   const [animalKind, setAnimalKind] = useState('');
+  const [animalKind, setAnimalKind] = useState('Dog');
+  const [breed, setBreed] = useState('Unknown / Mix');
   const [breed, setBreed] = useState('');
   const [description, setDescription] = useState('');
   const [location, setLocation] = useState('');
@@ -159,8 +167,37 @@ export default function LostStrayReportScreen() {
             <>
               <Text style={styles.sectionLabel}>Pet details (optional)</Text>
               <TextInput style={styles.input} value={petName} onChangeText={setPetName} placeholder="Pet name" placeholderTextColor={Colors.textTertiary} />
-              <TextInput style={styles.input} value={animalKind} onChangeText={setAnimalKind} placeholder="Animal type (dog, cat, etc.)" placeholderTextColor={Colors.textTertiary} />
-              <TextInput style={styles.input} value={breed} onChangeText={setBreed} placeholder="Breed (if known)" placeholderTextColor={Colors.textTertiary} />
+              <Text style={styles.sectionLabel}>Animal type</Text>
+              <View style={styles.typeRow}>
+                {ANIMAL_KINDS.map((k) => (
+                  <TouchableOpacity
+                    key={k}
+                    style={[styles.whoRow, animalKind === k && styles.whoActive, { marginBottom: 8 }]}
+                    onPress={() => {
+                      setAnimalKind(k);
+                      setBreed((BREEDS[k] || ['Unknown / Mix'])[0]);
+                    }}
+                  >
+                    <Text style={styles.whoTitle}>{k}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {BREEDS[animalKind] ? (
+                <>
+                  <Text style={styles.sectionLabel}>Breed</Text>
+                  <View style={styles.typeRow}>
+                    {BREEDS[animalKind].map((b) => (
+                      <TouchableOpacity
+                        key={b}
+                        style={[styles.whoRow, breed === b && styles.whoActive, { marginBottom: 8 }]}
+                        onPress={() => setBreed(b)}
+                      >
+                        <Text style={styles.whoTitle}>{b}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </>
+              ) : null}
               <Text style={styles.sectionLabel}>Description *</Text>
               <TextInput
                 style={[styles.input, styles.textArea]}

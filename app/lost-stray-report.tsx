@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
-  ActivityIndicator, Switch, KeyboardAvoidingView, Platform, Image,
+  ActivityIndicator, KeyboardAvoidingView, Platform, Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -14,56 +14,117 @@ import { useAuth } from '@/lib/context/AuthContext';
 import { InlineBanner } from '@/components/InlineBanner';
 
 const REPORT_TYPES = [
-  { value: 'lost', label: 'Lost Pet', desc: 'Your pet is missing', severity: 'urgent' },
-  { value: 'stray', label: 'Found Stray', desc: 'You found a stray animal', severity: 'standard' },
-  { value: 'injured', label: 'Injured Animal', desc: 'Animal needs medical help', severity: 'critical' },
-  { value: 'road_accident', label: 'Road Accident', desc: 'Animal hit by vehicle', severity: 'critical' },
-  { value: 'cruelty', label: 'Cruelty/Neglect', desc: 'Report abuse or neglect', severity: 'urgent' },
-  { value: 'emergency', label: 'Emergency', desc: 'Immediate danger', severity: 'critical' },
+  { value: 'lost', label: 'Lost' },
+  { value: 'stray', label: 'Stray' },
+  { value: 'injured', label: 'Injured' },
+  { value: 'emergency', label: 'Emergency' },
+];
+const SPECIES = ['Dog', 'Cat', 'Rabbit', 'Bird', 'Wildlife', 'Livestock', 'Other'];
+const STEPS = [
+  { n: 1, label: 'Photo' },
+  { n: 2, label: 'AI' },
+  { n: 3, label: 'Confirm' },
+  { n: 4, label: 'Send' },
 ];
 
-const ANIMAL_KINDS = ['Dog', 'Cat', 'Rabbit', 'Bird', 'Wildlife', 'Livestock', 'Other'];
-const BREEDS: Record<string, string[]> = {
-  Dog: ['Unknown / Mix', 'Labrador', 'German Shepherd', 'Pit Bull', 'Golden Retriever', 'Poodle', 'Beagle', 'Chihuahua', 'Other'],
-  Cat: ['Unknown / Mix', 'Domestic Shorthair', 'Domestic Longhair', 'Siamese', 'Maine Coon', 'Tabby', 'Other'],
+type Draft = {
+  species: string;
+  breed_guess: string;
+  suggested_report_type: string;
+  short_description: string;
+  analyzed: boolean;
 };
 
-const STEPS = [
-  { n: 1, label: 'Type' },
-  { n: 2, label: 'Animal' },
-  { n: 3, label: 'Place' },
-];
+const EMPTY_DRAFT: Draft = {
+  species: 'Other',
+  breed_guess: 'Unknown',
+  suggested_report_type: 'stray',
+  short_description: '',
+  analyzed: false,
+};
 
 export default function LostStrayReportScreen() {
   const { prefillPetId } = useLocalSearchParams<{ prefillPetId?: string }>();
   const { user } = useAuth();
   const [step, setStep] = useState(1);
-  const [reportType, setReportType] = useState('lost');
-  const [who, setWho] = useState<'me' | 'other' | 'found'>('me');
-  const [petName, setPetName] = useState('');
-  const [animalKind, setAnimalKind] = useState('Dog');
-  const [breed, setBreed] = useState('Unknown / Mix');
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const [reportType, setReportType] = useState('stray');
+  const [species, setSpecies] = useState('Other');
+  const [breed, setBreed] = useState('');
   const [description, setDescription] = useState('');
   const [extraNotes, setExtraNotes] = useState('');
   const [location, setLocation] = useState('');
   const [lat, setLat] = useState<number | null>(null);
   const [lng, setLng] = useState<number | null>(null);
   const [locating, setLocating] = useState(false);
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
-  const [contactName, setContactName] = useState('');
-  const [contactPhone, setContactPhone] = useState('');
-  const [contactEmail, setContactEmail] = useState(user?.email || '');
-  const [allowDirectContact, setAllowDirectContact] = useState(false);
   const [loading, setLoading] = useState(false);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
-  const [myPets, setMyPets] = useState<{ id: string; name: string; species: string | null; breed: string | null }[]>([]);
-  const [pickedPetId, setPickedPetId] = useState<string | null>(prefillPetId || null);
 
-  useEffect(() => {
-    if (!user) return;
-    supabase.from('pets').select('id, name, species, breed').eq('owner_id', user.id)
-      .then(({ data }) => setMyPets((data as any) || []));
-  }, [user]);
+  const applyDraft = (d: Draft) => {
+    setDraft(d);
+    setReportType(d.suggested_report_type || 'stray');
+    setSpecies(d.species || 'Other');
+    setBreed(d.breed_guess === 'Unknown' ? '' : (d.breed_guess || ''));
+    setDescription(d.short_description || '');
+  };
+
+  const pickPhoto = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images', quality: 0.6, exif: true,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    setPhotoUri(asset.uri);
+    const ex = asset.exif as Record<string, any> | null;
+    const gpsLat = ex?.GPSLatitude ?? ex?.gpsLatitude;
+    const gpsLng = ex?.GPSLongitude ?? ex?.gpsLongitude;
+    if (typeof gpsLat === 'number' && typeof gpsLng === 'number') {
+      setLat(gpsLat);
+      setLng(gpsLng);
+      setLocation(`Photo location (${gpsLat.toFixed(5)}, ${gpsLng.toFixed(5)})`);
+    }
+    setStep(2);
+    runAnalyze(asset.uri);
+  };
+
+  const skipPhoto = () => {
+    setPhotoUri(null);
+    applyDraft(EMPTY_DRAFT);
+    setStep(3);
+  };
+
+  const runAnalyze = async (uri: string) => {
+    setAnalyzing(true);
+    setBanner(null);
+    try {
+      const buf = await (await fetch(uri)).arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      }
+      const imageBase64 = `data:image/jpeg;base64,${btoa(binary)}`;
+      const resp = await fetch('/api/analyze-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64 }),
+      });
+      const json = await resp.json();
+      applyDraft({
+        species: json.species || 'Other',
+        breed_guess: json.breed_guess || 'Unknown',
+        suggested_report_type: json.suggested_report_type || 'stray',
+        short_description: json.short_description || '',
+        analyzed: !!json.analyzed,
+      });
+    } catch {
+      applyDraft({ ...EMPTY_DRAFT, short_description: 'Could not analyze this photo. Please confirm the details yourself.' });
+      setBanner({ message: 'AI is unavailable. Confirm type and species on the next screen.', kind: 'info' });
+    }
+    setAnalyzing(false);
+  };
 
   const useMyLocation = () => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
@@ -79,49 +140,20 @@ export default function LostStrayReportScreen() {
         setLocating(false);
       },
       () => {
-        setBanner({ message: 'Could not get location. Allow location access or type an address.', kind: 'error' });
+        setBanner({ message: 'Could not get location. Type an address instead.', kind: 'error' });
         setLocating(false);
       },
       { enableHighAccuracy: true, timeout: 12000 }
     );
   };
 
-  const pickReportPhoto = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images', quality: 0.8, exif: true,
-    });
-    if (result.canceled || !result.assets?.[0]) return;
-    const asset = result.assets[0];
-    setPhotoUri(asset.uri);
-    const ex = asset.exif as Record<string, any> | null;
-    const gpsLat = ex?.GPSLatitude ?? ex?.gpsLatitude;
-    const gpsLng = ex?.GPSLongitude ?? ex?.gpsLongitude;
-    if (typeof gpsLat === 'number' && typeof gpsLng === 'number') {
-      setLat(gpsLat);
-      setLng(gpsLng);
-      setLocation((prev) => prev || `Photo location (${gpsLat.toFixed(5)}, ${gpsLng.toFixed(5)})`);
-    }
-  };
-
-  const useMyAccount = () => {
-    setContactEmail(user?.email || '');
-    setContactName(user?.user_metadata?.full_name || user?.email?.split('@')[0] || '');
-    setWho('me');
-  };
-
-  const nextFromStep1 = () => {
-    if (who === 'me' && user) useMyAccount();
-    setStep(2);
-  };
-
   const handleSubmit = async () => {
     if (!description.trim() || !location.trim()) {
-      setBanner({ message: 'Please provide a description and location.', kind: 'error' });
+      setBanner({ message: 'Description and location are required.', kind: 'error' });
       return;
     }
     setLoading(true);
     setBanner(null);
-    const severity = REPORT_TYPES.find((t) => t.value === reportType)?.severity || 'standard';
     try {
       let photoUrl: string | null = null;
       if (photoUri && !photoUri.startsWith('http')) {
@@ -129,30 +161,22 @@ export default function LostStrayReportScreen() {
           const buf = await (await fetch(photoUri)).arrayBuffer();
           const path = `reports/${Date.now()}.jpg`;
           const up = await supabase.storage.from('pet-photos').upload(path, buf, { contentType: 'image/jpeg', upsert: true });
-          if (!up.error) {
-            photoUrl = supabase.storage.from('pet-photos').getPublicUrl(path).data.publicUrl;
-          }
-        } catch { /* save report without photo */ }
+          if (!up.error) photoUrl = supabase.storage.from('pet-photos').getPublicUrl(path).data.publicUrl;
+        } catch { /* still save */ }
       }
-
       const extra = extraNotes.trim();
       const { data, error } = await supabase.from('reports').insert({
         report_type: reportType,
-        severity,
-        pet_name: petName.trim() || null,
-        animal_kind: animalKind.trim() || null,
+        severity: reportType === 'emergency' || reportType === 'injured' ? 'critical' : reportType === 'lost' ? 'urgent' : 'standard',
+        animal_kind: species,
         breed: breed.trim() || null,
-        description: description.trim()
-          + (extra ? `\n\nMore info: ${extra}` : '')
-          + (who === 'other' ? '\n\n[Filed on behalf of someone else]' : who === 'found' ? '\n\n[Finder report]' : ''),
+        description: description.trim() + (extra ? `\n\nMore info: ${extra}` : ''),
         location_address: location.trim(),
         latitude: lat ?? 0,
         longitude: lng ?? 0,
-        contact_name: contactName.trim() || 'Anonymous',
-        contact_phone: contactPhone.trim() || null,
-        contact_email: contactEmail.trim() || null,
-        allow_direct_contact: allowDirectContact,
-        pet_id: pickedPetId || prefillPetId || null,
+        contact_name: user?.email?.split('@')[0] || 'Anonymous',
+        contact_email: user?.email || null,
+        pet_id: prefillPetId || null,
         photo_url: photoUrl,
         extra_notes: extra || null,
         status: 'active',
@@ -160,7 +184,7 @@ export default function LostStrayReportScreen() {
       if (error) throw error;
       router.replace(`/report-details?id=${data.id}`);
     } catch (err: any) {
-      setBanner({ message: err.message || 'Could not submit report. Please try again.', kind: 'error' });
+      setBanner({ message: err.message || 'Could not submit report.', kind: 'error' });
     }
     setLoading(false);
   };
@@ -172,7 +196,7 @@ export default function LostStrayReportScreen() {
           <ChevronLeft color={Colors.text} size={22} />
         </TouchableOpacity>
         <Text style={styles.topTitle}>Report an Animal</Text>
-        <Text style={styles.stepHint}>{step}/3</Text>
+        <Text style={styles.stepHint}>{step}/4</Text>
       </View>
       <View style={styles.tracker}>
         {STEPS.map((s) => (
@@ -186,178 +210,113 @@ export default function LostStrayReportScreen() {
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
           {step === 1 && (
             <>
-              <Text style={styles.sectionLabel}>What type of report?</Text>
-              <View style={styles.typeGrid}>
-                {REPORT_TYPES.map((t) => (
-                  <TouchableOpacity
-                    key={t.value}
-                    style={[styles.typeCard, reportType === t.value && styles.typeCardActive]}
-                    onPress={() => setReportType(t.value)}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={[styles.typeLabel, reportType === t.value && styles.typeLabelActive]}>{t.label}</Text>
-                    <Text style={styles.typeDesc}>{t.desc}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={styles.sectionLabel}>Who is this about?</Text>
-              <TouchableOpacity style={[styles.whoRow, who === 'me' && styles.whoActive]} onPress={() => setWho('me')}>
-                <Text style={styles.whoTitle}>My pet / I am the owner</Text>
-                <Text style={styles.whoSub}>We’ll use your login email on the report</Text>
+              <Text style={styles.heroTitle}>Start with a photo</Text>
+              <Text style={styles.heroSub}>We’ll suggest type, species, and a short description. You confirm before anything is saved.</Text>
+              {photoUri ? <Image source={{ uri: photoUri }} style={styles.preview} resizeMode="cover" /> : null}
+              <TouchableOpacity style={styles.submitBtn} onPress={pickPhoto} activeOpacity={0.85}>
+                <Text style={styles.submitText}>{photoUri ? 'Choose a different photo' : 'Add a photo'}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.whoRow, who === 'found' && styles.whoActive]} onPress={() => setWho('found')}>
-                <Text style={styles.whoTitle}>I found this animal</Text>
-                <Text style={styles.whoSub}>You are a finder, not the owner</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.whoRow, who === 'other' && styles.whoActive]} onPress={() => setWho('other')}>
-                <Text style={styles.whoTitle}>Reporting for someone else</Text>
-                <Text style={styles.whoSub}>You’ll enter their contact on the last step</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.submitBtn} onPress={nextFromStep1} activeOpacity={0.85}>
-                <Text style={styles.submitText}>Continue</Text>
+              <TouchableOpacity style={styles.secondaryBtn} onPress={skipPhoto} activeOpacity={0.85}>
+                <Text style={styles.secondaryText}>Skip — I’ll type it</Text>
               </TouchableOpacity>
             </>
           )}
 
           {step === 2 && (
             <>
-              {who === 'me' && myPets.length > 0 ? (
+              {photoUri ? <Image source={{ uri: photoUri }} style={styles.preview} resizeMode="cover" /> : null}
+              {analyzing ? (
                 <>
-                  <Text style={styles.sectionLabel}>Which pet?</Text>
-                  {myPets.map((p) => (
-                    <TouchableOpacity
-                      key={p.id}
-                      style={[styles.whoRow, pickedPetId === p.id && styles.whoActive]}
-                      onPress={() => {
-                        setPickedPetId(p.id);
-                        setPetName(p.name);
-                        const kind = p.species || 'Dog';
-                        const pretty = ANIMAL_KINDS.find((k) => k.toLowerCase() === kind.toLowerCase()) || 'Other';
-                        setAnimalKind(pretty);
-                        setBreed(p.breed || 'Unknown / Mix');
-                      }}
-                    >
-                      <Text style={styles.whoTitle}>{p.name}</Text>
-                      <Text style={styles.whoSub}>{[p.species, p.breed].filter(Boolean).join(' · ') || 'My pet'}</Text>
-                    </TouchableOpacity>
-                  ))}
+                  <ActivityIndicator color={Colors.coral} size="large" />
+                  <Text style={styles.heroSub}>Looking at the photo…</Text>
                 </>
-              ) : null}
-              <Text style={styles.sectionLabel}>Pet name (optional)</Text>
-              <TextInput style={styles.input} value={petName} onChangeText={setPetName} placeholder="Pet name" placeholderTextColor={Colors.textTertiary} />
-              <Text style={styles.sectionLabel}>Animal type</Text>
-              <View style={styles.typeRow}>
-                {ANIMAL_KINDS.map((k) => (
-                  <TouchableOpacity
-                    key={k}
-                    style={[styles.whoRow, animalKind === k && styles.whoActive]}
-                    onPress={() => {
-                      setAnimalKind(k);
-                      setBreed((BREEDS[k] || ['Unknown / Mix'])[0]);
-                    }}
-                  >
-                    <Text style={styles.whoTitle}>{k}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              {BREEDS[animalKind] ? (
+              ) : (
                 <>
-                  <Text style={styles.sectionLabel}>Breed</Text>
-                  <View style={styles.typeRow}>
-                    {BREEDS[animalKind].map((b) => (
-                      <TouchableOpacity
-                        key={b}
-                        style={[styles.whoRow, breed === b && styles.whoActive]}
-                        onPress={() => setBreed(b)}
-                      >
-                        <Text style={styles.whoTitle}>{b}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </>
-              ) : null}
-              <Text style={styles.sectionLabel}>Description *</Text>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                value={description}
-                onChangeText={setDescription}
-                placeholder="Describe the animal, situation, and any distinguishing features…"
-                placeholderTextColor={Colors.textTertiary}
-                multiline
-              />
-              <Text style={styles.sectionLabel}>More information (optional)</Text>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                value={extraNotes}
-                onChangeText={setExtraNotes}
-                placeholder="Collar, behavior, nearby clinic, anything else you want to add…"
-                placeholderTextColor={Colors.textTertiary}
-                multiline
-              />
-              <Text style={styles.sectionLabel}>Photo (optional)</Text>
-              <TouchableOpacity style={styles.gpsBtn} onPress={pickReportPhoto} activeOpacity={0.85}>
-                <Text style={styles.gpsText}>{photoUri ? 'Change photo' : 'Add a photo'}</Text>
-              </TouchableOpacity>
-              {photoUri ? (
-                <Image source={{ uri: photoUri }} style={styles.preview} resizeMode="cover" />
-              ) : null}
-              <Text style={styles.sectionLabel}>Location *</Text>
-              <TouchableOpacity style={styles.gpsBtn} onPress={useMyLocation} disabled={locating} activeOpacity={0.85}>
-                <MapPin color={Colors.white} size={16} />
-                <Text style={styles.gpsText}>{locating ? 'Getting location…' : 'Use my location'}</Text>
-              </TouchableOpacity>
-              <TextInput
-                style={styles.input}
-                value={location}
-                onChangeText={setLocation}
-                placeholder="Address or area where the animal was seen"
-                placeholderTextColor={Colors.textTertiary}
-              />
-              {lat != null && lng != null ? (
-                Platform.OS === 'web' ? (
-                  // @ts-ignore
-                  <iframe
-                    title="map"
-                    width="100%"
-                    height="200"
-                    style={{ border: 0, borderRadius: 12, marginBottom: 10 }}
-                    src={`https://maps.google.com/maps?q=${lat},${lng}&z=16&output=embed`}
-                  />
-                ) : (
-                  <Text style={{ marginBottom: 10, color: Colors.textSecondary }}>
-                    Pin: {lat.toFixed(5)}, {lng.toFixed(5)}
+                  <Text style={styles.heroTitle}>{draft.analyzed ? 'Suggested from the photo' : 'Couldn’t analyze'}</Text>
+                  <Text style={styles.heroSub}>
+                    {draft.species} · {draft.breed_guess} · {draft.suggested_report_type}
                   </Text>
-                )
-              ) : null}
-              <TouchableOpacity style={styles.submitBtn} onPress={() => {
-                if (!description.trim() || !location.trim()) {
-                  setBanner({ message: 'Description and location are required.', kind: 'error' });
-                  return;
-                }
-                setStep(3);
-              }} activeOpacity={0.85}>
-                <Text style={styles.submitText}>Continue</Text>
-              </TouchableOpacity>
+                  {draft.short_description ? <Text style={styles.body}>{draft.short_description}</Text> : null}
+                  <TouchableOpacity style={styles.submitBtn} onPress={() => setStep(3)} activeOpacity={0.85}>
+                    <Text style={styles.submitText}>Confirm or edit</Text>
+                  </TouchableOpacity>
+                  {photoUri ? (
+                    <TouchableOpacity style={styles.secondaryBtn} onPress={() => runAnalyze(photoUri)} activeOpacity={0.85}>
+                      <Text style={styles.secondaryText}>Analyze again</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </>
+              )}
             </>
           )}
 
           {step === 3 && (
             <>
-              <Text style={styles.sectionLabel}>Contact {who === 'other' ? '(the other person)' : '(optional)'}</Text>
-              {user && who !== 'other' && (
-                <TouchableOpacity style={styles.gpsBtn} onPress={useMyAccount} activeOpacity={0.85}>
-                  <Text style={styles.gpsText}>Use my account info</Text>
-                </TouchableOpacity>
-              )}
-              <TextInput style={styles.input} value={contactName} onChangeText={setContactName} placeholder="Your name" placeholderTextColor={Colors.textTertiary} />
-              <TextInput style={styles.input} value={contactPhone} onChangeText={setContactPhone} placeholder="Phone number" placeholderTextColor={Colors.textTertiary} keyboardType="phone-pad" />
-              <TextInput style={styles.input} value={contactEmail} onChangeText={setContactEmail} placeholder="Email" placeholderTextColor={Colors.textTertiary} autoCapitalize="none" keyboardType="email-address" />
-              <View style={styles.switchRow}>
-                <Text style={styles.switchLabel}>Allow direct contact from finders</Text>
-                <Switch value={allowDirectContact} onValueChange={setAllowDirectContact} trackColor={{ true: Colors.coral }} />
+              <Text style={styles.sectionLabel}>Type of report</Text>
+              <View style={styles.chipRow}>
+                {REPORT_TYPES.map((t) => (
+                  <TouchableOpacity key={t.value} style={[styles.chip, reportType === t.value && styles.chipOn]} onPress={() => setReportType(t.value)}>
+                    <Text style={[styles.chipText, reportType === t.value && styles.chipTextOn]}>{t.label}</Text>
+                  </TouchableOpacity>
+                ))}
               </View>
-              <TouchableOpacity style={[styles.submitBtn, loading && styles.btnDisabled]} onPress={handleSubmit} disabled={loading} activeOpacity={0.85}>
-                {loading ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.submitText}>Submit Report</Text>}
+              <Text style={styles.sectionLabel}>Animal</Text>
+              <View style={styles.chipRow}>
+                {SPECIES.map((s) => (
+                  <TouchableOpacity key={s} style={[styles.chip, species === s && styles.chipOn]} onPress={() => setSpecies(s)}>
+                    <Text style={[styles.chipText, species === s && styles.chipTextOn]}>{s}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={styles.sectionLabel}>Breed (optional)</Text>
+              <TextInput style={styles.input} value={breed} onChangeText={setBreed} placeholder="e.g. Tabby, Lab mix" placeholderTextColor={Colors.textTertiary} />
+              <Text style={styles.sectionLabel}>Short description *</Text>
+              <TextInput
+                style={[styles.input, styles.textArea]}
+                value={description}
+                onChangeText={setDescription}
+                placeholder="Two sentences a volunteer can use"
+                placeholderTextColor={Colors.textTertiary}
+                multiline
+              />
+              <TouchableOpacity
+                style={styles.submitBtn}
+                onPress={() => {
+                  if (!description.trim()) {
+                    setBanner({ message: 'Please confirm a short description.', kind: 'error' });
+                    return;
+                  }
+                  setStep(4);
+                }}
+              >
+                <Text style={styles.submitText}>Looks right — next</Text>
+              </TouchableOpacity>
+            </>
+          )}
+
+          {step === 4 && (
+            <>
+              <Text style={styles.sectionLabel}>Location *</Text>
+              <TouchableOpacity style={styles.gpsBtn} onPress={useMyLocation} disabled={locating}>
+                <MapPin color={Colors.white} size={16} />
+                <Text style={styles.gpsText}>{locating ? 'Getting location…' : 'Use my location'}</Text>
+              </TouchableOpacity>
+              <TextInput style={styles.input} value={location} onChangeText={setLocation} placeholder="Address or area" placeholderTextColor={Colors.textTertiary} />
+              {lat != null && lng != null && Platform.OS === 'web' ? (
+                // @ts-ignore
+                <iframe title="map" width="100%" height="180" style={{ border: 0, borderRadius: 12, marginBottom: 10 }} src={`https://maps.google.com/maps?q=${lat},${lng}&z=16&output=embed`} />
+              ) : null}
+              <Text style={styles.sectionLabel}>Anything else? (optional)</Text>
+              <TextInput
+                style={[styles.input, styles.textArea]}
+                value={extraNotes}
+                onChangeText={setExtraNotes}
+                placeholder="Collar, behavior, nearby clinic…"
+                placeholderTextColor={Colors.textTertiary}
+                multiline
+              />
+              <TouchableOpacity style={[styles.submitBtn, loading && styles.btnDisabled]} onPress={handleSubmit} disabled={loading}>
+                {loading ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.submitText}>Submit report</Text>}
               </TouchableOpacity>
             </>
           )}
@@ -381,26 +340,23 @@ const styles = StyleSheet.create({
   trackerLabel: { fontSize: FontSizes.xs, fontFamily: Fonts.medium, color: Colors.textTertiary },
   trackerLabelOn: { color: Colors.coral, fontFamily: Fonts.bold },
   scrollContent: { paddingHorizontal: 20, paddingVertical: 16, paddingBottom: 60 },
+  heroTitle: { fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.text, marginBottom: 8, textAlign: 'center' },
+  heroSub: { fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.textSecondary, textAlign: 'center', marginBottom: 16 },
+  body: { fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.text, marginBottom: 16, lineHeight: 22 },
+  preview: { width: '100%', height: 220, borderRadius: 12, marginBottom: 16, backgroundColor: Colors.surface },
   sectionLabel: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8, marginTop: 8 },
-  typeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 12 },
-  typeCard: { width: '48%', flexGrow: 1, backgroundColor: Colors.white, borderRadius: 12, padding: 14, borderWidth: 1.5, borderColor: Colors.border },
-  typeCardActive: { borderColor: Colors.coral, backgroundColor: Colors.coralBg },
-  typeLabel: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.text, marginBottom: 4 },
-  typeLabelActive: { color: Colors.coral },
-  typeDesc: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary },
-  typeRow: { marginBottom: 8 },
-  whoRow: { backgroundColor: Colors.white, borderRadius: 12, padding: 14, borderWidth: 1.5, borderColor: Colors.border, marginBottom: 8 },
-  whoActive: { borderColor: Colors.navy, backgroundColor: Colors.surface },
-  whoTitle: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.text },
-  whoSub: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 2 },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
+  chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.border },
+  chipOn: { borderColor: Colors.coral, backgroundColor: Colors.coralBg },
+  chipText: { fontFamily: Fonts.semibold, color: Colors.text },
+  chipTextOn: { color: Colors.coral },
   input: { borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 14, fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.text, backgroundColor: Colors.white, marginBottom: 10 },
   textArea: { minHeight: 90, textAlignVertical: 'top' },
-  preview: { width: '100%', height: 180, borderRadius: 12, marginBottom: 10, backgroundColor: Colors.surface },
   gpsBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: Colors.navy, borderRadius: 12, paddingVertical: 12, marginBottom: 10 },
   gpsText: { color: Colors.white, fontFamily: Fonts.bold, fontSize: FontSizes.sm },
-  switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginVertical: 8 },
-  switchLabel: { fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.text, flex: 1, marginRight: 12 },
   submitBtn: { backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 12 },
   submitText: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.white },
+  secondaryBtn: { paddingVertical: 14, alignItems: 'center' },
+  secondaryText: { fontFamily: Fonts.semibold, color: Colors.textSecondary },
   btnDisabled: { opacity: 0.6 },
 });

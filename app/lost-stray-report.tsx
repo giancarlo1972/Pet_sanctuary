@@ -182,6 +182,22 @@ export default function LostStrayReportScreen() {
                 placeholder="Address or area where the animal was seen"
                 placeholderTextColor={Colors.textTertiary}
               />
+            {lat != null && lng != null ? (
+                Platform.OS === 'web' ? (
+                  // @ts-ignore
+                  <iframe
+                    title="map"
+                    width="100%"
+                    height="200"
+                    style={{ border: 0, borderRadius: 12, marginBottom: 10 }}
+                    src={`https://maps.google.com/maps?q=${lat},${lng}&z=16&output=embed`}
+                  />
+                ) : (
+                  <Text style={{ marginBottom: 10, color: Colors.textSecondary }}>
+                    Pin: {lat.toFixed(5)}, {lng.toFixed(5)}
+                  </Text>
+                )
+              ) : null}
               <TouchableOpacity style={styles.submitBtn} onPress={() => {
                 if (!description.trim() || !location.trim()) {
                   setBanner({ message: 'Description and location are required.', kind: 'error' });

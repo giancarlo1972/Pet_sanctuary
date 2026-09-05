@@ -10,6 +10,7 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import { InlineBanner } from '@/components/InlineBanner';
+import AppHeader from '@/components/AppHeader';
 
 const ORG_TYPES = [
   { value: 'shelter', label: 'Animal Shelter' },
@@ -67,13 +68,7 @@ export default function RegisterOrganizationScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.topBar}>
-        <TouchableOpacity style={styles.topBtn} onPress={() => router.back()} activeOpacity={0.75}>
-          <ChevronLeft color={Colors.text} size={22} />
-        </TouchableOpacity>
-        <Text style={styles.topTitle}>Register Organization</Text>
-        <View style={styles.topBtn} />
-      </View>
+      <AppHeader title="Register Organization" />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
           <View style={styles.hero}>

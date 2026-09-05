@@ -288,7 +288,7 @@ export default function MyPetScreen() {
       if (petIdParam) {
         const { data: petRow, error: petErr } = await supabase
           .from('pets')
-          .select('.id, name, breed, species, age_text, gender, main_photo_url, description, spayed_neutered, vaccinated, weight_kg')
+          .select('id, name, breed, species, age_text, gender, main_photo_url, description, spayed_neutered, vaccinated, weight_kg')
           .eq('id', petIdParam)
           .maybeSingle();
         if (petErr || !petRow) {

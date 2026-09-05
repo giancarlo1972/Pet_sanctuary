@@ -182,9 +182,9 @@ export default function PetDetailsScreen() {
           good_with_kids: false,
           good_with_dogs: false,
           good_with_cats: false,
-          vaccinated: false,
-          spayed_neutered: false,
-          microchipped: false,
+          vaccinated: !!a.vaccinated,
+          spayed_neutered: !!a.spayed_neutered,
+          microchipped: !!a.microchipped,
           shelter_id: null,
         });
         setLoading(false);

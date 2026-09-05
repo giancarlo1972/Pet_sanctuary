@@ -52,7 +52,6 @@ export default function RegisterOrganizationScreen() {
         ein: ein.trim() || null,
         created_by: user.id,
         status: 'pending',
-        verification_status: 'pending',
         ein_verified: false,
         tax_deductible: false,
         donations_enabled: false,

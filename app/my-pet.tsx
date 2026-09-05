@@ -423,15 +423,29 @@ export default function MyPetScreen() {
       const filePath = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
       const { error: upErr } = await supabase.storage.from('pet-documents').upload(filePath, arrayBuffer, { contentType, upsert: false });
       if (upErr) throw upErr;
-      const { error: docErr } = await supabase.from('pet_documents').insert({
+      const { data: docRow, error: docErr } = await supabase.from('pet_documents').insert({
         pet_id: pet.id,
         kind: 'medical_record',
         file_path: filePath,
         title: `Upload ${(() => { const d = new Date(); const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${months[d.getMonth()]} ${d.getDate()}`; })()}`,
         uploaded_by: user.id,
-      });
+      }).select('id').single();
       if (docErr) throw docErr;
+
+      if (docRow?.id) {
+        const { data: session } = await supabase.auth.getSession();
+        await fetch(`${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/extract-vet-record`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.session?.access_token}`,
+            apikey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '',
+          },
+          body: JSON.stringify({ document_id: docRow.id }),
+        });
+      }
       await loadPet();
+      setBanner({ message: 'Document saved. Open Edit to review anything the AI found.', kind: 'success' });
     } catch (err) {
       console.error('[my-pet] upload document failed:', err);
       setBanner({ message: 'Could not upload the document. Please try again.', kind: 'error' });

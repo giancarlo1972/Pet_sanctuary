@@ -1,9 +1,42 @@
 export async function onRequestGet(context) {
   const key = context.env.EXPO_PUBLIC_RESCUEGROUPS_API_KEY;
   if (!key) {
-    return Response.json({ orgs: [], error: 'Missing RescueGroups key' }, { status: 500 });
+    return Response.json({ orgs: [], pets: [], error: 'Missing RescueGroups key' }, { status: 500 });
   }
-  const state = new URL(context.request.url).searchParams.get('state') || 'NY';
+  const url = new URL(context.request.url);
+  const orgId = (url.searchParams.get('org') || '').replace(/^rg-/, '');
+  const state = url.searchParams.get('state') || 'NY';
+
+  if (orgId) {
+    const res = await fetch('https://api.rescuegroups.org/http/v2.json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        apikey: key,
+        objectType: 'animals',
+        objectAction: 'publicSearch',
+        search: {
+          resultStart: 0,
+          resultLimit: 24,
+          filters: [
+            { fieldName: 'animalOrgID', operation: 'equals', criteria: orgId },
+            { fieldName: 'animalStatus', operation: 'equals', criteria: 'Available' },
+          ],
+          fields: ['animalID', 'animalName', 'animalBreed', 'animalSpecies', 'animalThumbnailUrl', 'animalStatus'],
+        },
+      }),
+    });
+    const json = await res.json();
+    const pets = Object.values(json.data || {}).map((a) => ({
+      id: 'rg-a-' + a.animalID,
+      name: a.animalName,
+      photo_url: a.animalThumbnailUrl || null,
+      breed: a.animalBreed || null,
+      species: a.animalSpecies || null,
+    }));
+    return Response.json({ pets, foundRows: json.foundRows || pets.length });
+  }
+
   const res = await fetch('https://api.rescuegroups.org/http/v2.json', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

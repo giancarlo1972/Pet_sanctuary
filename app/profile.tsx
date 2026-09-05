@@ -70,25 +70,7 @@ function formatShortDate(value: string | null): string {
 export default function ProfileScreen() {
   const { user, loading: authLoading, signOut } = useAuth();
   const [mounted, setMounted] = useState(false);
-    const uploadId = async () => {
-    if (!user) return;
-    const pick = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 0.8 });
-    if (pick.canceled || !pick.assets?.[0]) return;
-    const uri = pick.assets[0].uri;
-    const blob = await (await fetch(uri)).blob();
-    const path = `${user.id}/gov-id.jpg`;
-    const { error: upErr } = await supabase.storage.from('id-docs').upload(path, blob, { contentType: blob.type || 'image/jpeg', upsert: true });
-    if (upErr) { setBanner?.({ message: upErr.message, kind: 'error' }); return; }
-    await supabase.from('user_verifications').upsert({
-      user_id: user.id,
-      id_document_path: path,
-      id_status: 'pending',
-      id_verified: false,
-    });
-    setVerifications((v) => ({ ...v, id_verified: false }));
-  };
-
-  useEffect(() => {
+    useEffect(() => {
     setMounted(true);
   }, []);
 
@@ -139,6 +121,28 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
   const [approxLocation, setApproxLocation] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerWidth, setDrawerWidth] = useState(DRAWER_WIDTH);
+    const uploadId = async () => {
+    const pick = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 0.8 });
+    if (pick.canceled || !pick.assets?.[0]) return;
+    const uri = pick.assets[0].uri;
+    const blob = await (await fetch(uri)).blob();
+    const path = `${userId}/gov-id.jpg`;
+    const { error: upErr } = await supabase.storage.from('id-docs').upload(path, blob, {
+      contentType: blob.type || 'image/jpeg',
+      upsert: true,
+    });
+    if (upErr) {
+      setLoadError(upErr.message);
+      return;
+    }
+    await supabase.from('user_verifications').upsert({
+      user_id: userId,
+      id_document_path: path,
+      id_status: 'pending',
+      id_verified: false,
+    });
+    setVerifications((v) => ({ ...v, id_verified: false }));
+  };
   const slideAnim = useRef(new Animated.Value(DRAWER_WIDTH)).current;
   const scrimAnim = useRef(new Animated.Value(0)).current;
 

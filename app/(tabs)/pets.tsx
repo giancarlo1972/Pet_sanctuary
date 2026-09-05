@@ -52,8 +52,6 @@ const FILTER_CHIPS: { id: FilterId; label: string }[] = [
 export default function PetsScreen() {
   const { user } = useAuth();
   const { width } = useWindowDimensions();
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
   const [pets, setPets] = useState<Pet[]>([]);
   const [loading, setLoading] = useState(true);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
@@ -66,18 +64,37 @@ export default function PetsScreen() {
   const loadPets = useCallback(async () => {
     setLoading(true);
     try {
+      let local: Pet[] = [];
       const { data, error } = await supabase
         .from('pets')
         .select('id, name, breed, species, age_text, main_photo_url, location, status, created_at')
         .eq('status', 'available')
         .eq('is_public', true)
         .order('created_at', { ascending: false });
-      if (error) { setPets([]); return; }
-      const allPets = (data || []).map((p: any) => ({
-        ...p,
-        needs_foster: (p.personality && Array.isArray(p.personality) && p.personality.includes('needs foster')) || false,
-      }));
-      setPets(allPets);
+      if (!error && data) {
+        local = data.map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          breed: p.breed || '',
+          species: (p.species || '').toLowerCase(),
+          age_text: p.age_text,
+          main_photo_url: p.main_photo_url,
+          location: p.location,
+          needs_foster: false,
+        }));
+      }
+
+      let remote: Pet[] = [];
+      try {
+        const resp = await fetch('/api/rescuegroups?pets=1&state=NY');
+        if (resp.ok) {
+          const json = await resp.json();
+          remote = (json.pets || []) as Pet[];
+        }
+      } catch { /* ignore */ }
+
+      const seen = new Set(local.map((p) => p.id));
+      setPets([...local, ...remote.filter((p) => !seen.has(p.id))]);
     } catch {
       setPets([]);
     } finally {
@@ -124,14 +141,16 @@ export default function PetsScreen() {
   };
 
   const filteredPets = pets.filter((pet) => {
-    if (activeFilter === 'dogs') return pet.species === 'dog';
-    if (activeFilter === 'cats') return pet.species === 'cat';
+    const species = (pet.species || '').toLowerCase();
+    if (activeFilter === 'dogs') return species === 'dog';
+    if (activeFilter === 'cats') return species === 'cat';
     if (activeFilter === 'foster') return pet.needs_foster;
     return true;
   });
 
   const renderPetCard = ({ item }: { item: Pet }) => {
     const isFav = favorites.has(item.id);
+    const photo = item.main_photo_url;
     return (
       <TouchableOpacity
         style={[styles.petCard, { width: cardWidth }]}
@@ -139,7 +158,17 @@ export default function PetsScreen() {
         activeOpacity={0.85}
       >
         <View style={styles.petCardImageWrap}>
-          <SignedImage path={item.main_photo_url} style={styles.petCardImage} />
+          {photo ? (
+            photo.startsWith('http') ? (
+              <Image source={{ uri: photo }} style={styles.petCardImage} />
+            ) : (
+              <SignedImage path={photo} style={styles.petCardImage} />
+            )
+          ) : (
+            <View style={[styles.petCardImage, { justifyContent: 'center', alignItems: 'center' }]}>
+              <PawPrint color={Colors.textTertiary} size={28} />
+            </View>
+          )}
           <TouchableOpacity style={styles.heartButton} onPress={() => toggleFavorite(item.id)} activeOpacity={0.7}>
             <Heart color={isFav ? Colors.coral : Colors.white} fill={isFav ? Colors.coral : 'transparent'} size={18} />
           </TouchableOpacity>
@@ -172,8 +201,6 @@ export default function PetsScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={Colors.background} />
       <AppHeader title="Pets" />
-
-      {/* Filter chips */}
       <View style={styles.filterBar}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterBarContent}>
           {FILTER_CHIPS.map((chip) => {
@@ -193,15 +220,12 @@ export default function PetsScreen() {
           })}
         </ScrollView>
       </View>
-
-      {/* Header + count */}
       <View style={styles.galleryHeader}>
         <Text style={styles.galleryLabel}>All pets</Text>
         <Text style={styles.galleryCount}>
           {filteredPets.length} pet{filteredPets.length !== 1 ? 's' : ''}
         </Text>
       </View>
-
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={Colors.coral} />
@@ -231,7 +255,6 @@ export default function PetsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
-
   filterBar: { paddingBottom: 8 },
   filterBarContent: { paddingHorizontal: 20, gap: 8 },
   filterChip: {
@@ -243,7 +266,6 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.navy,
   },
   filterChipTextActive: { color: Colors.white },
-
   galleryHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 20, marginBottom: 12,
@@ -254,11 +276,9 @@ const styles = StyleSheet.create({
   galleryCount: {
     fontSize: FontSizes.sm, fontFamily: Fonts.medium, color: Colors.textSecondary,
   },
-
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   listContent: { paddingHorizontal: 20, paddingBottom: 100 },
   row: { gap: CARD_GAP, marginBottom: CARD_GAP },
-
   petCard: {
     backgroundColor: Colors.white, borderRadius: 16, overflow: 'hidden',
     elevation: 2, shadowColor: Colors.shadow, shadowOffset: { width: 0, height: 2 },

@@ -60,6 +60,8 @@ type Pet = {
   main_photo_url: string | null;
   description: string | null;
   spayed_neutered: boolean | null;
+  vaccinated: boolean | null;
+  weight_kg: number | null;
 };
 
 type Vaccination = {
@@ -286,7 +288,7 @@ export default function MyPetScreen() {
       if (petIdParam) {
         const { data: petRow, error: petErr } = await supabase
           .from('pets')
-          .select('id, name, breed, species, age_text, gender, main_photo_url, description, spayed_neutered')
+          .select('.id, name, breed, species, age_text, gender, main_photo_url, description, spayed_neutered, vaccinated, weight_kg')
           .eq('id', petIdParam)
           .maybeSingle();
         if (petErr || !petRow) {
@@ -503,6 +505,14 @@ export default function MyPetScreen() {
     .filter((e) => e.event_type === 'weight' && e.weight_kg != null)
     .map((e) => ({ date: e.occurred_on, kg: e.weight_kg! }))
     .reverse();
+    const latestKg = weightEntries.length ? weightEntries[weightEntries.length - 1].kg : pet?.weight_kg;
+  const latestLb = latestKg != null ? Math.round(latestKg * 2.20462 * 10) / 10 : null;
+  const blob = [
+    ...vaccinations.map((v) => v.vaccine),
+    ...careEvents.map((c) => `${c.title || ''} ${c.notes || ''}`),
+  ].join(' ').toLowerCase();
+  const felvNeg = /felv|fiv|leukemia/.test(blob) && /negat/.test(blob);
+  const dueVax = vaccinations.filter((v) => v.next_due_on);
 
   // Merge vaccinations + care events into one timeline
   const timeline: { date: string; type: 'vaccination' | 'care'; data: Vaccination | CareEvent }[] = [
@@ -566,16 +576,47 @@ export default function MyPetScreen() {
                   {pet?.gender && <Text style={styles.petMeta}>{titleCase(pet.gender)}</Text>}
                   {pet?.spayed_neutered && <Text style={styles.petMeta}>Spayed / Neutered</Text>}
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8, justifyContent: 'center' }}>
-                    {pet?.spayed_neutered ? (
-                      <View style={{ backgroundColor: Colors.tealBg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }}>
-                        <Text style={{ color: Colors.tealDark, fontFamily: Fonts.bold, fontSize: FontSizes.xs }}>Spayed/Neutered</Text>
-                      </View>
-                    ) : null}
-                    {microchip ? (
-                      <View style={{ backgroundColor: Colors.surface, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }}>
-                        <Text style={{ color: Colors.navy, fontFamily: Fonts.bold, fontSize: FontSizes.xs }}>Microchipped</Text>
-                      </View>
-                    ) : null}
+                  {pet?.spayed_neutered ? (
+                <View style={{ backgroundColor: Colors.tealBg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }}>
+                      <Text style={{ color: Colors.tealDark, fontFamily: Fonts.bold, fontSize: FontSizes.xs }}>Spayed/Neutered</Text>
+                    </View>
+                  ) : null}
+                  {microchip ? (
+                    <View style={{ backgroundColor: Colors.surface, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }}>
+                      <Text style={{ color: Colors.navy, fontFamily: Fonts.bold, fontSize: FontSizes.xs }}>Microchipped</Text>
+                    </View>
+                  ) : null}
+                  {(pet?.vaccinated || vaccinations.length > 0) ? (
+                    <View style={{ backgroundColor: Colors.tealBg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }}>
+                      <Text style={{ color: Colors.tealDark, fontFamily: Fonts.bold, fontSize: FontSizes.xs }}>
+                        Vaccines {vaccinations.length ? `(${vaccinations.length})` : ''}
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={{ backgroundColor: Colors.urgentBg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }}>
+                      <Text style={{ color: Colors.critical, fontFamily: Fonts.bold, fontSize: FontSizes.xs }}>Vaccines unknown</Text>
+                    </View>
+                  )}
+                  {latestLb != null ? (
+                    <View style={{ backgroundColor: Colors.surface, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }}>
+                      <Text style={{ color: Colors.navy, fontFamily: Fonts.bold, fontSize: FontSizes.xs }}>{latestLb} lb</Text>
+                    </View>
+                  ) : null}
+                  {felvNeg ? (
+                    <View style={{ backgroundColor: Colors.tealBg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }}>
+                      <Text style={{ color: Colors.tealDark, fontFamily: Fonts.bold, fontSize: FontSizes.xs }}>FeLV/FIV negative</Text>
+                    </View>
+                  ) : null}
+                </View>
+                {dueVax.length > 0 ? (
+                  <View style={{ marginTop: 10, width: '100%' }}>
+                    {dueVax.slice(0, 4).map((v) => (
+                      <Text key={v.id} style={{ fontSize: FontSizes.xs, fontFamily: Fonts.medium, color: Colors.textSecondary, textAlign: 'center' }}>
+                        {v.vaccine} due {v.next_due_on}
+                      </Text>
+                    ))}
+                  </View>
+                ) : null}
                   </View>
                   {adoptedAt && (
                     <View style={styles.adoptedRow}>

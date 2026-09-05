@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
   ActivityIndicator, Switch, KeyboardAvoidingView, Platform,
@@ -47,7 +47,11 @@ export default function LostStrayReportScreen() {
   const [allowDirectContact, setAllowDirectContact] = useState(false);
   const [loading, setLoading] = useState(false);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
-
+  const STEPS = [
+  { n: 1, label: 'Type' },
+  { n: 2, label: 'Animal' },
+  { n: 3, label: 'Place' },
+   ];
   const useMyLocation = () => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
       setBanner({ message: 'Location is not available in this browser.', kind: 'error' });

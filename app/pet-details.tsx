@@ -473,7 +473,7 @@ export default function PetDetailsScreen() {
         <View style={styles.heroWrap}>
           {pet.main_photo_url ? (
             pet.main_photo_url.startsWith('http') ? (
-        <Image source={{ uri: pet.main_photo_url }} style={styles.heroImage} resizeMode="contain" />
+        <Image source={{ uri: pet.main_photo_url }} style={styles.heroImage} resizeMode="cover" />
             ) : (
               <SignedImage path={pet.main_photo_url} style={styles.heroImage} />
             )
@@ -817,7 +817,7 @@ const styles = StyleSheet.create({
 
   scrollContent: { paddingBottom: 100 },
 
-  heroWrap: { position: 'relative', width: '100%', height: 420, backgroundColor: Colors.navy },
+  heroWrap: { position: 'relative', width: '100%', height: 360, backgroundColor: Colors.navy },
   heroImage: { width: '100%', height: '100%' },
   heroPlaceholder: { justifyContent: 'center', alignItems: 'center' },
   heroBack: {

@@ -84,7 +84,7 @@ export async function onRequestGet(context) {
         resultStart: 0,
         resultLimit: 50,
         filters: [{ fieldName: 'orgState', operation: 'equals', criteria: state }],
-        fields: ['orgID', 'orgName', 'orgCity', 'orgState', 'orgType', 'orgWebsite', 'orgDonationUrl', 'orgEmail'],
+        fields: ['orgID', 'orgName', 'orgCity', 'orgState', 'orgType', 'orgWebsiteUrl', 'orgDonationUrl', 'orgEmail'],
       },
     }),
   });
@@ -95,11 +95,11 @@ export async function onRequestGet(context) {
     org_type: (o.orgType || 'Rescue').toLowerCase(),
     location: [o.orgCity, o.orgState].filter(Boolean).join(', '),
     logo_url: null,
-    description: o.orgWebsite || null,
+    description: o.orgWebsiteUrl || null,
+    website: o.orgWebsiteUrl || null,
     status: 'approved',
     ein_verified: false,
     tax_deductible: false,
-    website: o.orgWebsite || null,
     email: o.orgEmail || null,
     donation_url: o.orgDonationUrl || null,
   }));

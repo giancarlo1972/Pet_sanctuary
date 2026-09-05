@@ -63,11 +63,15 @@ export async function onRequestPost(context) {
       );
     }
 
-    const raw = String(imageBase64).replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
     const s = String(imageBase64);
     const prefix = s.slice(0, 40).toLowerCase();
     const raw = s.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
     let mediaType = 'image/jpeg';
+    if (prefix.includes('image/png') || raw.startsWith('iVBORw0')) mediaType = 'image/png';
+    else if (prefix.includes('image/webp') || raw.startsWith('UklGR')) mediaType = 'image/webp';
+    else if (prefix.includes('image/gif') || raw.startsWith('R0lGOD')) mediaType = 'image/gif';
+    else if (raw.startsWith('/9j/')) mediaType = 'image/jpeg';
+    
     if (prefix.includes('image/png') || raw.startsWith('iVBORw0')) mediaType = 'image/png';
     else if (prefix.includes('image/webp') || raw.startsWith('UklGR')) mediaType = 'image/webp';
     else if (prefix.includes('image/gif') || raw.startsWith('R0lGOD')) mediaType = 'image/gif';

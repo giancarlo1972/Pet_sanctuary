@@ -178,6 +178,12 @@ export default function OrganizationDetailsScreen() {
               followers: 0,
               pets: [],
             });
+                        try {
+              const petRes = await fetch('/api/rescuegroups?org=' + encodeURIComponent(d.id));
+              const petJson = await petRes.json();
+              const pets = petJson.pets || [];
+              setOrg((prev) => prev && prev.id === d.id ? { ...prev, pets, pets_listed: petJson.foundRows || pets.length } : prev);
+            } catch { /* ignore */ }
           } else {
             setOrg(MOCK_ORG);
           }
@@ -342,7 +348,11 @@ export default function OrganizationDetailsScreen() {
                     activeOpacity={0.85}
                   >
                     {pet.photo_url ? (
-                      <SignedImage path={pet.photo_url} style={styles.petCardImage} />
+                      pet.photo_url.startsWith('http') ? (
+                        <Image source={{ uri: pet.photo_url }} style={styles.petCardImage} />
+                      ) : (
+                        <SignedImage path={pet.photo_url} style={styles.petCardImage} />
+                      )
                     ) : (
                       <View style={[styles.petCardImage, styles.petCardFallback]}>
                         <PawPrint color={Colors.textTertiary} size={24} />

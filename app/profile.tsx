@@ -644,10 +644,12 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
               <View style={styles.card}>
                 <VerificationRow
                   icon={<IdCard color={Colors.navy} size={18} />}
-                  label="Government ID"
-                  pill={verifications.id_verified ? { bg: Colors.tealBg, color: Colors.tealDark, text: 'Verified' } : { bg: Colors.surface, color: Colors.textTertiary, text: 'Pending' }}
-                />
-                <View style={styles.divider} />
+            label="Government ID"
+                  onPress={uploadId}
+                  pill={verifications.id_verified
+                    ? { bg: Colors.tealBg, color: Colors.tealDark, text: 'Verified' }
+                    : { bg: Colors.surface, color: Colors.textTertiary, text: 'Tap to upload' }}
+              <View style={styles.divider} />
                 <VerificationRow
                   icon={<Phone color={Colors.navy} size={18} />}
                   label="Phone"

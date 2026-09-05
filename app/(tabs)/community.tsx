@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
+  TextInput,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
@@ -128,9 +129,8 @@ function timeAgo(dateString: string | null): string {
 
 export default function CommunityScreen() {
   const { user } = useAuth();
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
   const [activeSegment, setActiveSegment] = useState<Segment>('orgs');
+  const [orgQuery, setOrgQuery] = useState('');
   const [orgs, setOrgs] = useState<OrgRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -258,7 +258,12 @@ export default function CommunityScreen() {
     return ORG_TYPE_ALIASES[raw] || 'shelter';
   };
 
-  const filteredOrgs = typeFilter === 'All' ? orgs : orgs.filter((o) => getSection(o) === FILTER_TO_SECTION[typeFilter]);
+  const filteredOrgs = (typeFilter === 'All' ? orgs : orgs.filter((o) => getSection(o) === FILTER_TO_SECTION[typeFilter]))
+    .filter((o) => {
+      const q = orgQuery.trim().toLowerCase();
+      if (!q) return true;
+      return o.name.toLowerCase().includes(q) || (o.location || '').toLowerCase().includes(q);
+    });
 
   const getStatusPill = (org: OrgRow) => {
     const s = org.status || 'approved';
@@ -401,7 +406,6 @@ export default function CommunityScreen() {
   const renderStoryCard = (s: Story) => {
     const displayName = s.org_name || s.author_name || 'Rescue Army';
     const displayAvatar = s.org_logo || s.author_avatar;
-    const isOwner = user && user.id === s.author_id;
     return (
       <View key={s.id} style={styles.storyCard}>
         <TouchableOpacity
@@ -451,7 +455,6 @@ export default function CommunityScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <AppHeader title="Community" />
-
       <View style={styles.segmentContainer}>
         {(['orgs', 'fosters', 'stories'] as Segment[]).map((seg) => (
           <TouchableOpacity
@@ -466,7 +469,6 @@ export default function CommunityScreen() {
           </TouchableOpacity>
         ))}
       </View>
-
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={Colors.coral} />
@@ -489,10 +491,16 @@ export default function CommunityScreen() {
                 <View style={styles.apiDot} />
                 <Text style={styles.apiBannerText}>
                   <Text style={styles.apiBannerBold}>Connected to RescueGroups.org API</Text>
-                  {' — '}{orgs.length} organizations synced · updated 5 min ago
+                  {' — '}{filteredOrgs.length} of {orgs.length} organizations
                 </Text>
               </View>
-
+              <TextInput
+                style={styles.orgSearch}
+                value={orgQuery}
+                onChangeText={setOrgQuery}
+                placeholder="Search shelters, rescues, city…"
+                placeholderTextColor={Colors.textTertiary}
+              />
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -511,7 +519,6 @@ export default function CommunityScreen() {
                   </TouchableOpacity>
                 ))}
               </ScrollView>
-
               <TouchableOpacity
                 style={styles.registerCTA}
                 onPress={() => router.push('/register-organization')}
@@ -526,19 +533,17 @@ export default function CommunityScreen() {
                 </View>
                 <ChevronRight color={Colors.coral} size={18} />
               </TouchableOpacity>
-
               {filteredOrgs.length === 0 ? (
                 <View style={styles.emptyState}>
                   <Building2 color={Colors.textTertiary} size={40} />
                   <Text style={styles.emptyTitle}>No organizations found</Text>
-                  <Text style={styles.emptyDesc}>Try a different filter or check back later.</Text>
+                  <Text style={styles.emptyDesc}>Try a different search or filter.</Text>
                 </View>
               ) : (
                 filteredOrgs.map(renderOrgRow)
               )}
             </>
           )}
-
           {activeSegment === 'fosters' && (
             <>
               {fostersLoading ? (
@@ -556,7 +561,6 @@ export default function CommunityScreen() {
               )}
             </>
           )}
-
           {activeSegment === 'stories' && (
             <>
               {user && (
@@ -575,7 +579,6 @@ export default function CommunityScreen() {
                   <ChevronRight color={Colors.coral} size={18} />
                 </TouchableOpacity>
               )}
-
               {storiesLoading ? (
                 <View style={styles.loadingContainer}>
                   <ActivityIndicator size="large" color={Colors.coral} />
@@ -595,8 +598,6 @@ export default function CommunityScreen() {
           )}
         </ScrollView>
       )}
-
-      {/* Story overflow menu */}
       {menuStory && (
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setMenuStoryId(null)}>
           <View style={styles.menuSheet}>
@@ -634,7 +635,11 @@ export default function CommunityScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
-
+  orgSearch: {
+    borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 12,
+    paddingHorizontal: 14, paddingVertical: 12, marginBottom: 12,
+    fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.text, backgroundColor: Colors.white,
+  },
   segmentContainer: {
     flexDirection: 'row',
     backgroundColor: Colors.surfaceAlt,
@@ -654,10 +659,8 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.textSecondary,
   },
   segmentTextActive: { color: Colors.white },
-
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   scrollContent: { paddingHorizontal: 20, paddingBottom: 100 },
-
   apiBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: Colors.surface, borderRadius: 14, padding: 14, marginBottom: 16,
@@ -669,7 +672,6 @@ const styles = StyleSheet.create({
     flex: 1, fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, lineHeight: 18,
   },
   apiBannerBold: { fontFamily: Fonts.bold, color: Colors.text },
-
   filterChipsRow: { gap: 8, marginBottom: 16 },
   filterChip: {
     paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999,
@@ -682,7 +684,6 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.textSecondary,
   },
   filterChipTextActive: { color: Colors.white },
-
   registerCTA: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     borderWidth: 1.5, borderColor: Colors.coral, borderStyle: 'dashed',
@@ -699,7 +700,6 @@ const styles = StyleSheet.create({
   registerCTASub: {
     fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 2,
   },
-
   shareStoryCTA: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     borderWidth: 1.5, borderColor: Colors.coral, borderStyle: 'dashed',
@@ -716,7 +716,6 @@ const styles = StyleSheet.create({
   shareStorySub: {
     fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 2,
   },
-
   orgRow: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     backgroundColor: Colors.white, borderRadius: 14, padding: 14, marginBottom: 8,
@@ -744,7 +743,6 @@ const styles = StyleSheet.create({
   statusPillText: {
     fontSize: 10, fontFamily: Fonts.bold,
   },
-
   fosterCard: {
     flexDirection: 'row', gap: 12, backgroundColor: Colors.white, borderRadius: 14,
     padding: 14, marginBottom: 12, borderWidth: 1, borderColor: Colors.border,
@@ -755,9 +753,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center',
   },
   fosterBody: { flex: 1 },
-  fosterNameRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2,
-  },
   fosterName: {
     fontSize: FontSizes.lg, fontFamily: Fonts.bold, color: Colors.text,
   },
@@ -797,7 +792,6 @@ const styles = StyleSheet.create({
   fosterApplyText: {
     fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.white,
   },
-
   storyCard: {
     backgroundColor: Colors.white, borderRadius: 14, marginBottom: 16,
     overflow: 'hidden', borderWidth: 1, borderColor: Colors.border,
@@ -839,13 +833,11 @@ const styles = StyleSheet.create({
     width: 32, height: 32, borderRadius: 16,
     backgroundColor: 'rgba(255,255,255,0.85)', justifyContent: 'center', alignItems: 'center',
   },
-
   menuOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end', zIndex: 200 },
   menuSheet: { backgroundColor: Colors.white, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 12, paddingBottom: 32 },
   menuHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: Colors.border, alignSelf: 'center', marginBottom: 12 },
   menuItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 8 },
   menuItemText: { fontSize: FontSizes.md, fontFamily: Fonts.semibold, color: Colors.text },
-
   emptyState: {
     alignItems: 'center', paddingVertical: 60, paddingHorizontal: 40,
   },

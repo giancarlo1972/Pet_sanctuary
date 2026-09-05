@@ -617,7 +617,6 @@ export default function MyPetScreen() {
                     ))}
                   </View>
                 ) : null}
-                  </View>
                   {adoptedAt && (
                     <View style={styles.adoptedRow}>
                       <Calendar color={Colors.textSecondary} size={16} />

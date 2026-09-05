@@ -26,6 +26,11 @@ const BREEDS: Record<string, string[]> = {
   Dog: ['Unknown / Mix', 'Labrador', 'German Shepherd', 'Pit Bull', 'Golden Retriever', 'Poodle', 'Beagle', 'Chihuahua', 'Other'],
   Cat: ['Unknown / Mix', 'Domestic Shorthair', 'Domestic Longhair', 'Siamese', 'Maine Coon', 'Tabby', 'Other'],
 };
+  const STEPS = [
+  { n: 1, label: 'Type' },
+  { n: 2, label: 'Animal' },
+  { n: 3, label: 'Place' },
+   ];
 
 export default function LostStrayReportScreen() {
   const { prefillPetId } = useLocalSearchParams<{ prefillPetId?: string }>();
@@ -47,11 +52,15 @@ export default function LostStrayReportScreen() {
   const [allowDirectContact, setAllowDirectContact] = useState(false);
   const [loading, setLoading] = useState(false);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
-  const STEPS = [
-  { n: 1, label: 'Type' },
-  { n: 2, label: 'Animal' },
-  { n: 3, label: 'Place' },
-   ];
+  const [myPets, setMyPets] = useState<{ id: string; name: string; species: string | null; breed: string | null }[]>([]);
+  const [pickedPetId, setPickedPetId] = useState<string | null>(prefillPetId || null);
+
+  useEffect(() => {
+    if (!user) return;
+    supabase.from('pets').select('id, name, species, breed').eq('owner_id', user.id)
+      .then(({ data }) => setMyPets((data as any) || []));
+  }, [user]);
+  
   const useMyLocation = () => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
       setBanner({ message: 'Location is not available in this browser.', kind: 'error' });
@@ -108,7 +117,7 @@ export default function LostStrayReportScreen() {
         contact_phone: contactPhone.trim() || null,
         contact_email: contactEmail.trim() || null,
         allow_direct_contact: allowDirectContact,
-        pet_id: prefillPetId || null,
+        pet_id: pickedPetId || prefillPetId || null,
         status: 'active',
       }).select('id').single();
       if (error) throw error;
@@ -126,7 +135,15 @@ export default function LostStrayReportScreen() {
           <ChevronLeft color={Colors.text} size={22} />
         </TouchableOpacity>
         <Text style={styles.topTitle}>Report an Animal</Text>
-        <Text style={styles.stepHint}>{step}/3</Text>
+      <Text style={styles.stepHint}>{step}/3</Text>
+      </View>
+      <View style={styles.tracker}>
+        {STEPS.map((s) => (
+          <View key={s.n} style={styles.trackerItem}>
+            <View style={[styles.trackerDot, step >= s.n && styles.trackerDotOn]} />
+            <Text style={[styles.trackerLabel, step === s.n && styles.trackerLabelOn]}>{s.label}</Text>
+          </View>
+        ))}
       </View>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
@@ -168,6 +185,28 @@ export default function LostStrayReportScreen() {
           {step === 2 && (
             <>
               <Text style={styles.sectionLabel}>Pet details (optional)</Text>
+                            {who === 'me' && myPets.length > 0 ? (
+                <>
+                  <Text style={styles.sectionLabel}>Which pet?</Text>
+                  {myPets.map((p) => (
+                    <TouchableOpacity
+                      key={p.id}
+                      style={[styles.whoRow, pickedPetId === p.id && styles.whoActive]}
+                      onPress={() => {
+                        setPickedPetId(p.id);
+                        setPetName(p.name);
+                        const kind = (p.species || 'Dog');
+                        const pretty = ANIMAL_KINDS.find((k) => k.toLowerCase() === kind.toLowerCase()) || 'Other';
+                        setAnimalKind(pretty);
+                        setBreed(p.breed || 'Unknown / Mix');
+                      }}
+                    >
+                      <Text style={styles.whoTitle}>{p.name}</Text>
+                      <Text style={styles.whoSub}>{[p.species, p.breed].filter(Boolean).join(' · ') || 'My pet'}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </>
+              ) : null}
               <TextInput style={styles.input} value={petName} onChangeText={setPetName} placeholder="Pet name" placeholderTextColor={Colors.textTertiary} />
               <Text style={styles.sectionLabel}>Animal type</Text>
               <View style={styles.typeRow}>
@@ -304,4 +343,11 @@ const styles = StyleSheet.create({
   submitBtn: { backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 12 },
   submitText: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.white },
   btnDisabled: { opacity: 0.6 },
+    tracker: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 10, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  trackerItem: { flex: 1, alignItems: 'center' },
+  trackerDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.border, marginBottom: 4 },
+  trackerDotOn: { backgroundColor: Colors.coral },
+  trackerLabel: { fontSize: FontSizes.xs, fontFamily: Fonts.medium, color: Colors.textTertiary },
+  trackerLabelOn: { color: Colors.coral, fontFamily: Fonts.bold },
+  typeRow: { marginBottom: 8 },
 });

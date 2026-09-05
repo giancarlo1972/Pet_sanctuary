@@ -95,6 +95,34 @@ export default function LostStrayReportScreen() {
     setStep(3);
   };
 
+    const toJpegBase64 = async (uri: string) => {
+    const blob = await (await fetch(uri)).blob();
+    if (typeof createImageBitmap === 'function' && typeof document !== 'undefined') {
+      const bmp = await createImageBitmap(blob);
+      const max = 1280;
+      let w = bmp.width;
+      let h = bmp.height;
+      if (Math.max(w, h) > max) {
+        const scale = max / Math.max(w, h);
+        w = Math.round(w * scale);
+        h = Math.round(h * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (ctx) ctx.drawImage(bmp, 0, 0, w, h);
+      return canvas.toDataURL('image/jpeg', 0.7);
+    }
+    const buf = await blob.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    return `data:image/jpeg;base64,${btoa(binary)}`;
+  };
+
   const runAnalyze = async (uri: string) => {
     setAnalyzing(true);
     setBanner(null);
@@ -105,7 +133,7 @@ export default function LostStrayReportScreen() {
       for (let i = 0; i < bytes.length; i += 0x8000) {
         binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
       }
-      const imageBase64 = `data:image/jpeg;base64,${btoa(binary)}`;
+      const imageBase64 = await toJpegBase64(uri);
       const resp = await fetch('/api/analyze-report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

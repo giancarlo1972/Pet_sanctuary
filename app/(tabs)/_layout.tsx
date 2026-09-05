@@ -37,19 +37,19 @@ export default function TabLayout() {
           tabBarIcon: ({ size, color }) => <Users size={size} color={color} />,
         }}
       />
-     <Tabs.Screen
+      <Tabs.Screen
         name="reports"
         options={{
           title: 'Reports',
           tabBarIcon: ({ size, color }) => <Siren size={size} color={color} />,
         }}
-       <Tabs.Screen
+      />
+      <Tabs.Screen
         name="profile"
         options={{
           title: 'Profile',
           tabBarIcon: ({ size, color }) => <User size={size} color={color} />,
         }}
-      />
       />
     </Tabs>
   );

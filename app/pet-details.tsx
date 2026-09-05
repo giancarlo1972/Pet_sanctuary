@@ -154,6 +154,46 @@ export default function PetDetailsScreen() {
     if (!id) return;
     setLoading(true);
     setError(null);
+    const petId = String(id);
+
+    if (petId.startsWith('rg-a-')) {
+      try {
+        const resp = await fetch('/api/rescuegroups?animal=' + encodeURIComponent(petId.replace('rg-a-', '')));
+        const json = await resp.json();
+        const a = json.pet;
+        if (!a) {
+          setError("We could not load this pet's details.");
+          setLoading(false);
+          return;
+        }
+        setPet({
+          id: petId,
+          name: a.name,
+          breed: a.breed,
+          species: a.species || 'Unknown',
+          age_text: a.age_text,
+          gender: a.gender,
+          status: 'available',
+          availability: 'adoptable',
+          description: a.description,
+          main_photo_url: a.photo_url,
+          location: a.location,
+          personality: null,
+          good_with_kids: false,
+          good_with_dogs: false,
+          good_with_cats: false,
+          vaccinated: false,
+          spayed_neutered: false,
+          microchipped: false,
+          shelter_id: null,
+        });
+        setLoading(false);
+      } catch {
+        setError("We could not load this pet's details.");
+        setLoading(false);
+      }
+      return;
+    }
 
     // --- Phase 1: the pet row itself must ALWAYS load ---
     const { data, error: petError } = await supabase
@@ -402,7 +442,11 @@ export default function PetDetailsScreen() {
         {/* Hero image */}
         <View style={styles.heroWrap}>
           {pet.main_photo_url ? (
-            <SignedImage path={pet.main_photo_url} style={styles.heroImage} />
+            pet.main_photo_url.startsWith('http') ? (
+              <Image source={{ uri: pet.main_photo_url }} style={styles.heroImage} />
+            ) : (
+              <SignedImage path={pet.main_photo_url} style={styles.heroImage} />
+            )
           ) : (
             <View style={[styles.heroImage, styles.heroPlaceholder]}>
               <PawPrint color={Colors.textTertiary} size={48} />

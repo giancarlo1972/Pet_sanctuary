@@ -41,7 +41,7 @@ export default function RegisterOrganizationScreen() {
     try {
       const { data, error } = await supabase.from('organizations').insert({
         name: name.trim(),
-        org_type: orgType,
+        org_type: orgType === 'sponsor' ? 'business' : orgType,
         description: description.trim() || null,
         address: address.trim() || null,
         city: city.trim() || null,
@@ -51,7 +51,7 @@ export default function RegisterOrganizationScreen() {
         phone: phone.trim() || null,
         ein: ein.trim() || null,
         created_by: user.id,
-        status: 'pending',
+        status: 'pending_review',
         ein_verified: false,
         tax_deductible: false,
         donations_enabled: false,

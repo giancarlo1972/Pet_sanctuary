@@ -10,8 +10,7 @@ export default {
     icon: "./assets/icon.png",
     ios: { supportsTablet: true },
     android: {
-    android: {
-      package: "com.rescuearmy.app",
+      package: "com.ruumatech.rescuearmy",
       versionCode: 1,
       adaptiveIcon: {
         foregroundImage: "./assets/icon.png",
@@ -22,9 +21,9 @@ export default {
     web: {
       bundler: "metro",
       output: "static",
-      favicon: "./assets/favicon.png"
+      favicon: "./assets/favicon.png",
     },
-    plugins: [["expo-router", { origin: "https://rescue-army.app" }], "expo-font"],
-    experiments: { tsconfigPaths: true }
-  }
+    plugins: [["expo-router", { origin: "https://rescue-army.com" }], "expo-font"],
+    experiments: { tsconfigPaths: true },
+  },
 };

@@ -1,4 +1,5 @@
 import React, { useCallback, useState, useEffect, useRef } from 'react';
+import * as ImagePicker from 'expo-image-picker';
 import {
   View,
   Text,
@@ -69,6 +70,23 @@ function formatShortDate(value: string | null): string {
 export default function ProfileScreen() {
   const { user, loading: authLoading, signOut } = useAuth();
   const [mounted, setMounted] = useState(false);
+    const uploadId = async () => {
+    if (!user) return;
+    const pick = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 0.8 });
+    if (pick.canceled || !pick.assets?.[0]) return;
+    const uri = pick.assets[0].uri;
+    const blob = await (await fetch(uri)).blob();
+    const path = `${user.id}/gov-id.jpg`;
+    const { error: upErr } = await supabase.storage.from('id-docs').upload(path, blob, { contentType: blob.type || 'image/jpeg', upsert: true });
+    if (upErr) { setBanner?.({ message: upErr.message, kind: 'error' }); return; }
+    await supabase.from('user_verifications').upsert({
+      user_id: user.id,
+      id_document_path: path,
+      id_status: 'pending',
+      id_verified: false,
+    });
+    setVerifications((v) => ({ ...v, id_verified: false }));
+  };
 
   useEffect(() => {
     setMounted(true);
@@ -1299,9 +1317,14 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
   );
 }
 
-function VerificationRow({ icon, label, pill }: { icon: React.ReactNode; label: string; pill: { bg: string; color: string; text: string } }) {
+function VerificationRow({ icon, label, pill, onPress }: {
+  icon: React.ReactNode;
+  label: string;
+  pill: { bg: string; color: string; text: string };
+  onPress?: () => void;
+}) {
   return (
-    <View style={styles.verifRow}>
+    <TouchableOpacity style={styles.verifRow} onPress={onPress} disabled={!onPress} activeOpacity={onPress ? 0.75 : 1}>
       <View style={styles.verifLeft}>
         <View style={styles.verifIcon}>{icon}</View>
         <Text style={styles.verifLabel}>{label}</Text>
@@ -1310,7 +1333,7 @@ function VerificationRow({ icon, label, pill }: { icon: React.ReactNode; label: 
         {pill.text === 'Verified' && <Check color={pill.color} size={11} />}
         <Text style={[styles.verifPillText, { color: pill.color }]}>{pill.text}</Text>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 }
 

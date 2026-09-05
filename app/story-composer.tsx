@@ -133,16 +133,16 @@ export default function StoryComposerScreen() {
   };
 
   const uploadImage = async (uri: string, storyId: string): Promise<string> => {
-    const ext = uri.split('.').pop()?.split('?')[0] || 'jpg';
-    const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    if (uri.startsWith('http://') || uri.startsWith('https://')) return uri;
+    const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
     const path = `stories/${storyId}/${fileName}`;
     const response = await fetch(uri);
-    const blob = await response.blob();
+    const buf = await response.arrayBuffer();
     const { error } = await supabase.storage
       .from('pet-photos')
-      .upload(path, blob, { contentType: blob.type || 'image/jpeg', upsert: false });
+      .upload(path, buf, { contentType: 'image/jpeg', upsert: true });
     if (error) {
-      console.error('[story-composer] upload failed:', error.message, error.statusCode, error);
+      console.error('[story-composer] upload failed:', error.message, error);
       throw error;
     }
     const { data } = supabase.storage.from('pet-photos').getPublicUrl(path);
@@ -182,9 +182,13 @@ export default function StoryComposerScreen() {
         storyId = inserted.id;
       }
 
-      let coverUrl = coverPhoto;
+      let coverUrl = coverPhoto && coverPhoto.startsWith('http') ? coverPhoto : null;
       if (coverPhoto && !coverPhoto.startsWith('http')) {
-        coverUrl = await uploadImage(coverPhoto, storyId);
+        try {
+          coverUrl = await uploadImage(coverPhoto, storyId);
+        } catch (e) {
+          console.error('[story-composer] cover skipped', e);
+        }
       }
 
       const uploadedPhotos: string[] = [];
@@ -192,7 +196,11 @@ export default function StoryComposerScreen() {
         if (photo.startsWith('http')) {
           uploadedPhotos.push(photo);
         } else {
-          uploadedPhotos.push(await uploadImage(photo, storyId));
+          try {
+            uploadedPhotos.push(await uploadImage(photo, storyId));
+          } catch (e) {
+            console.error('[story-composer] photo skipped', e);
+          }
         }
       }
 

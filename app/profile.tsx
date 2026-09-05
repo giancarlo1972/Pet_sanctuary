@@ -132,7 +132,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
       upsert: true,
     });
     if (upErr) {
-      setLoadError(upErr.message);
+      console.error('[profile] id upload', upErr);
       return;
     }
     await supabase.from('user_verifications').upsert({
@@ -564,7 +564,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
     );
   }
 
-  if ((loadError || !profile) && !loading) {
+ if (!profile && !loading) {
     return (
       <SafeAreaView style={[styles.container, styles.centered]}>
         <Text style={styles.notFoundTitle}>Couldn't load profile</Text>

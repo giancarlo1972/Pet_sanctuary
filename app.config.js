@@ -1,7 +1,7 @@
 export default {
   expo: {
     name: "Rescue Army",
-    slug: "rescue-army",
+    slug: "animal-rescue-groups",
     scheme: "rescue-army",
     version: "1.0.0",
     orientation: "portrait",

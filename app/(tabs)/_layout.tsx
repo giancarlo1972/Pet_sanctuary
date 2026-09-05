@@ -43,6 +43,13 @@ export default function TabLayout() {
           title: 'Reports',
           tabBarIcon: ({ size, color }) => <Siren size={size} color={color} />,
         }}
+       <Tabs.Screen
+        name="profile"
+        options={{
+          title: 'Profile',
+          tabBarIcon: ({ size, color }) => <User size={size} color={color} />,
+        }}
+      />
       />
     </Tabs>
   );

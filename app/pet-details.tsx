@@ -9,6 +9,7 @@ import {
   Alert,
   ActivityIndicator,
   Platform,
+  Linking,
 } from 'react-native';
 import { InlineBanner } from '@/components/InlineBanner';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -111,7 +112,28 @@ function formatShortDate(value: string): string {
   if (Number.isNaN(d.getTime())) return '';
   return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 }
-
+function inferListing(text: string) {
+  const raw = text || '';
+  const t = raw.toLowerCase();
+  const email = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || null;
+  const phone = raw.match(/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/)?.[0] || null;
+  const sentences = raw.replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/);
+  const about = sentences.slice(0, 2).join(' ');
+  const chips: string[] = [];
+  if (/\bdewormed\b/.test(t)) chips.push('Dewormed');
+  if (/\bfelv\/fiv negative\b|\bfelv\b/.test(t)) chips.push('FELV/FIV negative');
+  if (/\bfemale\b/.test(t)) chips.push('Female');
+  if (/\bmale\b/.test(t)) chips.push('Male');
+  return {
+    vaccinated: /\bvaccinated\b|\bup-to-date on vaccines\b|\bshots\b/.test(t),
+    microchipped: /\bmicrochipp?ed\b/.test(t),
+    spayed: /\bspayed\b|\bneutered\b|\baltered\b/.test(t),
+    email,
+    phone,
+    about: about.length > 20 ? about : raw.slice(0, 240),
+    chips,
+  };
+}
 export default function PetDetailsScreen() {
   const { id } = useLocalSearchParams();
   const safeBack = useSafeBack('/(tabs)');
@@ -124,6 +146,9 @@ export default function PetDetailsScreen() {
   const [shelterVerified, setShelterVerified] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [descTab, setDescTab] = useState<'about' | 'full'>('about');
+  const [listingEmail, setListingEmail] = useState<string | null>(null);
+  const [listingPhone, setListingPhone] = useState<string | null>(null);
 
   // Identity & records state
   const [microchipValue, setMicrochipValue] = useState<string | null>(null);
@@ -166,7 +191,12 @@ export default function PetDetailsScreen() {
           setLoading(false);
           return;
         }
-        setPet({
+        const inferred = inferListing(a.description || '');
+        setListingEmail(inferred.email);
+        setListingPhone(inferred.phone);
+        setDescTab('about');
+        
+      setPet({
           id: petId,
           name: a.name,
           breed: a.breed,
@@ -178,13 +208,13 @@ export default function PetDetailsScreen() {
           description: a.description,
           main_photo_url: a.photo_url,
           location: a.location,
-          personality: null,
+          personality: inferred.chips.length ? inferred.chips : null,
           good_with_kids: false,
           good_with_dogs: false,
           good_with_cats: false,
-          vaccinated: !!a.vaccinated,
-          spayed_neutered: !!a.spayed_neutered,
-          microchipped: !!a.microchipped,
+          vaccinated: !!a.vaccinated || inferred.vaccinated,
+          spayed_neutered: !!a.spayed_neutered || inferred.spayed,
+          microchipped: !!a.microchipped || inferred.microchipped,
           shelter_id: null,
         });
         setLoading(false);
@@ -488,7 +518,29 @@ export default function PetDetailsScreen() {
 
           {/* Description */}
           {pet.description ? (
-            <Text style={styles.description}>{pet.description}</Text>
+            <>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 8 }}>
+                <TouchableOpacity onPress={() => setDescTab('about')} style={[styles.traitChip, descTab === 'about' && { backgroundColor: Colors.navy }]}>
+                  <Text style={[styles.traitText, descTab === 'about' && { color: Colors.white }]}>About</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setDescTab('full')} style={[styles.traitChip, descTab === 'full' && { backgroundColor: Colors.navy }]}>
+                  <Text style={[styles.traitText, descTab === 'full' && { color: Colors.white }]}>Full listing</Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.description}>
+                {descTab === 'full' ? pet.description : inferListing(pet.description).about}
+              </Text>
+              {listingPhone ? (
+                <TouchableOpacity onPress={() => Linking.openURL('tel:' + listingPhone.replace(/[^\d+]/g, ''))}>
+                  <Text style={{ color: Colors.coral, fontFamily: Fonts.semibold, marginBottom: 8 }}>Call {listingPhone}</Text>
+                </TouchableOpacity>
+              ) : null}
+              {listingEmail ? (
+                <TouchableOpacity onPress={() => Linking.openURL(`mailto:${listingEmail}?subject=${encodeURIComponent('Adoption inquiry: ' + pet.name)}`)}>
+                  <Text style={{ color: Colors.coral, fontFamily: Fonts.semibold, marginBottom: 8 }}>Email {listingEmail}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </>
           ) : null}
 
           {/* Health tiles */}
@@ -695,17 +747,26 @@ export default function PetDetailsScreen() {
       <View style={[styles.bottomActions, { paddingBottom: 16 + insets.bottom }]}>
         <TouchableOpacity
           style={styles.messageBtn}
-          onPress={async () => {
+          onPress={() => {
+            if (String(pet.id).startsWith('rg-a-')) {
+              if (listingEmail) {
+                Linking.openURL(`mailto:${listingEmail}?subject=${encodeURIComponent('Adoption inquiry: ' + pet.name)}`);
+              } else if (listingPhone) {
+                Linking.openURL('tel:' + listingPhone.replace(/[^\d+]/g, ''));
+              }
+              return;
+            }
             if (!user) { router.push('/auth'); return; }
-            if (!pet) return;
-            try {
-              const { data, error } = await supabase.rpc('get_or_create_conversation', {
-                p_subject_type: 'pet',
-                p_subject_id: pet.id,
-              });
-              if (error) throw error;
-              router.push(`/chat?conversationId=${data}` as any);
-            } catch (err) { console.error('[pet-details] conversation failed:', err); }
+            (async () => {
+              try {
+                const { data, error } = await supabase.rpc('get_or_create_conversation', {
+                  p_subject_type: 'pet',
+                  p_subject_id: pet.id,
+                });
+                if (error) throw error;
+                router.push(`/chat?conversationId=${data}` as any);
+              } catch (err) { console.error('[pet-details] conversation failed:', err); }
+            })();
           }}
           activeOpacity={0.85}
         >

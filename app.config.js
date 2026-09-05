@@ -25,5 +25,11 @@ export default {
     },
     plugins: [["expo-router", { origin: "https://rescue-army.com" }], "expo-font"],
     experiments: { tsconfigPaths: true },
+    extra: {
+      eas: {
+        projectId: "91f43285-0d15-4fba-b369-27e354a501bc",
+      },
+    },
+    owner: "ruuma-tech",
   },
 };

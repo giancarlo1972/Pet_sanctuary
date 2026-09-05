@@ -10,7 +10,14 @@ export default {
     icon: "./assets/icon.png",
     ios: { supportsTablet: true },
     android: {
-      adaptiveIcon: { backgroundColor: "#FF6B5B" }
+    android: {
+      package: "com.rescuearmy.app",
+      versionCode: 1,
+      adaptiveIcon: {
+        foregroundImage: "./assets/icon.png",
+        backgroundColor: "#1A1F3A",
+      },
+      permissions: ["ACCESS_FINE_LOCATION", "CAMERA", "READ_MEDIA_IMAGES"],
     },
     web: {
       bundler: "metro",

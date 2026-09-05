@@ -34,10 +34,8 @@ export default function LostStrayReportScreen() {
   const [reportType, setReportType] = useState('lost');
   const [who, setWho] = useState<'me' | 'other' | 'found'>('me');
   const [petName, setPetName] = useState('');
-  const [animalKind, setAnimalKind] = useState('');
   const [animalKind, setAnimalKind] = useState('Dog');
   const [breed, setBreed] = useState('Unknown / Mix');
-  const [breed, setBreed] = useState('');
   const [description, setDescription] = useState('');
   const [location, setLocation] = useState('');
   const [lat, setLat] = useState<number | null>(null);
@@ -276,6 +274,7 @@ export default function LostStrayReportScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
+  typeRow: { marginBottom: 8 },
   topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
   topBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
   topTitle: { flex: 1, fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.text, textAlign: 'center' },

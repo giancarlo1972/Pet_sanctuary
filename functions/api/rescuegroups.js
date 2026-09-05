@@ -42,7 +42,38 @@ export async function onRequestGet(context) {
       },
     });
   }
-  
+    if (url.searchParams.get('pets') === '1') {
+    const res = await fetch('https://api.rescuegroups.org/http/v2.json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        apikey: key,
+        objectType: 'animals',
+        objectAction: 'publicSearch',
+        search: {
+          resultStart: 0,
+          resultLimit: 48,
+          filters: [
+            { fieldName: 'animalLocationState', operation: 'equals', criteria: state },
+            { fieldName: 'animalStatus', operation: 'equals', criteria: 'Available' },
+          ],
+          fields: ['animalID', 'animalName', 'animalBreed', 'animalSpecies', 'animalGeneralAge', 'animalThumbnailUrl', 'animalLocationCitystate'],
+        },
+      }),
+    });
+    const json = await res.json();
+    const pets = Object.values(json.data || {}).map((a) => ({
+      id: 'rg-a-' + a.animalID,
+      name: a.animalName,
+      breed: a.animalBreed || '',
+      species: (a.animalSpecies || '').toLowerCase(),
+      age_text: a.animalGeneralAge || null,
+      main_photo_url: a.animalThumbnailUrl || null,
+      location: a.animalLocationCitystate || null,
+      needs_foster: false,
+    }));
+    return Response.json({ pets, foundRows: json.foundRows || pets.length });
+  }
   if (orgId) {
     const res = await fetch('https://api.rescuegroups.org/http/v2.json', {
       method: 'POST',

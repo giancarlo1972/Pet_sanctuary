@@ -6,7 +6,43 @@ export async function onRequestGet(context) {
   const url = new URL(context.request.url);
   const orgId = (url.searchParams.get('org') || '').replace(/^rg-/, '');
   const state = url.searchParams.get('state') || 'NY';
+  const animalId = (url.searchParams.get('animal') || '').replace(/^rg-a-/, '');
 
+  if (animalId) {
+    const res = await fetch('https://api.rescuegroups.org/http/v2.json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        apikey: key,
+        objectType: 'animals',
+        objectAction: 'publicSearch',
+        search: {
+          resultStart: 0,
+          resultLimit: 1,
+          filters: [{ fieldName: 'animalID', operation: 'equals', criteria: animalId }],
+          fields: ['animalID','animalName','animalBreed','animalSpecies','animalSex','animalGeneralAge','animalDescriptionPlain','animalThumbnailUrl','animalLocationCitystate','animalStatus','animalOrgID'],
+        },
+      }),
+    });
+    const json = await res.json();
+    const a = Object.values(json.data || {})[0];
+    if (!a) return Response.json({ pet: null }, { status: 404 });
+    return Response.json({
+      pet: {
+        id: a.animalID,
+        name: a.animalName,
+        breed: a.animalBreed || null,
+        species: a.animalSpecies || 'Unknown',
+        gender: a.animalSex || null,
+        age_text: a.animalGeneralAge || null,
+        description: a.animalDescriptionPlain || null,
+        photo_url: a.animalThumbnailUrl || null,
+        location: a.animalLocationCitystate || null,
+        status: a.animalStatus || 'Available',
+      },
+    });
+  }
+  
   if (orgId) {
     const res = await fetch('https://api.rescuegroups.org/http/v2.json', {
       method: 'POST',

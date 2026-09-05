@@ -30,7 +30,7 @@ export default function AppHeader({ title, showBack = false, rightAction }: AppH
         )}
         <Text style={styles.title} numberOfLines={1}>{title}</Text>
         {rightAction ?? (
-          <TouchableOpacity style={styles.meBtn} onPress={() => router.push('/profile')} activeOpacity={0.85}>
+          <TouchableOpacity style={styles.meBtn} onPress={() => router.push('/(tabs)/profile')} activeOpacity={0.85}>
             <Text style={styles.meText}>Me</Text>
           </TouchableOpacity>
         )}

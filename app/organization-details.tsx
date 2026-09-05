@@ -185,15 +185,15 @@ export default function OrganizationDetailsScreen() {
               setOrg((prev) => prev && prev.id === d.id ? { ...prev, pets, pets_listed: petJson.foundRows || pets.length } : prev);
             } catch { /* ignore */ }
           } else {
-            setOrg(MOCK_ORG);
+            setOrg(null);
           }
         } catch {
-          setOrg(MOCK_ORG);
+            setOrg(null);
         }
       } else if (story) {
-        setOrg(MOCK_ORG);
+            setOrg(null);
       } else {
-        setOrg(MOCK_ORG);
+            setOrg(null);
       }
       setLoading(false);
     })();

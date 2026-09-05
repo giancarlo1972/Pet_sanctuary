@@ -64,7 +64,8 @@ export async function onRequestPost(context) {
     }
 
     const raw = String(imageBase64).replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
-    const mediaType = String(imageBase64).includes('png') ? 'image/png' : 'image/jpeg';
+    const header = String(imageBase64).slice(0, 40);
+    const mediaType = header.includes('image/png') ? 'image/png' : 'image/jpeg';
     const models = ['claude-haiku-4-5', 'claude-3-5-haiku-latest', 'claude-3-5-sonnet-20241022'];
 
     let lastErr = 'Claude did not respond.';

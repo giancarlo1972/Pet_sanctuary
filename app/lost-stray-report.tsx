@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
-  ActivityIndicator, Switch, KeyboardAvoidingView, Platform,
+  ActivityIndicator, Switch, KeyboardAvoidingView, Platform, Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ChevronLeft, MapPin } from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
@@ -26,11 +27,12 @@ const BREEDS: Record<string, string[]> = {
   Dog: ['Unknown / Mix', 'Labrador', 'German Shepherd', 'Pit Bull', 'Golden Retriever', 'Poodle', 'Beagle', 'Chihuahua', 'Other'],
   Cat: ['Unknown / Mix', 'Domestic Shorthair', 'Domestic Longhair', 'Siamese', 'Maine Coon', 'Tabby', 'Other'],
 };
-  const STEPS = [
+
+const STEPS = [
   { n: 1, label: 'Type' },
   { n: 2, label: 'Animal' },
   { n: 3, label: 'Place' },
-   ];
+];
 
 export default function LostStrayReportScreen() {
   const { prefillPetId } = useLocalSearchParams<{ prefillPetId?: string }>();
@@ -42,10 +44,12 @@ export default function LostStrayReportScreen() {
   const [animalKind, setAnimalKind] = useState('Dog');
   const [breed, setBreed] = useState('Unknown / Mix');
   const [description, setDescription] = useState('');
+  const [extraNotes, setExtraNotes] = useState('');
   const [location, setLocation] = useState('');
   const [lat, setLat] = useState<number | null>(null);
   const [lng, setLng] = useState<number | null>(null);
   const [locating, setLocating] = useState(false);
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [contactName, setContactName] = useState('');
   const [contactPhone, setContactPhone] = useState('');
   const [contactEmail, setContactEmail] = useState(user?.email || '');
@@ -60,7 +64,7 @@ export default function LostStrayReportScreen() {
     supabase.from('pets').select('id, name, species, breed').eq('owner_id', user.id)
       .then(({ data }) => setMyPets((data as any) || []));
   }, [user]);
-  
+
   const useMyLocation = () => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
       setBanner({ message: 'Location is not available in this browser.', kind: 'error' });
@@ -82,6 +86,23 @@ export default function LostStrayReportScreen() {
     );
   };
 
+  const pickReportPhoto = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images', quality: 0.8, exif: true,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    setPhotoUri(asset.uri);
+    const ex = asset.exif as Record<string, any> | null;
+    const gpsLat = ex?.GPSLatitude ?? ex?.gpsLatitude;
+    const gpsLng = ex?.GPSLongitude ?? ex?.gpsLongitude;
+    if (typeof gpsLat === 'number' && typeof gpsLng === 'number') {
+      setLat(gpsLat);
+      setLng(gpsLng);
+      setLocation((prev) => prev || `Photo location (${gpsLat.toFixed(5)}, ${gpsLng.toFixed(5)})`);
+    }
+  };
+
   const useMyAccount = () => {
     setContactEmail(user?.email || '');
     setContactName(user?.user_metadata?.full_name || user?.email?.split('@')[0] || '');
@@ -98,18 +119,32 @@ export default function LostStrayReportScreen() {
       setBanner({ message: 'Please provide a description and location.', kind: 'error' });
       return;
     }
-
     setLoading(true);
     setBanner(null);
     const severity = REPORT_TYPES.find((t) => t.value === reportType)?.severity || 'standard';
     try {
+      let photoUrl: string | null = null;
+      if (photoUri && !photoUri.startsWith('http')) {
+        try {
+          const buf = await (await fetch(photoUri)).arrayBuffer();
+          const path = `reports/${Date.now()}.jpg`;
+          const up = await supabase.storage.from('pet-photos').upload(path, buf, { contentType: 'image/jpeg', upsert: true });
+          if (!up.error) {
+            photoUrl = supabase.storage.from('pet-photos').getPublicUrl(path).data.publicUrl;
+          }
+        } catch { /* save report without photo */ }
+      }
+
+      const extra = extraNotes.trim();
       const { data, error } = await supabase.from('reports').insert({
         report_type: reportType,
         severity,
         pet_name: petName.trim() || null,
         animal_kind: animalKind.trim() || null,
         breed: breed.trim() || null,
-        description: description.trim() + (who === 'other' ? '\n\n[Filed on behalf of someone else]' : who === 'found' ? '\n\n[Finder report]' : ''),
+        description: description.trim()
+          + (extra ? `\n\nMore info: ${extra}` : '')
+          + (who === 'other' ? '\n\n[Filed on behalf of someone else]' : who === 'found' ? '\n\n[Finder report]' : ''),
         location_address: location.trim(),
         latitude: lat ?? 0,
         longitude: lng ?? 0,
@@ -118,6 +153,8 @@ export default function LostStrayReportScreen() {
         contact_email: contactEmail.trim() || null,
         allow_direct_contact: allowDirectContact,
         pet_id: pickedPetId || prefillPetId || null,
+        photo_url: photoUrl,
+        extra_notes: extra || null,
         status: 'active',
       }).select('id').single();
       if (error) throw error;
@@ -135,7 +172,7 @@ export default function LostStrayReportScreen() {
           <ChevronLeft color={Colors.text} size={22} />
         </TouchableOpacity>
         <Text style={styles.topTitle}>Report an Animal</Text>
-      <Text style={styles.stepHint}>{step}/3</Text>
+        <Text style={styles.stepHint}>{step}/3</Text>
       </View>
       <View style={styles.tracker}>
         {STEPS.map((s) => (
@@ -184,8 +221,7 @@ export default function LostStrayReportScreen() {
 
           {step === 2 && (
             <>
-              <Text style={styles.sectionLabel}>Pet details (optional)</Text>
-                            {who === 'me' && myPets.length > 0 ? (
+              {who === 'me' && myPets.length > 0 ? (
                 <>
                   <Text style={styles.sectionLabel}>Which pet?</Text>
                   {myPets.map((p) => (
@@ -195,7 +231,7 @@ export default function LostStrayReportScreen() {
                       onPress={() => {
                         setPickedPetId(p.id);
                         setPetName(p.name);
-                        const kind = (p.species || 'Dog');
+                        const kind = p.species || 'Dog';
                         const pretty = ANIMAL_KINDS.find((k) => k.toLowerCase() === kind.toLowerCase()) || 'Other';
                         setAnimalKind(pretty);
                         setBreed(p.breed || 'Unknown / Mix');
@@ -207,13 +243,14 @@ export default function LostStrayReportScreen() {
                   ))}
                 </>
               ) : null}
+              <Text style={styles.sectionLabel}>Pet name (optional)</Text>
               <TextInput style={styles.input} value={petName} onChangeText={setPetName} placeholder="Pet name" placeholderTextColor={Colors.textTertiary} />
               <Text style={styles.sectionLabel}>Animal type</Text>
               <View style={styles.typeRow}>
                 {ANIMAL_KINDS.map((k) => (
                   <TouchableOpacity
                     key={k}
-                    style={[styles.whoRow, animalKind === k && styles.whoActive, { marginBottom: 8 }]}
+                    style={[styles.whoRow, animalKind === k && styles.whoActive]}
                     onPress={() => {
                       setAnimalKind(k);
                       setBreed((BREEDS[k] || ['Unknown / Mix'])[0]);
@@ -230,7 +267,7 @@ export default function LostStrayReportScreen() {
                     {BREEDS[animalKind].map((b) => (
                       <TouchableOpacity
                         key={b}
-                        style={[styles.whoRow, breed === b && styles.whoActive, { marginBottom: 8 }]}
+                        style={[styles.whoRow, breed === b && styles.whoActive]}
                         onPress={() => setBreed(b)}
                       >
                         <Text style={styles.whoTitle}>{b}</Text>
@@ -248,6 +285,22 @@ export default function LostStrayReportScreen() {
                 placeholderTextColor={Colors.textTertiary}
                 multiline
               />
+              <Text style={styles.sectionLabel}>More information (optional)</Text>
+              <TextInput
+                style={[styles.input, styles.textArea]}
+                value={extraNotes}
+                onChangeText={setExtraNotes}
+                placeholder="Collar, behavior, nearby clinic, anything else you want to add…"
+                placeholderTextColor={Colors.textTertiary}
+                multiline
+              />
+              <Text style={styles.sectionLabel}>Photo (optional)</Text>
+              <TouchableOpacity style={styles.gpsBtn} onPress={pickReportPhoto} activeOpacity={0.85}>
+                <Text style={styles.gpsText}>{photoUri ? 'Change photo' : 'Add a photo'}</Text>
+              </TouchableOpacity>
+              {photoUri ? (
+                <Image source={{ uri: photoUri }} style={styles.preview} resizeMode="cover" />
+              ) : null}
               <Text style={styles.sectionLabel}>Location *</Text>
               <TouchableOpacity style={styles.gpsBtn} onPress={useMyLocation} disabled={locating} activeOpacity={0.85}>
                 <MapPin color={Colors.white} size={16} />
@@ -260,7 +313,7 @@ export default function LostStrayReportScreen() {
                 placeholder="Address or area where the animal was seen"
                 placeholderTextColor={Colors.textTertiary}
               />
-            {lat != null && lng != null ? (
+              {lat != null && lng != null ? (
                 Platform.OS === 'web' ? (
                   // @ts-ignore
                   <iframe
@@ -317,11 +370,16 @@ export default function LostStrayReportScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
-  typeRow: { marginBottom: 8 },
   topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
   topBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
   topTitle: { flex: 1, fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.text, textAlign: 'center' },
   stepHint: { width: 40, textAlign: 'right', fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.textSecondary },
+  tracker: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 10, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  trackerItem: { flex: 1, alignItems: 'center' },
+  trackerDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.border, marginBottom: 4 },
+  trackerDotOn: { backgroundColor: Colors.coral },
+  trackerLabel: { fontSize: FontSizes.xs, fontFamily: Fonts.medium, color: Colors.textTertiary },
+  trackerLabelOn: { color: Colors.coral, fontFamily: Fonts.bold },
   scrollContent: { paddingHorizontal: 20, paddingVertical: 16, paddingBottom: 60 },
   sectionLabel: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8, marginTop: 8 },
   typeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 12 },
@@ -330,12 +388,14 @@ const styles = StyleSheet.create({
   typeLabel: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.text, marginBottom: 4 },
   typeLabelActive: { color: Colors.coral },
   typeDesc: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary },
+  typeRow: { marginBottom: 8 },
   whoRow: { backgroundColor: Colors.white, borderRadius: 12, padding: 14, borderWidth: 1.5, borderColor: Colors.border, marginBottom: 8 },
   whoActive: { borderColor: Colors.navy, backgroundColor: Colors.surface },
   whoTitle: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.text },
   whoSub: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 2 },
   input: { borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 14, fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.text, backgroundColor: Colors.white, marginBottom: 10 },
   textArea: { minHeight: 90, textAlignVertical: 'top' },
+  preview: { width: '100%', height: 180, borderRadius: 12, marginBottom: 10, backgroundColor: Colors.surface },
   gpsBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: Colors.navy, borderRadius: 12, paddingVertical: 12, marginBottom: 10 },
   gpsText: { color: Colors.white, fontFamily: Fonts.bold, fontSize: FontSizes.sm },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginVertical: 8 },
@@ -343,11 +403,4 @@ const styles = StyleSheet.create({
   submitBtn: { backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 12 },
   submitText: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.white },
   btnDisabled: { opacity: 0.6 },
-    tracker: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 10, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  trackerItem: { flex: 1, alignItems: 'center' },
-  trackerDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.border, marginBottom: 4 },
-  trackerDotOn: { backgroundColor: Colors.coral },
-  trackerLabel: { fontSize: FontSizes.xs, fontFamily: Fonts.medium, color: Colors.textTertiary },
-  trackerLabelOn: { color: Colors.coral, fontFamily: Fonts.bold },
-  typeRow: { marginBottom: 8 },
 });

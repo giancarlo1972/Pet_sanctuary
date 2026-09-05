@@ -24,6 +24,15 @@ const FALLBACK = {
   analyzed: false,
 };
 
+function getKey(env) {
+  return (
+    env.ANTHROPIC_API_KEY ||
+    env['CloudFlare-RescueArmyReports'] ||
+    env.CloudFlareRescueArmyReports ||
+    null
+  );
+}
+
 export async function onRequestOptions() {
   return new Response(null, {
     headers: {
@@ -38,32 +47,46 @@ export async function onRequestPost(context) {
   const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
   try {
     const { imageBase64 } = await context.request.json();
-    const key = context.env.OPENAI_API_KEY;
+    const key = getKey(context.env);
     if (!key || !imageBase64) {
       return Response.json(FALLBACK, { headers });
     }
-    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+
+    const raw = String(imageBase64).replace(/^data:image\/\w+;base64,/, '');
+    const mediaType = String(imageBase64).includes('png') ? 'image/png' : 'image/jpeg';
+
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      headers: {
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        response_format: { type: 'json_object' },
+        model: 'claude-haiku-4-5',
+        max_tokens: 400,
         messages: [
-          { role: 'system', content: PROMPT },
           {
             role: 'user',
             content: [
-              { type: 'text', text: 'Analyze this animal photo.' },
-              { type: 'image_url', image_url: { url: imageBase64 } },
+              { type: 'image', source: { type: 'base64', media_type: mediaType, data: raw } },
+              { type: 'text', text: PROMPT },
             ],
           },
         ],
       }),
     });
     const json = await resp.json();
-    const parsed = JSON.parse(json.choices?.[0]?.message?.content || '{}');
+    if (!resp.ok) {
+      console.log('claude error', json);
+      return Response.json(FALLBACK, { headers });
+    }
+    const text = json.content?.find((b) => b.type === 'text')?.text || '{}';
+    const cleaned = text.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(cleaned);
     return Response.json({ ...FALLBACK, ...parsed, analyzed: true }, { headers });
-  } catch {
+  } catch (err) {
+    console.log('analyze-report failed', err);
     return Response.json(FALLBACK, { headers });
   }
 }

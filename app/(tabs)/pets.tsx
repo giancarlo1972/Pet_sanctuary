@@ -160,7 +160,7 @@ export default function PetsScreen() {
         <View style={styles.petCardImageWrap}>
           {photo ? (
             photo.startsWith('http') ? (
-              <Image source={{ uri: photo }} style={styles.petCardImage} />
+          <Image source={{ uri: photo }} style={styles.petCardImage} resizeMode="cover" />
             ) : (
               <SignedImage path={photo} style={styles.petCardImage} />
             )
@@ -285,7 +285,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08, shadowRadius: 4,
   },
   petCardImageWrap: {
-    position: 'relative', width: '100%', height: 130,
+    position: 'relative', width: '100%', height: 180,
     backgroundColor: Colors.surface, overflow: 'hidden',
     borderTopLeftRadius: 16, borderTopRightRadius: 16,
   },

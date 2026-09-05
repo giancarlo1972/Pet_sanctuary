@@ -170,7 +170,7 @@ function careIcon(type: string): React.ComponentType<{ color?: string; size?: nu
 // ── Weight Trend Chart ────────────────────────────────────────────────────────
 
 function WeightChart({ weights }: { weights: { date: string; kg: number }[] }) {
-  if (weights.length < 2) return null;
+  if (weights.length < 1) return null;
   const W = 300;
   const H = 120;
   const padX = 36;
@@ -551,6 +551,18 @@ export default function MyPetScreen() {
                   {pet?.age_text ? <Text style={styles.petMeta}>{pet.age_text}</Text> : null}
                   {pet?.gender && <Text style={styles.petMeta}>{titleCase(pet.gender)}</Text>}
                   {pet?.spayed_neutered && <Text style={styles.petMeta}>Spayed / Neutered</Text>}
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8, justifyContent: 'center' }}>
+                    {pet?.spayed_neutered ? (
+                      <View style={{ backgroundColor: Colors.tealBg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }}>
+                        <Text style={{ color: Colors.tealDark, fontFamily: Fonts.bold, fontSize: FontSizes.xs }}>Spayed/Neutered</Text>
+                      </View>
+                    ) : null}
+                    {microchip ? (
+                      <View style={{ backgroundColor: Colors.surface, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }}>
+                        <Text style={{ color: Colors.navy, fontFamily: Fonts.bold, fontSize: FontSizes.xs }}>Microchipped</Text>
+                      </View>
+                    ) : null}
+                  </View>
                   {adoptedAt && (
                     <View style={styles.adoptedRow}>
                       <Calendar color={Colors.textSecondary} size={16} />
@@ -608,7 +620,7 @@ export default function MyPetScreen() {
             {activeTab === 'health' && (
               <View>
                 {/* Weight chart */}
-                {weightEntries.length >= 2 && <WeightChart weights={weightEntries} />}
+                {weightEntries.length >= 1 && <WeightChart weights={weightEntries} />}
 
                 {/* Vaccinations */}
                 <View style={styles.sectionHeader}>

@@ -79,10 +79,7 @@ export default function LostStrayReportScreen() {
       setBanner({ message: 'Please provide a description and location.', kind: 'error' });
       return;
     }
-    if (!user) {
-      setBanner({ message: 'Please sign in to submit a report.', kind: 'error' });
-      return;
-    }
+
     setLoading(true);
     setBanner(null);
     const severity = REPORT_TYPES.find((t) => t.value === reportType)?.severity || 'standard';
@@ -97,7 +94,7 @@ export default function LostStrayReportScreen() {
         location_address: location.trim(),
         latitude: lat ?? 0,
         longitude: lng ?? 0,
-        contact_name: contactName.trim() || null,
+        contact_name: contactName.trim() || 'Anonymous',
         contact_phone: contactPhone.trim() || null,
         contact_email: contactEmail.trim() || null,
         allow_direct_contact: allowDirectContact,

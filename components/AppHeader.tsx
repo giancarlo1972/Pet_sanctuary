@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ChevronLeft } from 'lucide-react-native';
+import { Bell, ChevronLeft } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
@@ -30,9 +30,14 @@ export default function AppHeader({ title, showBack = false, rightAction }: AppH
         )}
         <Text style={styles.title} numberOfLines={1}>{title}</Text>
         {rightAction ?? (
-          <TouchableOpacity style={styles.meBtn} onPress={() => router.push('/(tabs)/profile')} activeOpacity={0.85}>
-            <Text style={styles.meText}>Me</Text>
-          </TouchableOpacity>
+          <View style={styles.right}>
+            <TouchableOpacity style={styles.bellBtn} onPress={() => router.push('/updates')} activeOpacity={0.85}>
+              <Bell color={Colors.navy} size={18} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.meBtn} onPress={() => router.push('/(tabs)/profile')} activeOpacity={0.85}>
+              <Text style={styles.meText}>Me</Text>
+            </TouchableOpacity>
+          </View>
         )}
       </View>
     </SafeAreaView>
@@ -55,11 +60,16 @@ const styles = StyleSheet.create({
     width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.surface,
     justifyContent: 'center', alignItems: 'center',
   },
-  brand: { flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 140 },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 120 },
   logo: { width: 28, height: 28, borderRadius: 8 },
   brandName: { fontSize: FontSizes.md, fontFamily: Fonts.extrabold, color: Colors.navy },
   title: {
     flex: 1, fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.navy, textAlign: 'center',
+  },
+  right: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  bellBtn: {
+    width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.surface,
+    justifyContent: 'center', alignItems: 'center',
   },
   meBtn: {
     backgroundColor: Colors.coral, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999,

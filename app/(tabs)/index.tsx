@@ -339,6 +339,16 @@ export default function HomeScreen() {
             <ChevronRight color="#FBD3D0" size={20} />
           </TouchableOpacity>
 
+          <TouchableOpacity
+            style={styles.clinicsPill}
+            onPress={() => router.push('/nearby-clinics')}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.clinicsKicker}>NEARBY</Text>
+            <Text style={styles.clinicsTitle}>Vet clinics · 24h ER · Uber / Lyft to ER</Text>
+            <Text style={styles.clinicsSub}>Hours from Google / Bond Vet / Small Door sites. We do not pay the ride.</Text>
+          </TouchableOpacity>
+
           {/* Live alerts */}
           {liveAlerts.length > 0 && (
             <View style={styles.section}>
@@ -462,6 +472,14 @@ const styles = StyleSheet.create({
   emergencySub: {
     fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: '#FBD3D0', marginTop: 2,
   },
+
+  clinicsPill: {
+    backgroundColor: Colors.white, borderRadius: 14, padding: 14, marginBottom: 20,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  clinicsKicker: { fontSize: 10, fontFamily: Fonts.extrabold, color: Colors.coral, letterSpacing: 0.8 },
+  clinicsTitle: { marginTop: 4, fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.navy },
+  clinicsSub: { marginTop: 4, fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary },
 
   section: { marginBottom: 28 },
   sectionHeaderRow: {

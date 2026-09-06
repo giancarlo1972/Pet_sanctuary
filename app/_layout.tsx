@@ -14,6 +14,7 @@ export default function RootLayout() {
           <Stack.Screen name="admin" />
           <Stack.Screen name="pet-care" />
           <Stack.Screen name="updates" />
+          <Stack.Screen name="invoices" />
         </Stack>
         <StatusBar style="auto" />
       </>

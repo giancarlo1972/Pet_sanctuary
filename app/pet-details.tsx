@@ -47,6 +47,7 @@ interface PetRecord {
   breed: string | null;
   species: string;
   age_text: string | null;
+  dob?: string | null;
   gender: string | null;
   status: string;
   availability: string;
@@ -205,9 +206,10 @@ export default function PetDetailsScreen() {
           breed: a.breed,
           species: a.species || 'Unknown',
           age_text: a.age_text,
+          dob: a.dob || null,
           gender: a.gender,
-          status: 'available',
-          availability: a.needs_foster ? 'both' : 'adoption',
+          status: a.status || 'Available',
+          availability: a.availability || 'both',
           description: a.description,
           main_photo_url: a.photo_url,
           location: a.location,
@@ -448,6 +450,37 @@ export default function PetDetailsScreen() {
     );
   }
 
+  const claimAdoptedPet = async () => {
+    if (!user) { router.push('/auth'); return; }
+    if (!pet) return;
+    try {
+      const { data, error } = await supabase.from('pets').insert({
+        name: pet.name,
+        breed: pet.breed,
+        species: pet.species,
+        age_text: pet.age_text,
+        gender: pet.gender,
+        description: pet.description,
+        main_photo_url: pet.main_photo_url,
+        location: pet.location,
+        vaccinated: pet.vaccinated,
+        spayed_neutered: pet.spayed_neutered,
+        microchipped: pet.microchipped,
+        owner_id: user.id,
+        status: 'adopted',
+        availability: 'none',
+        is_public: false,
+      }).select('id').single();
+      if (error) throw error;
+      try {
+        await supabase.from('pet_relationships').insert({ pet_id: data.id, user_id: user.id, relationship: 'owner' });
+      } catch { /* table optional */ }
+      router.push(`/pet-care?petId=${data.id}`);
+    } catch (err: any) {
+      setBanner({ message: err?.message || 'Could not add this pet to your profile.', kind: 'error' });
+    }
+  };
+
   const openListingContact = () => {
     if (listingEmail) {
       Linking.openURL(`mailto:${listingEmail}?subject=${encodeURIComponent((pet?.name || 'Pet') + ' — inquiry')}`);
@@ -525,6 +558,9 @@ export default function PetDetailsScreen() {
           <Text style={styles.petBreedLocation}>
             {pet.breed}{pet.location ? ` · ${pet.location}` : ''}
           </Text>
+          {pet.dob ? (
+            <Text style={styles.petBreedLocation}>Born {pet.dob}</Text>
+          ) : null}
 
           {/* Trait chips */}
           {pet.personality && pet.personality.length > 0 && (
@@ -794,6 +830,11 @@ export default function PetDetailsScreen() {
           <MessageCircle color={Colors.navy} size={18} />
           <Text style={styles.messageBtnText}>Message</Text>
         </TouchableOpacity>
+        {/adopted/i.test(pet.status || '') && (
+          <TouchableOpacity style={styles.adoptButton} onPress={claimAdoptedPet}>
+            <Text style={styles.adoptText}>Add {pet.name} to my pets</Text>
+          </TouchableOpacity>
+        )}
         {(pet.availability === 'foster' || pet.availability === 'both') && (
           existingApps.foster ? (
             <View style={styles.appliedPill}>

@@ -30,6 +30,14 @@ export const GINA = {
       { title: 'Acute vomiting — exam + labs', amount: '+$184', meta: 'Aug 30, 2026 · Bond Vet · Reimbursed in Lemonade' },
     ],
   },
+  dutch: {
+    name: 'Dutch',
+    detail: 'Online vet telehealth. They are the vet — Rescue Army does not diagnose or prescribe.',
+    url: 'https://www.dutch.com/',
+  },
+  pharmacy: {
+    detail: 'Share the vet diagnosis + receipt with the pharmacy. A sponsor fund or the owner pays the pharmacy — never Rescue Army.',
+  },
   vaccines: [
     { name: 'PUREVAX Rabies Feline 3 yr', valid: 'Valid thru Aug 2029', given: 'Aug 6, 2026 · at home Vet', next: 'Aug 6, 2029' },
     { name: 'PUREVAX FVRCP 1 yr', valid: 'Valid thru Aug 2027', given: 'Aug 6, 2026 · at home veterinary', next: 'Aug 6, 2027' },

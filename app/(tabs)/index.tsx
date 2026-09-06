@@ -118,6 +118,8 @@ export default function HomeScreen() {
   const [nearbyDismissed, setNearbyDismissed] = useState(false);
   const [homeStories, setHomeStories] = useState<HomeStory[]>([]);
   const locationRef = useRef<{ lat: number; lng: number } | null>(null);
+  const [clinicLive, setClinicLive] = useState({ open: 0, closing_soon: 0, er_24h: 0, count: 0 });
+  const [shelterLive, setShelterLive] = useState({ open: 0, closing_soon: 0, er_24h: 0, count: 0 });
 
   const loadFeatured = useCallback(async () => {
     try {
@@ -194,6 +196,27 @@ export default function HomeScreen() {
         locationRef.current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
       } catch { /* ignore — proximity alerts need location */ }
     })();
+  }, []);
+
+  useEffect(() => {
+    let stop = false;
+    const loadNear = async () => {
+      const loc = locationRef.current;
+      const q = loc ? `&lat=${loc.lat}&lng=${loc.lng}` : '';
+      try {
+        const [c, s] = await Promise.all([
+          fetch('/api/nearby-clinics?kind=clinic' + q).then((r) => r.json()),
+          fetch('/api/nearby-clinics?kind=shelter' + q).then((r) => r.json()),
+        ]);
+        if (stop) return;
+        setClinicLive({ open: c.open || 0, closing_soon: c.closing_soon || 0, er_24h: c.er_24h || 0, count: c.count || 0 });
+        setShelterLive({ open: s.open || 0, closing_soon: s.closing_soon || 0, er_24h: s.er_24h || 0, count: s.count || 0 });
+      } catch { /* ignore */ }
+    };
+    const wait = setInterval(() => { if (locationRef.current) { clearInterval(wait); loadNear(); } }, 1500);
+    const poll = setInterval(loadNear, 60000);
+    loadNear();
+    return () => { stop = true; clearInterval(wait); clearInterval(poll); };
   }, []);
 
   // Poll nearby reports every 60s — only when authenticated
@@ -341,13 +364,13 @@ export default function HomeScreen() {
 
           <View style={styles.nearRow}>
             <TouchableOpacity style={styles.nearPill} onPress={() => router.push('/nearby-clinics?kind=clinic')} activeOpacity={0.85}>
-              <Text style={styles.clinicsKicker}>CLINICS</Text>
-              <Text style={styles.clinicsTitle}>Open · Closing soon · 24h ER</Text>
-              <Text style={styles.clinicsSub}>Bond Vet, Small Door, ER hospitals. Uber/Lyft to ER — we don’t pay.</Text>
+              <Text style={styles.clinicsKicker}>CLINICS · LIVE</Text>
+              <Text style={styles.clinicsTitle}>{clinicLive.open} open · {clinicLive.closing_soon} closing soon · {clinicLive.er_24h} 24h ER</Text>
+              <Text style={styles.clinicsSub}>Bond Vet, Small Door, ER. Uber/Lyft — we don’t pay.</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.nearPill} onPress={() => router.push('/nearby-clinics?kind=shelter')} activeOpacity={0.85}>
-              <Text style={styles.clinicsKicker}>SHELTERS</Text>
-              <Text style={styles.clinicsTitle}>Open · Closing soon</Text>
+              <Text style={styles.clinicsKicker}>SHELTERS · LIVE</Text>
+              <Text style={styles.clinicsTitle}>{shelterLive.open} open · {shelterLive.closing_soon} closing soon</Text>
               <Text style={styles.clinicsSub}>Rescues and humane societies near you.</Text>
             </TouchableOpacity>
           </View>

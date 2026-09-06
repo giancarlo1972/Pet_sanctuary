@@ -11,7 +11,7 @@ interface AuthFormProps {
 
 function redirectAfterLogin() {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    return `${window.location.origin}/admin`;
+    return `${window.location.origin}/profile`;
   }
   return 'https://rescue-army.com/profile';
 }
@@ -39,7 +39,7 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
         const { error } = await supabase.auth.signUp({ email: email.trim(), password });
         if (error) throw error;
       }
-      router.replace('/admin');
+      router.replace('/(tabs)');
     } catch (err: any) {
       setError(err.message || 'Authentication failed.');
     } finally {

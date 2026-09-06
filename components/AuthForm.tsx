@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
@@ -7,6 +7,13 @@ import { supabase } from '@/lib/supabase';
 
 interface AuthFormProps {
   variant?: 'plain' | 'modal';
+}
+
+function redirectAfterLogin() {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    return `${window.location.origin}/admin`;
+  }
+  return 'https://rescue-army.com/profile';
 }
 
 export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
@@ -32,7 +39,7 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
         const { error } = await supabase.auth.signUp({ email: email.trim(), password });
         if (error) throw error;
       }
-      router.replace('/(tabs)');
+      router.replace('/admin');
     } catch (err: any) {
       setError(err.message || 'Authentication failed.');
     } finally {
@@ -46,7 +53,7 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: { redirectTo: 'https://rescue-army.com/profile' },
+        options: { redirectTo: redirectAfterLogin() },
       });
       if (error) throw error;
     } catch (err: any) {

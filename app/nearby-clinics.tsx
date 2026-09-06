@@ -5,6 +5,7 @@ import { useLocalSearchParams } from 'expo-router';
 import AppHeader from '@/components/AppHeader';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
+import { liveStatus, summarizeLive, type PlacePeriod } from '@/lib/place-hours';
 
 type Kind = 'clinic' | 'shelter';
 type Clinic = {
@@ -20,6 +21,7 @@ type Clinic = {
   status?: string;
   status_label?: string;
   minutes_to_close?: number | null;
+  periods?: PlacePeriod[];
   phone?: string | null;
   website?: string | null;
 };
@@ -31,6 +33,17 @@ function uber(c: Clinic) {
 function lyft(c: Clinic) {
   if (c.lat == null || c.lng == null) return 'https://ride.lyft.com/';
   return `https://ride.lyft.com/?destination[latitude]=${c.lat}&destination[longitude]=${c.lng}`;
+}
+
+
+function applyLive(list: Clinic[]) {
+  const next = list.map((c) => {
+    const st = liveStatus(c);
+    return { ...c, status: st.code, status_label: st.label, minutes_to_close: st.minutes, open_now: st.open };
+  });
+  const rank: Record<string, number> = { open_24h: 0, open: 1, closing_soon: 2, unknown: 3, closed: 4 };
+  next.sort((a, b) => (rank[a.status || ''] ?? 5) - (rank[b.status || ''] ?? 5));
+  return next;
 }
 
 function badgeStyle(code?: string) {
@@ -60,13 +73,13 @@ export default function NearbyClinicsScreen() {
         const q = `kind=${kind}&lat=${pos.coords.latitude}&lng=${pos.coords.longitude}`;
         const json = await fetch('/api/nearby-clinics?' + q).then((r) => r.json());
         if (cancelled) return;
-        setClinics(json.clinics || []);
+        setClinics(applyLive(json.clinics || []));
         setMeta({ count: json.count || 0, open: json.open || 0, closing_soon: json.closing_soon || 0, er_24h: json.er_24h || 0, source: json.source || '' });
       } catch (e: any) {
         try {
           const json = await fetch('/api/nearby-clinics?kind=' + kind).then((r) => r.json());
           if (cancelled) return;
-          setClinics(json.clinics || []);
+          setClinics(applyLive(json.clinics || []));
           setMeta({ count: json.count || 0, open: json.open || 0, closing_soon: json.closing_soon || 0, er_24h: json.er_24h || 0, source: json.source || '' });
         } catch {
           if (!cancelled) setErr(e?.message || 'Could not load places');
@@ -76,6 +89,21 @@ export default function NearbyClinicsScreen() {
     })();
     return () => { cancelled = true; };
   }, [kind]);
+
+  useEffect(() => {
+    const tick = setInterval(() => {
+      setClinics((cur) => {
+        const next = applyLive(cur);
+        const sum = summarizeLive(next);
+        setMeta((m) => ({ ...m, ...sum }));
+        return next;
+      });
+    }, 15000);
+    const refetch = setInterval(() => {
+      setKind((k) => k);
+    }, 300000);
+    return () => { clearInterval(tick); clearInterval(refetch); };
+  }, []);
 
   return (
     <SafeAreaView style={styles.wrap} edges={['top']}>
@@ -97,7 +125,8 @@ export default function NearbyClinicsScreen() {
               <Stat n={String(meta.closing_soon)} l="Closing soon" />
               <Stat n={String(meta.er_24h)} l="24h ER" />
             </View>
-            <Text style={styles.note}>Open / Closing soon / 24h ER from Google hours (Bond Vet & Small Door also post on their sites). For emergencies, 24h ER is listed first. Uber/Lyft only open a ride — Rescue Army does not pay.</Text>
+            <Text style={styles.live}>LIVE · updates every 15s</Text>
+            <Text style={styles.note}>Status refreshes every 15 seconds from Google hours. Closing soon = last 90 minutes. Uber/Lyft only open a ride — Rescue Army does not pay.</Text>
             {err ? <Text style={styles.err}>{err}</Text> : null}
             {clinics.map((c) => (
               <View key={c.id} style={styles.card}>
@@ -156,6 +185,7 @@ const styles = StyleSheet.create({
   stat: { flex: 1, backgroundColor: Colors.white, borderRadius: 14, padding: 12, alignItems: 'center' },
   statN: { fontFamily: Fonts.extrabold, fontSize: 22, color: Colors.navy },
   statL: { fontFamily: Fonts.medium, fontSize: 11, color: Colors.textSecondary, marginTop: 4 },
+  live: { fontFamily: Fonts.extrabold, fontSize: 10, color: Colors.coral, letterSpacing: 0.8 },
   note: { fontFamily: Fonts.regular, fontSize: FontSizes.sm, color: Colors.textSecondary, lineHeight: 18 },
   err: { color: Colors.critical, fontFamily: Fonts.medium },
   card: { backgroundColor: Colors.white, borderRadius: 14, padding: 14, gap: 4 },

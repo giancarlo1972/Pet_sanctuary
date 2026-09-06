@@ -44,19 +44,21 @@ export default function PetCareScreen() {
   return (
     <SafeAreaView style={styles.wrap} edges={['top']}>
       <AppHeader title={name} showBack />
-      <View style={styles.tabs}>
-        {TABS.map((t) => (
-          <TouchableOpacity key={t.id} style={[styles.tab, tab === t.id && styles.tabOn]} onPress={() => setTab(t.id)}>
-            <Text style={[styles.tabTxt, tab === t.id && styles.tabTxtOn]}>{t.label}</Text>
-          </TouchableOpacity>
-        ))}
+      <View style={styles.phone}>
+        <View style={styles.tabs}>
+          {TABS.map((t) => (
+            <TouchableOpacity key={t.id} style={[styles.tab, tab === t.id && styles.tabOn]} onPress={() => setTab(t.id)}>
+              <Text style={[styles.tabTxt, tab === t.id && styles.tabTxtOn]}>{t.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <ScrollView contentContainerStyle={styles.scroll}>
+          {tab === 'overview' && <Overview name={name} photo={photo} subtitle={subtitle} />}
+          {tab === 'insurance' && <Insurance />}
+          {tab === 'medical' && <Medical />}
+          {tab === 'invoices' && <Invoices />}
+        </ScrollView>
       </View>
-      <ScrollView contentContainerStyle={styles.scroll}>
-        {tab === 'overview' && <Overview name={name} photo={photo} subtitle={subtitle} />}
-        {tab === 'insurance' && <Insurance />}
-        {tab === 'medical' && <Medical />}
-        {tab === 'invoices' && <Invoices />}
-      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -64,7 +66,9 @@ export default function PetCareScreen() {
 function Overview({ name, photo, subtitle }: { name: string; photo: string; subtitle: string }) {
   return (
     <>
-      <Image source={{ uri: photo }} style={styles.hero} resizeMode="cover" />
+      <View style={styles.heroBox}>
+        <Image source={{ uri: photo }} style={styles.hero} resizeMode="contain" />
+      </View>
       <Text style={styles.h1}>{name}</Text>
       <Text style={styles.sub}>{subtitle}</Text>
       <View style={styles.chipRow}>
@@ -166,13 +170,23 @@ function Invoices() {
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: Colors.screen },
-  tabs: { flexDirection: 'row', margin: 12, backgroundColor: Colors.surface, borderRadius: 999, padding: 4 },
+  phone: { flex: 1, width: '100%', maxWidth: 430, alignSelf: 'center' },
+  tabs: { flexDirection: 'row', marginHorizontal: 12, marginTop: 8, backgroundColor: Colors.surface, borderRadius: 999, padding: 4 },
   tab: { flex: 1, paddingVertical: 10, borderRadius: 999, alignItems: 'center' },
   tabOn: { backgroundColor: Colors.navy },
   tabTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.textSecondary },
   tabTxtOn: { color: Colors.white },
   scroll: { padding: 16, paddingBottom: 48, gap: 12 },
-  hero: { width: '100%', height: 220, borderRadius: 16, backgroundColor: Colors.surface },
+  heroBox: {
+    width: '100%',
+    height: 320,
+    borderRadius: 16,
+    backgroundColor: '#1A1F3A',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hero: { width: '100%', height: '100%' },
   h1: { fontFamily: Fonts.extrabold, fontSize: FontSizes.xl, color: Colors.navy },
   h2: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.navy, marginTop: 4 },
   sub: { fontFamily: Fonts.regular, fontSize: FontSizes.sm, color: Colors.textSecondary, marginTop: 4 },
@@ -185,7 +199,7 @@ const styles = StyleSheet.create({
   chipTxt: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.tealDark },
   card: { backgroundColor: Colors.white, borderRadius: 14, padding: 14 },
   row: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
-  rowL: { fontFamily: Fonts.regular, color: Colors.textSecondary, fontSize: FontSizes.sm },
+  rowL: { fontFamily: Fonts.regular, color: Colors.textSecondary, fontSize: FontSizes.sm, flex: 1 },
   rowR: { fontFamily: Fonts.extrabold, color: Colors.navy, fontSize: FontSizes.md },
   event: { fontFamily: Fonts.regular, fontSize: FontSizes.xs, color: Colors.textTertiary, marginTop: 6 },
   ok: { fontFamily: Fonts.bold, color: Colors.tealDark, marginTop: 4 },

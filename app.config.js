@@ -26,14 +26,6 @@ export default {
     plugins: [
       ["expo-router", { origin: "https://rescue-army.com" }],
       "expo-font",
-      "expo-web-browser",
-      ["expo-build-properties", {
-        android: {
-          compileSdkVersion: 36,
-          targetSdkVersion: 36,
-          buildToolsVersion: "36.0.0",
-        },
-      }],
     ],
     experiments: { tsconfigPaths: true },
     extra: {

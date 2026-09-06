@@ -26,6 +26,7 @@ export default {
     plugins: [
       ["expo-router", { origin: "https://rescue-army.com" }],
       "expo-font",
+      "expo-web-browser",
       ["expo-build-properties", {
         android: {
           compileSdkVersion: 36,

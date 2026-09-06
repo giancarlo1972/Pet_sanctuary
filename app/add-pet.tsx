@@ -23,7 +23,7 @@ export default function AddPetScreen() {
   const [description, setDescription] = useState('');
   const [location, setLocation] = useState('');
   const [isPublic, setIsPublic] = useState(true);
-  const [availability, setAvailability] = useState('adoptable');
+    const [availability, setAvailability] = useState('available');
   const [loading, setLoading] = useState(false);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
 
@@ -92,9 +92,9 @@ export default function AddPetScreen() {
 
           <Text style={styles.sectionLabel}>Availability</Text>
           <View style={styles.availRow}>
-            {['adoptable', 'foster', 'both'].map((a) => (
+            {['available', 'foster', 'both'].map((a) => (
               <TouchableOpacity key={a} style={[styles.availPill, availability === a && styles.availPillActive]} onPress={() => setAvailability(a)} activeOpacity={0.75}>
-                <Text style={[styles.availPillText, availability === a && styles.availPillTextActive]}>{a === 'adoptable' ? 'Adoption' : a === 'foster' ? 'Foster' : 'Both'}</Text>
+                <Text style={[styles.availPillText, availability === a && styles.availPillTextActive]}>{a === 'available' ? 'Adoption' : a === 'foster' ? 'Foster' : 'Both'}</Text>
               </TouchableOpacity>
             ))}
           </View>

@@ -43,9 +43,16 @@ export default function AddPetScreen() {
         location: location.trim() || null,
         is_public: isPublic,
         availability,
+        owner_id: user.id,
       }).select('id').single();
       if (error) throw error;
-      router.replace(`/pet-details?id=${data.id}`);
+      await supabase.from('pet_relationships').insert({
+        pet_id: data.id,
+        user_id: user.id,
+        relationship: 'owner',
+        started_on: new Date().toISOString().slice(0, 10),
+      });
+      router.replace(`/my-pet?id=${data.id}`);
     } catch (err: any) {
       setBanner({ message: err.message || 'Could not add pet. Please try again.', kind: 'error' });
     }

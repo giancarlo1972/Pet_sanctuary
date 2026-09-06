@@ -23,7 +23,17 @@ export default {
       output: "static",
       favicon: "./assets/favicon.png",
     },
-    plugins: [["expo-router", { origin: "https://rescue-army.com" }], "expo-font"],
+    plugins: [
+      ["expo-router", { origin: "https://rescue-army.com" }],
+      "expo-font",
+      ["expo-build-properties", {
+        android: {
+          compileSdkVersion: 36,
+          targetSdkVersion: 36,
+          buildToolsVersion: "36.0.0",
+        },
+      }],
+    ],
     experiments: { tsconfigPaths: true },
     extra: {
       eas: {

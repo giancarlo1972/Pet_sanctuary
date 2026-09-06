@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import AppHeader from '@/components/AppHeader';
@@ -8,7 +8,6 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import { SUPPORT_EMAIL, supportMailto } from '@/lib/contact';
-import { Linking } from 'react-native';
 
 type QueueItem = {
   id: string;
@@ -36,7 +35,7 @@ export default function AdminScreen() {
     setLoading(true);
     setError(null);
     const { data: profile } = await supabase.from('profiles').select('role, full_name').eq('id', user.id).maybeSingle();
-    const r = (profile?.role || '').toLowerCase();
+    const r = (profile?.role || '').toLowerCase().trim();
     setRole(r || 'member');
     if (!ADMIN_ROLES.has(r)) { setLoading(false); return; }
 
@@ -143,6 +142,9 @@ export default function AdminScreen() {
           <Text style={styles.body}>Org verifications, reports, and ID review. Actions write to Supabase. PII stays in approved requests only.</Text>
           {error ? <Text style={styles.err}>{error}</Text> : null}
 
+          <TouchableOpacity style={styles.ghost} onPress={() => router.push('/invoices')}>
+            <Text style={styles.ghostTxt}>Invoices by role</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.ghost} onPress={() => router.push('/pet-care')}>
             <Text style={styles.ghostTxt}>Gina care record</Text>
           </TouchableOpacity>
@@ -197,7 +199,7 @@ function Card({
       <Text style={[styles.meta, ok ? styles.ok : undefined]}>{meta}</Text>
       <View style={styles.row}>
         <TouchableOpacity style={styles.verify} onPress={onOk} disabled={busy}>
-          <Text style={styles.verifyTxt}>{busy ? '…' : 'Verify'}</Text>
+          <Text style={styles.verifyTxt}>{busy ? '\u2026' : 'Verify'}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.reject} onPress={onNo} disabled={busy}>
           <Text style={styles.rejectTxt}>Reject</Text>

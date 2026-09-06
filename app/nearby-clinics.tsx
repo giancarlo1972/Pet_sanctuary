@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useLocalSearchParams } from 'expo-router';
 import AppHeader from '@/components/AppHeader';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 
+type Kind = 'clinic' | 'shelter';
 type Clinic = {
   id: string;
   name: string;
@@ -15,6 +17,9 @@ type Clinic = {
   hours?: string[];
   is_24h?: boolean;
   is_er?: boolean;
+  status?: string;
+  status_label?: string;
+  minutes_to_close?: number | null;
   phone?: string | null;
   website?: string | null;
 };
@@ -28,54 +33,77 @@ function lyft(c: Clinic) {
   return `https://ride.lyft.com/?destination[latitude]=${c.lat}&destination[longitude]=${c.lng}`;
 }
 
+function badgeStyle(code?: string) {
+  if (code === 'open_24h') return { bg: '#FEE2E2', fg: Colors.critical };
+  if (code === 'open') return { bg: Colors.tealBg, fg: Colors.tealDark };
+  if (code === 'closing_soon') return { bg: '#FEF3C7', fg: '#92400E' };
+  return { bg: Colors.surface, fg: Colors.textTertiary };
+}
+
 export default function NearbyClinicsScreen() {
+  const params = useLocalSearchParams<{ kind?: string }>();
+  const [kind, setKind] = useState<Kind>(params.kind === 'shelter' ? 'shelter' : 'clinic');
   const [loading, setLoading] = useState(true);
   const [clinics, setClinics] = useState<Clinic[]>([]);
-  const [meta, setMeta] = useState({ count: 0, open_now: 0, er_24h: 0, source: '' });
+  const [meta, setMeta] = useState({ count: 0, open: 0, closing_soon: 0, er_24h: 0, source: '' });
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
+      setLoading(true);
       try {
         const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
           if (typeof navigator === 'undefined' || !navigator.geolocation) reject(new Error('no geo'));
           else navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 12000, maximumAge: 120000 });
         });
-        const q = `lat=${pos.coords.latitude}&lng=${pos.coords.longitude}`;
+        const q = `kind=${kind}&lat=${pos.coords.latitude}&lng=${pos.coords.longitude}`;
         const json = await fetch('/api/nearby-clinics?' + q).then((r) => r.json());
+        if (cancelled) return;
         setClinics(json.clinics || []);
-        setMeta({ count: json.count || 0, open_now: json.open_now || 0, er_24h: json.er_24h || 0, source: json.source || '' });
+        setMeta({ count: json.count || 0, open: json.open || 0, closing_soon: json.closing_soon || 0, er_24h: json.er_24h || 0, source: json.source || '' });
       } catch (e: any) {
         try {
-          const json = await fetch('/api/nearby-clinics').then((r) => r.json());
+          const json = await fetch('/api/nearby-clinics?kind=' + kind).then((r) => r.json());
+          if (cancelled) return;
           setClinics(json.clinics || []);
-          setMeta({ count: json.count || 0, open_now: json.open_now || 0, er_24h: json.er_24h || 0, source: json.source || '' });
+          setMeta({ count: json.count || 0, open: json.open || 0, closing_soon: json.closing_soon || 0, er_24h: json.er_24h || 0, source: json.source || '' });
         } catch {
-          setErr(e?.message || 'Could not load clinics');
+          if (!cancelled) setErr(e?.message || 'Could not load places');
         }
       }
-      setLoading(false);
+      if (!cancelled) setLoading(false);
     })();
-  }, []);
+    return () => { cancelled = true; };
+  }, [kind]);
 
   return (
     <SafeAreaView style={styles.wrap} edges={['top']}>
-      <AppHeader title="Nearby clinics" showBack />
+      <AppHeader title={kind === "shelter" ? "Nearby shelters" : "Nearby clinics"} showBack />
       <View style={styles.phone}>
         {loading ? <ActivityIndicator color={Colors.coral} style={{ marginTop: 40 }} /> : (
           <ScrollView contentContainerStyle={styles.scroll}>
-            <View style={styles.stats}>
-              <Stat n={String(meta.count)} l="Clinics" />
-              <Stat n={String(meta.open_now)} l="Open now" />
-              <Stat n={String(meta.er_24h)} l="24h / ER" />
+            <View style={styles.kindRow}>
+              <TouchableOpacity style={[styles.kindBtn, kind === 'clinic' && styles.kindOn]} onPress={() => setKind('clinic')}>
+                <Text style={[styles.kindTxt, kind === 'clinic' && styles.kindTxtOn]}>Clinics</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.kindBtn, kind === 'shelter' && styles.kindOn]} onPress={() => setKind('shelter')}>
+                <Text style={[styles.kindTxt, kind === 'shelter' && styles.kindTxtOn]}>Shelters</Text>
+              </TouchableOpacity>
             </View>
-            <Text style={styles.note}>Hours come from Google / the clinic site (Bond Vet, Small Door post theirs). Rescue Army does not book the appointment and does not pay Uber or Lyft — we only open the ride.</Text>
+            <View style={styles.stats}>
+              <Stat n={String(meta.count)} l={kind === 'shelter' ? 'Shelters' : 'Clinics'} />
+              <Stat n={String(meta.open)} l="Open" />
+              <Stat n={String(meta.closing_soon)} l="Closing soon" />
+              <Stat n={String(meta.er_24h)} l="24h ER" />
+            </View>
+            <Text style={styles.note}>Open / Closing soon / 24h ER from Google hours (Bond Vet & Small Door also post on their sites). For emergencies, 24h ER is listed first. Uber/Lyft only open a ride — Rescue Army does not pay.</Text>
             {err ? <Text style={styles.err}>{err}</Text> : null}
             {clinics.map((c) => (
               <View key={c.id} style={styles.card}>
                 <View style={styles.pills}>
-                  {c.is_24h || c.is_er ? <Text style={styles.er}>24h ER</Text> : null}
-                  {c.open_now ? <Text style={styles.open}>Open now</Text> : null}
+                  <Text style={[styles.badge, { backgroundColor: badgeStyle(c.status).bg, color: badgeStyle(c.status).fg }]}>{c.status_label || (c.open_now ? 'Open' : 'Hours unknown')}</Text>
+                  {c.is_er && c.status !== 'open_24h' ? <Text style={styles.er}>ER</Text> : null}
                 </View>
                 <Text style={styles.name}>{c.name}</Text>
                 <Text style={styles.addr}>{c.address}</Text>

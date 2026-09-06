@@ -131,6 +131,14 @@ function Insurance() {
 function Medical() {
   return (
     <>
+      <View style={styles.card}>
+        <Text style={styles.kicker}>TELEHEALTH</Text>
+        <Text style={styles.h2}>{GINA.dutch.name}</Text>
+        <Text style={styles.body}>{GINA.dutch.detail}</Text>
+        <TouchableOpacity style={styles.btn} onPress={() => Linking.openURL(GINA.dutch.url)}>
+          <Text style={styles.btnTxt}>Open Dutch (they are the vet)</Text>
+        </TouchableOpacity>
+      </View>
       <Text style={styles.section}>Vaccines</Text>
       {GINA.vaccines.map((v) => (
         <View key={v.name} style={styles.card}>
@@ -155,7 +163,12 @@ function Medical() {
 function Invoices() {
   return (
     <>
-      <Text style={styles.body}>Owner invoices. Rescue Army stores the receipt line — payment stays with the clinic / Lemonade.</Text>
+      <Text style={styles.body}>The invoice belongs to the pet. Rescue Army records the line. Payment stays with the clinic, Lemonade, or the pharmacy.</Text>
+      <View style={styles.card}>
+        <Text style={styles.kicker}>PHARMACY</Text>
+        <Text style={styles.h2}>Fill without paying us</Text>
+        <Text style={styles.body}>{GINA.pharmacy.detail}</Text>
+      </View>
       {GINA.invoices.map((inv) => (
         <View key={inv.desc} style={styles.card}>
           <Text style={styles.rowR}>{inv.amount}</Text>

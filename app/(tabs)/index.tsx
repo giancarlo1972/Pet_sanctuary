@@ -339,15 +339,18 @@ export default function HomeScreen() {
             <ChevronRight color="#FBD3D0" size={20} />
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.clinicsPill}
-            onPress={() => router.push('/nearby-clinics')}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.clinicsKicker}>NEARBY</Text>
-            <Text style={styles.clinicsTitle}>Vet clinics · 24h ER · Uber / Lyft to ER</Text>
-            <Text style={styles.clinicsSub}>Hours from Google / Bond Vet / Small Door sites. We do not pay the ride.</Text>
-          </TouchableOpacity>
+          <View style={styles.nearRow}>
+            <TouchableOpacity style={styles.nearPill} onPress={() => router.push('/nearby-clinics?kind=clinic')} activeOpacity={0.85}>
+              <Text style={styles.clinicsKicker}>CLINICS</Text>
+              <Text style={styles.clinicsTitle}>Open · Closing soon · 24h ER</Text>
+              <Text style={styles.clinicsSub}>Bond Vet, Small Door, ER hospitals. Uber/Lyft to ER — we don’t pay.</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.nearPill} onPress={() => router.push('/nearby-clinics?kind=shelter')} activeOpacity={0.85}>
+              <Text style={styles.clinicsKicker}>SHELTERS</Text>
+              <Text style={styles.clinicsTitle}>Open · Closing soon</Text>
+              <Text style={styles.clinicsSub}>Rescues and humane societies near you.</Text>
+            </TouchableOpacity>
+          </View>
 
           {/* Live alerts */}
           {liveAlerts.length > 0 && (

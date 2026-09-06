@@ -11,6 +11,9 @@ export default function RootLayout() {
       <>
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="admin" />
+          <Stack.Screen name="pet-care" />
+          <Stack.Screen name="updates" />
         </Stack>
         <StatusBar style="auto" />
       </>

@@ -178,6 +178,12 @@ export default function PetDetailsScreen() {
     checkFavorite();
   }, [id, user]);
 
+  useEffect(() => {
+    if (!String(id || '').startsWith('rg-a-')) return;
+    const t = setInterval(() => { loadPet(); }, 45000);
+    return () => clearInterval(t);
+  }, [id]);
+
   const loadPet = async () => {
     if (!id) return;
     setLoading(true);

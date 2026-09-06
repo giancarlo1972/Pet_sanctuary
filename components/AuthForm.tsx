@@ -45,13 +45,11 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
     setLoading(true);
     setError(null);
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: { redirectTo: 'https://rescue-army.com/profile' },
-      });
-      if (error) throw error;
+      await signInWithGoogle();
+      router.replace('/(tabs)');
     } catch (err: any) {
       setError(err.message || 'Google sign-in failed.');
+    } finally {
       setLoading(false);
     }
   };

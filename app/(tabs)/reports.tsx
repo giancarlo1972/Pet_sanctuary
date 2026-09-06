@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
@@ -8,6 +8,7 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import AppHeader from '@/components/AppHeader';
+import { SUPPORT_EMAIL } from '@/lib/contact';
 
 const TYPE_LABEL: Record<string, string> = {
   lost: 'Lost pet', stray: 'Found stray', injured: 'Injured animal',
@@ -39,6 +40,41 @@ function titleFor(r: { pet_name: string | null; location_address: string; report
 }
 
 type Tab = 'reports' | 'fund';
+
+const CAMPAIGNS = [
+  {
+    id: 'aspca',
+    org: 'ASPCA',
+    title: 'ASPCA — national rescue & cruelty response',
+    location: 'United States',
+    url: 'https://secure.aspca.org/donate/donate',
+    national: true,
+  },
+  {
+    id: 'peta',
+    org: 'PETA',
+    title: 'PETA — investigations & rescue fund',
+    location: 'United States',
+    url: 'https://support.peta.org/page/73414/donate/1?locale=en-US',
+    national: true,
+  },
+  {
+    id: 'humane',
+    org: 'Humane World for Animals',
+    title: 'Humane World (formerly HSUS)',
+    location: 'Worldwide',
+    url: 'https://www.humaneworld.org/en/ways-to-give',
+    national: true,
+  },
+  {
+    id: 'nepal',
+    org: 'Nepal partner',
+    title: 'Nepal Flood Tragedy 2026',
+    location: 'Nepal',
+    url: '',
+    national: false,
+  },
+];
 
 export default function ReportsTabScreen() {
   const [tab, setTab] = useState<Tab>('reports');
@@ -75,10 +111,7 @@ export default function ReportsTabScreen() {
       </View>
 
       {tab === 'fund' ? (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyTitle}>Care Fund</Text>
-          <Text style={styles.emptySubtitle}>Emergency vet bills and transport. Coming next — donations still go to the shelter, not Rescue Army.</Text>
-        </View>
+        <CareFund />
       ) : (
         <ScrollView
           showsVerticalScrollIndicator={false}
@@ -132,6 +165,48 @@ export default function ReportsTabScreen() {
   );
 }
 
+function CareFund() {
+  const national = CAMPAIGNS.filter((c) => c.national);
+  const local = CAMPAIGNS.filter((c) => !c.national);
+
+  return (
+    <ScrollView contentContainerStyle={styles.scroll}>
+      <View style={styles.hero}>
+        <Text style={styles.heroKicker}>CARE FUND · UNITED EFFORTS</Text>
+        <Text style={styles.heroTitle}>One hub. Their wallets.</Text>
+        <Text style={styles.heroBody}>
+          Rescue Army opens ASPCA, PETA, Humane World, or a local partner PayPal. We never hold the money. App problems: {SUPPORT_EMAIL}
+        </Text>
+      </View>
+      <Text style={styles.section}>National campaigns</Text>
+      {national.map((c) => (
+        <CampaignCard key={c.id} c={c} />
+      ))}
+      <Text style={styles.section}>Active incidents</Text>
+      {local.map((c) => (
+        <CampaignCard key={c.id} c={c} />
+      ))}
+    </ScrollView>
+  );
+}
+
+function CampaignCard({ c }: { c: (typeof CAMPAIGNS)[number] }) {
+  return (
+    <View style={styles.fundCard}>
+      <Text style={styles.fundLoc}>{c.location}</Text>
+      <Text style={styles.fundTitle}>{c.title}</Text>
+      <Text style={styles.fundOrg}>{c.org}</Text>
+      {c.url ? (
+        <TouchableOpacity style={styles.donateBtn} onPress={() => Linking.openURL(c.url)}>
+          <Text style={styles.donateText}>Open {c.org} official donate page</Text>
+        </TouchableOpacity>
+      ) : (
+        <Text style={styles.waiting}>PayPal/Venmo opens when this partner connects a wallet. Rescue Army cannot take this gift.</Text>
+      )}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
   segment: { flexDirection: 'row', margin: 16, backgroundColor: Colors.surface, borderRadius: 999, padding: 4 },
@@ -160,4 +235,16 @@ const styles = StyleSheet.create({
   emptyState: { alignItems: 'center', padding: 40 },
   emptyTitle: { fontSize: FontSizes.lg, fontFamily: Fonts.bold, color: Colors.text, marginBottom: 8 },
   emptySubtitle: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, textAlign: 'center' },
+  hero: { backgroundColor: Colors.navy, borderRadius: 16, padding: 16, marginBottom: 16 },
+  heroKicker: { color: '#B9BCE0', fontFamily: Fonts.bold, fontSize: 11, letterSpacing: 1.2 },
+  heroTitle: { color: Colors.white, fontFamily: Fonts.extrabold, fontSize: FontSizes.lg, marginTop: 8 },
+  heroBody: { color: '#B9BCE0', fontFamily: Fonts.regular, fontSize: FontSizes.sm, lineHeight: 20, marginTop: 8 },
+  section: { fontFamily: Fonts.extrabold, fontSize: 11, color: Colors.textTertiary, letterSpacing: 0.8, marginBottom: 8, marginTop: 8 },
+  fundCard: { backgroundColor: Colors.white, borderRadius: 14, padding: 14, marginBottom: 12 },
+  fundLoc: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.coral },
+  fundTitle: { fontFamily: Fonts.extrabold, fontSize: FontSizes.md, color: Colors.navy, marginTop: 4 },
+  fundOrg: { fontFamily: Fonts.bold, fontSize: FontSizes.sm, color: Colors.navy, marginTop: 6 },
+  donateBtn: { backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 12 },
+  donateText: { color: Colors.white, fontFamily: Fonts.bold, fontSize: FontSizes.sm },
+  waiting: { marginTop: 10, fontFamily: Fonts.regular, fontSize: FontSizes.sm, color: Colors.textSecondary, lineHeight: 20 },
 });

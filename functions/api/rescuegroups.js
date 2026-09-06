@@ -32,6 +32,7 @@ function mapPet(a) {
     spayed_neutered: yes(a.animalAltered),
     microchipped: yes(a.animalMicrochipped),
     needs_foster: yes(a.animalNeedsFoster),
+    listing_url: a.animalUrl || null,
   };
 }
 
@@ -46,6 +47,7 @@ export async function onRequestGet(context) {
     'animalID','animalName','animalBreed','animalSpecies','animalSex','animalGeneralAge',
     'animalDescriptionPlain','animalThumbnailUrl','animalPictures','animalLocationCitystate',
     'animalStatus','animalAltered','animalMicrochipped','animalNeedsFoster','animalOrgID',
+    'animalUptodate','animalShotsCurrent','animalUrl',
   ];
 
   async function rg(filters, limit) {

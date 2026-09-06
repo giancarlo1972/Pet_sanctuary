@@ -7,46 +7,24 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { SUPPORT_EMAIL, supportMailto } from '@/lib/contact';
 
-const ITEMS = [
-  {
-    kind: 'PET',
-    title: 'Gina care record',
-    body: 'Overview, Lemonade insurance, medical, invoices. SiiPet litter box is demo until partner access.',
-  },
-  {
-    kind: 'INCIDENT',
-    title: 'Nepal Flood Tragedy 2026',
-    body: 'Local partner intake. Rescue Army only opens their PayPal/Venmo — we never hold the money.',
-  },
-  {
-    kind: 'NATIONAL',
-    title: 'ASPCA, PETA, Humane World',
-    body: 'Official donate pages are linked from Care Fund. Local humane societies register separately.',
-  },
-  {
-    kind: 'APP',
-    title: 'App support',
-    body: SUPPORT_EMAIL + ' — bugs, reports, admin access. Not donations.',
-  },
-];
-
 export default function UpdatesScreen() {
   const router = useRouter();
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <AppHeader title="Updates" showBack />
       <ScrollView contentContainerStyle={styles.scroll}>
-        <TouchableOpacity style={styles.cta} onPress={() => router.push('/pet-care')}>
+        <TouchableOpacity style={styles.cta} onPress={() => router.push('/admin')}>
           <Text style={styles.ctaKicker}>NEW ON THIS PREVIEW</Text>
-          <Text style={styles.ctaTitle}>Open Gina — Overview / Insurance / Medical / Invoices</Text>
+          <Text style={styles.ctaTitle}>Admin console — orgs, reports, IDs</Text>
         </TouchableOpacity>
-        {ITEMS.map((a) => (
-          <View key={a.title} style={styles.card}>
-            <Text style={styles.kind}>{a.kind}</Text>
-            <Text style={styles.title}>{a.title}</Text>
-            <Text style={styles.body}>{a.body}</Text>
-          </View>
-        ))}
+        <TouchableOpacity style={styles.ctaAlt} onPress={() => router.push('/pet-care')}>
+          <Text style={styles.ctaAltTxt}>Gina care record</Text>
+        </TouchableOpacity>
+        <View style={styles.card}>
+          <Text style={styles.kind}>APP</Text>
+          <Text style={styles.title}>App support</Text>
+          <Text style={styles.body}>{SUPPORT_EMAIL} — bugs, reports, admin access. Not donations.</Text>
+        </View>
         <TouchableOpacity
           style={styles.mail}
           onPress={() => Linking.openURL(supportMailto('Rescue Army app — issue / report / admin access'))}
@@ -64,6 +42,8 @@ const styles = StyleSheet.create({
   cta: { backgroundColor: Colors.navy, borderRadius: 16, padding: 16 },
   ctaKicker: { color: '#B9BCE0', fontFamily: Fonts.extrabold, fontSize: 10, letterSpacing: 1 },
   ctaTitle: { color: Colors.white, fontFamily: Fonts.extrabold, fontSize: FontSizes.md, marginTop: 8 },
+  ctaAlt: { borderWidth: 1, borderColor: Colors.border, borderRadius: 16, padding: 16, alignItems: 'center' },
+  ctaAltTxt: { color: Colors.navy, fontFamily: Fonts.bold, fontSize: FontSizes.md },
   card: { backgroundColor: Colors.white, borderRadius: 14, padding: 14 },
   kind: { fontSize: 10, fontFamily: Fonts.extrabold, color: Colors.coral, letterSpacing: 0.8 },
   title: { marginTop: 6, fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.navy },

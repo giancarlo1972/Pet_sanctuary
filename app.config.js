@@ -11,7 +11,7 @@ export default {
     ios: { supportsTablet: true },
     android: {
       package: "com.ruumatech.rescuearmy",
-      versionCode: 10,
+      versionCode: 11,
       adaptiveIcon: {
         foregroundImage: "./assets/icon.png",
         backgroundColor: "#1A1F3A",

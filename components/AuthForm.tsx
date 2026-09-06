@@ -1,4 +1,3 @@
-import { signInWithGoogle } from '@/lib/oauth';
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -45,11 +44,13 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
     setLoading(true);
     setError(null);
     try {
-      await signInWithGoogle();
-      router.replace('/(tabs)');
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: 'https://rescue-army.com/profile' },
+      });
+      if (error) throw error;
     } catch (err: any) {
       setError(err.message || 'Google sign-in failed.');
-    } finally {
       setLoading(false);
     }
   };

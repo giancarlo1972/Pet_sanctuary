@@ -13,8 +13,8 @@ function allowed(request, env) {
 
 async function sb(env, path, method, body) {
   const url = env.EXPO_PUBLIC_SUPABASE_URL || env.SUPABASE_URL;
-  const key = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY;
-  if (!url || !key) return { ok: false, error: 'Missing SUPABASE_SERVICE_ROLE_KEY on Cloudflare' };
+  const key = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY || env.SUPABASE_SECRET_KEY;
+  if (!url || !key) return { ok: false, error: 'Missing SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY) on Cloudflare Pages env' };
   const res = await fetch(`${url}/rest/v1/${path}`, {
     method,
     headers: {

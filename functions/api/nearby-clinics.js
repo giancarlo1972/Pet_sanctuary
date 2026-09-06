@@ -67,6 +67,12 @@ function mapPlace(p, details, kind) {
     website: details.website || null,
     maps_url: details.url || null,
     rating: p.rating || null,
+    periods: (oh.periods || []).map((per) => ({
+      open_day: per.open?.day,
+      open_time: per.open?.time,
+      close_day: per.close?.day ?? null,
+      close_time: per.close?.time ?? null,
+    })),
   };
 }
 
@@ -130,7 +136,9 @@ export async function onRequestGet(context) {
       }
     }));
     const clinics = detailed.filter(Boolean);
-    return Response.json({ clinics, ...summarize(clinics), source: 'google', kind });
+    const rank = { open_24h: 0, open: 1, closing_soon: 2, unknown: 3, closed: 4 };
+    clinics.sort((a, b) => (rank[a.status] ?? 5) - (rank[b.status] ?? 5));
+    return Response.json({ clinics, ...summarize(clinics), source: 'google', kind, updated_at: Date.now() });
   } catch (e) {
     const clinics = FALLBACK[kind];
     return Response.json({ clinics, ...summarize(clinics), source: 'directory', kind, error: String(e) });

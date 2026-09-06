@@ -124,8 +124,9 @@ function inferListing(text: string) {
   if (/\bfelv\/fiv negative\b|\bfelv\b/.test(t)) chips.push('FELV/FIV negative');
   if (/\bfemale\b/.test(t)) chips.push('Female');
   if (/\bmale\b/.test(t)) chips.push('Male');
+  if (/\bheartworm\b/.test(t)) chips.push('Heartworm noted');
   return {
-    vaccinated: /\bvaccinated\b|\bup-to-date on vaccines\b|\bshots\b/.test(t),
+    vaccinated: /\bvaccinat|\bup-?to-?date on (vaccines|shots)|\bshots current\b|\buptodate\b/.test(t),
     microchipped: /\bmicrochipp?ed\b/.test(t),
     spayed: /\bspayed\b|\bneutered\b|\baltered\b/.test(t),
     email,
@@ -149,6 +150,7 @@ export default function PetDetailsScreen() {
   const [descTab, setDescTab] = useState<'about' | 'full'>('about');
   const [listingEmail, setListingEmail] = useState<string | null>(null);
   const [listingPhone, setListingPhone] = useState<string | null>(null);
+  const [listingUrl, setListingUrl] = useState<string | null>(null);
 
   // Identity & records state
   const [microchipValue, setMicrochipValue] = useState<string | null>(null);
@@ -194,6 +196,7 @@ export default function PetDetailsScreen() {
         const inferred = inferListing(a.description || '');
         setListingEmail(inferred.email);
         setListingPhone(inferred.phone);
+        setListingUrl(a.listing_url || null);
         setDescTab('about');
         
       setPet({
@@ -204,7 +207,7 @@ export default function PetDetailsScreen() {
           age_text: a.age_text,
           gender: a.gender,
           status: 'available',
-          availability: 'adoptable',
+          availability: a.needs_foster ? 'both' : 'adoption',
           description: a.description,
           main_photo_url: a.photo_url,
           location: a.location,
@@ -445,7 +448,25 @@ export default function PetDetailsScreen() {
     );
   }
 
+  const openListingContact = () => {
+    if (listingEmail) {
+      Linking.openURL(`mailto:${listingEmail}?subject=${encodeURIComponent((pet?.name || 'Pet') + ' — inquiry')}`);
+      return;
+    }
+    if (listingPhone) {
+      Linking.openURL('tel:' + listingPhone.replace(/[^\d+]/g, ''));
+      return;
+    }
+    if (listingUrl) {
+      Linking.openURL(listingUrl);
+    }
+  };
+
   const openAppForm = (type: 'foster' | 'adopt') => {
+    if (String(pet?.id || '').startsWith('rg-a-')) {
+      openListingContact();
+      return;
+    }
     if (!user) { router.push('/auth'); return; }
     router.push(`/application?petId=${pet?.id}&type=${type}`);
   };
@@ -473,7 +494,7 @@ export default function PetDetailsScreen() {
         <View style={styles.heroWrap}>
           {pet.main_photo_url ? (
             pet.main_photo_url.startsWith('http') ? (
-        <Image source={{ uri: pet.main_photo_url }} style={styles.heroImage} resizeMode="cover" />
+        <Image source={{ uri: pet.main_photo_url }} style={styles.heroImage} resizeMode="contain" />
             ) : (
               <SignedImage path={pet.main_photo_url} style={styles.heroImage} />
             )

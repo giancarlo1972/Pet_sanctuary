@@ -1,3 +1,4 @@
+import { signInWithGoogle } from '@/lib/oauth';
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';

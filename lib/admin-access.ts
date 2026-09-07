@@ -7,6 +7,7 @@ const EMAIL_OK = new Set(
   [
     'giancarlo.pereira@gmail.com',
     'giancarlo.pereira@ruuma.net',
+    'giancarlo.pereira@rescue-army.com',
     'support.animals@rescue-army.com',
     'admin@rescue-army.com',
     ...(typeof process !== 'undefined' && process.env.EXPO_PUBLIC_ADMIN_EMAILS

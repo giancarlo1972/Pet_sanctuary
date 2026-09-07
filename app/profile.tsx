@@ -628,12 +628,23 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
             </View>
 
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Rescue Army</Text>
-              <DrawerMenuItem icon={<MapPin color={Colors.coral} size={18} />} title="Nearby clinics & shelters" onPress={() => { closeDrawer(); router.push('/nearby-clinics'); }} />
-              <DrawerMenuItem icon={<PawPrint color={Colors.teal} size={18} />} title="Pet record (Gina)" onPress={() => { closeDrawer(); router.push('/pet-care'); }} />
-              <DrawerMenuItem icon={<FileText color={Colors.navy} size={18} />} title="Invoices" onPress={() => { closeDrawer(); router.push('/invoices'); }} />
-              <DrawerMenuItem icon={<Shield color={Colors.navy} size={18} />} title="Admin" onPress={() => { closeDrawer(); router.push('/admin'); }} />
-              <DrawerMenuItem icon={<Bell color={Colors.coral} size={18} />} title="Updates" onPress={() => { closeDrawer(); router.push('/updates'); }} />
+              <Text style={styles.sectionTitle}>My Role</Text>
+              <View style={styles.roleRow}>
+                {['Member','First responder','Volunteer','Org admin','Administrator'].map((label) => {
+                  const on = (label === 'Administrator' && isOwner) || (label === 'Org admin' && isOrgAdmin && !isOwner);
+                  return (
+                    <View key={label} style={[styles.roleChip, on && styles.roleChipOn]}>
+                      <Text style={[styles.roleChipTxt, on && styles.roleChipTxtOn]}>{label}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+              {isOwner ? (
+                <TouchableOpacity style={styles.adminCta} onPress={() => { closeDrawer(); router.push('/admin'); }} activeOpacity={0.85}>
+                  <Shield color={Colors.white} size={18} />
+                  <Text style={styles.adminCtaTxt}>Open admin console</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
 
             {/* Trust & Verification */}
@@ -1401,6 +1412,13 @@ const styles = StyleSheet.create({
   settingsButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
   drawerScroll: { flex: 1 },
   drawerContent: { paddingHorizontal: 20, paddingBottom: 60 },
+  roleRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  roleChip: { borderWidth: 1, borderColor: Colors.border, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 10, backgroundColor: Colors.white },
+  roleChipOn: { backgroundColor: Colors.navy, borderColor: Colors.navy },
+  roleChipTxt: { fontFamily: Fonts.semibold, fontSize: FontSizes.sm, color: Colors.navy },
+  roleChipTxtOn: { color: Colors.white },
+  adminCta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: Colors.navy, borderRadius: 14, paddingVertical: 16, marginTop: 4 },
+  adminCtaTxt: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.white },
 
   // Profile section
   profileSection: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 24, marginTop: 20 },

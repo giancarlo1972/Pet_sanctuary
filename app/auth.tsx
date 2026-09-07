@@ -26,21 +26,15 @@ function friendly(raw: string) {
 async function afterLogin(email: string) {
   const { data: sess } = await supabase.auth.getUser();
   const user = sess.user;
-  if (!user) return;
-  const loginEmail = (user.email || email || '').toLowerCase();
-  const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle();
-  const { count } = await supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'admin');
-  const firstAdmin = (count || 0) === 0;
-  if (firstAdmin || isPlatformAdmin(profile?.role, loginEmail)) {
-    await supabase.from('profiles').upsert({
-      id: user.id,
-      email: loginEmail,
-      full_name: user.user_metadata?.full_name || user.user_metadata?.name || null,
-      role: 'admin',
-    }, { onConflict: 'id' });
+  const loginEmail = (user?.email || email || '').toLowerCase();
+  let role = '';
+  if (user?.id) {
+    const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle();
+    role = profile?.role || '';
   }
+  const label = isPlatformAdmin(role, loginEmail) ? 'Administrator' : 'Member';
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    try { sessionStorage.setItem('ra_login_toast', isPlatformAdmin(profile?.role, loginEmail) ? 'Administrator' : 'Member'); } catch {}
+    try { sessionStorage.setItem('ra_login_toast', label); } catch {}
     window.location.assign('/');
     return;
   }

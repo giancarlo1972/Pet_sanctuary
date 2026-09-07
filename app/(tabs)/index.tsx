@@ -8,8 +8,10 @@ import {
   Image,
   ActivityIndicator,
   StatusBar,
+  Platform,
+  useWindowDimensions,
 } from 'react-native';
-import { Platform } from 'react-native';
+
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
@@ -112,6 +114,8 @@ interface HomeStory {
 
 export default function HomeScreen() {
   const { user, session } = useAuth();
+  const { width } = useWindowDimensions();
+  const wide = Platform.OS === 'web' && width >= 900;
   const [loginToast, setLoginToast] = useState<string | null>(null);
   useEffect(() => {
     if (Platform.OS === 'web' && typeof sessionStorage !== 'undefined') {
@@ -134,8 +138,8 @@ export default function HomeScreen() {
       const { data } = await supabase
         .from('pets')
         .select('id, name, breed, species, main_photo_url, location, status, created_at')
+        .eq('listing_type', 'adoptable')
         .eq('is_public', true)
-        .neq('availability', 'none')
         .order('created_at', { ascending: false })
         .limit(6);
       setFeatured(data || []);
@@ -383,7 +387,7 @@ export default function HomeScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.mapBannerKicker}>NEARBY MAP</Text>
               <Text style={styles.mapBannerTitle}>Open clinics, shelters & 24h ER</Text>
-              <Text style={styles.mapBannerSub}>Live hours · Uber/Lyft to ER — we don’t pay</Text>
+              <Text style={styles.mapBannerSub}>Directions & ride options to the nearest 24h ER</Text>
             </View>
             <ChevronRight color="#C8CCE0" size={22} />
           </TouchableOpacity>
@@ -398,21 +402,6 @@ export default function HomeScreen() {
               <Text style={styles.clinicsKicker}>SHELTERS · LIVE</Text>
               <Text style={styles.clinicsTitle}>{shelterLive.open} open · {shelterLive.closing_soon} closing soon</Text>
               <Text style={styles.clinicsCta}>Open map  →</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.shortcutRow}>
-            <TouchableOpacity style={styles.shortcut} onPress={() => router.push('/pet-care')} activeOpacity={0.85}>
-              <Text style={styles.shortcutTxt}>Pet record</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.shortcut} onPress={() => router.push('/invoices')} activeOpacity={0.85}>
-              <Text style={styles.shortcutTxt}>Invoices</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.shortcut} onPress={() => router.push('/admin')} activeOpacity={0.85}>
-              <Text style={styles.shortcutTxt}>Admin</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.shortcut} onPress={() => router.push('/updates')} activeOpacity={0.85}>
-              <Text style={styles.shortcutTxt}>Updates</Text>
             </TouchableOpacity>
           </View>
 
@@ -435,6 +424,9 @@ export default function HomeScreen() {
           {featured.length > 0 && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Featured pets</Text>
+              {wide ? (
+                <View style={styles.featuredGrid}>{featured.map(renderFeaturedCard)}</View>
+              ) : (
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -442,6 +434,7 @@ export default function HomeScreen() {
               >
                 {featured.map(renderFeaturedCard)}
               </ScrollView>
+              )}
             </View>
           )}
 
@@ -507,7 +500,7 @@ const styles = StyleSheet.create({
   loginToastLink: { color: '#FBD3D0', fontFamily: Fonts.bold, fontSize: FontSizes.sm },
   container: { flex: 1, backgroundColor: Colors.screen },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  scrollContent: { paddingHorizontal: 20, paddingBottom: 100 },
+  scrollContent: { paddingHorizontal: 20, paddingBottom: 100, maxWidth: 1080, width: '100%', alignSelf: 'center' },
 
   emergencyBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 12,

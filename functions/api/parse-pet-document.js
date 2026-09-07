@@ -7,6 +7,7 @@ import {
   parsePatientHeader,
   parseConditions,
   batchBlocks,
+  parseExam,
 } from '../lib/clinic-export.js';
 
 function decodedBytes(b64) {
@@ -42,6 +43,7 @@ Return JSON only, no markdown:
   "visits": [{"clinic": null, "date": "YYYY-MM-DD or null", "reason": null, "summary": null}],
   "labs": [{"analyte": "", "value": "", "unit": null, "flag": "normal|high|low|abnormal|unknown", "collected_on": null}],
   "weight": {"value": null, "unit": "lb|kg", "measured_on": null},
+  "exams": [{"visit_date": "YYYY-MM-DD", "clinic": null, "vitals": {"temp_f": null, "hr": null, "rr": null, "bcs": null, "pain": null, "hydration": null}, "systems": [{"name": "Cardiovascular", "status": "normal|abnormal", "note": null}]}],
   "ai_note": "3-5 short lines: key findings, deltas vs prior values for the same analytes, flags. Plain text, no markdown.",
   "owner_notes": [{"text": "behavioral or lifestyle guidance for the owner", "date": "YYYY-MM-DD or null"}]
 }
@@ -51,7 +53,8 @@ Rules:
 - weight: return the printed {value, unit} as-is (do not convert). Empty arrays if unreadable. Never invent dates.
 - conditions: one row per distinct issue. If a visit notes an existing problem is better or gone, set status=resolved (or monitoring), do not duplicate the name. Use onset_date/resolved_date when printed.
 - ai_note: 3–5 lines covering findings, any delta vs prior labs for the same analytes, and flags. Do not diagnose.
-- owner_notes: behavioral/lifestyle guidance quoted from the vet notes for the owner (diet, indoor-only, activity, follow-up at home). Not clinical findings, diagnoses, or lab values. Empty array if none.`;
+- owner_notes: behavioral/lifestyle guidance quoted from the vet notes for the owner (diet, indoor-only, activity, follow-up at home). Not clinical findings, diagnoses, or lab values. Empty array if none.
+- exams: one per physical exam / wellness visit. vitals: temp_f (°F), hr, rr, bcs (1-9), pain (0-10), hydration (e.g. adequate). systems MUST cover: Subjective, Oral-Nasal-Throat, Ears, Eyes, Cardiovascular, Respiratory, Abdominal, Genitourinary, Musculoskeletal, Integument, Lymphatics, Neurological, Rectal. status=normal (NSF/WNL) or abnormal with the vet note.`;
 
 const MODELS = ['claude-haiku-4-5', 'claude-3-5-haiku-latest', 'claude-3-5-sonnet-20241022'];
 const SYSTEM = 'Respond with a single JSON object only, no markdown, no commentary';
@@ -246,10 +249,13 @@ async function parseClinicExport(env, key, documentId, text, pageCount) {
   let labs = parseLabTables(text).map(normalizeLab);
   const visits = [];
   const vax = [...reminderVax];
+  const exams = [];
   blocks.forEach((b, i) => {
     visits.push({ clinic: null, date: b.date, reason: 'Visit', summary: b.text.slice(0, 1200) });
     parseInventoryVaccines(b.text, b.date).forEach((v) => vax.push(normalizeVax(v)));
     parseLabTables(b.text).forEach((l) => labs.push(normalizeLab({ ...l, collected_on: l.collected_on || b.date })));
+    const ex = parseExam(b.text, b.date, null);
+    if (ex) exams.push(ex);
     if (documentId && i % 8 === 0) {
       updateDoc(env, documentId, {
         ai_status: 'processing',
@@ -279,6 +285,7 @@ async function parseClinicExport(env, key, documentId, text, pageCount) {
       (parsed.vaccinations || []).forEach((v) => vax.push(normalizeVax(v)));
       (parsed.labs || []).forEach((l) => labs.push(normalizeLab(l)));
       (parsed.conditions || []).forEach((c) => conditions.push(c));
+      (parsed.exams || []).forEach((e) => exams.push(e));
     } catch (e) {
       console.log('[parse-pet-document] visit batch skip', bi, String(e));
     }
@@ -328,6 +335,7 @@ async function parseClinicExport(env, key, documentId, text, pageCount) {
     visits,
     labs: dedupeLabs,
     weights,
+    exams,
     weight: latestW,
     identity: header,
     page_count: pageCount,

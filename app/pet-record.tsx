@@ -85,7 +85,29 @@ async function fileToDataUrl(uri: string): Promise<string> {
 }
 
 type Tab = 'overview' | 'insurance' | 'medical';
-type MedicalHub = 'records' | 'labs' | 'history' | 'ai';
+
+const EXAM_SYSTEMS = [
+  'Subjective', 'Oral-Nasal-Throat', 'Ears', 'Eyes', 'Cardiovascular', 'Respiratory',
+  'Abdominal', 'Genitourinary', 'Musculoskeletal', 'Integument', 'Lymphatics', 'Neurological', 'Rectal',
+];
+const COAT_OPTIONS = ['shorthair', 'longhair', 'hairless'] as const;
+
+function inferCoat(breed?: string | null, notes?: string | null): string | null {
+  const q = `${breed || ''} ${notes || ''}`.toLowerCase();
+  if (/sphynx|peterbald|hairless|donskoy/.test(q)) return 'hairless';
+  if (/persian|himalayan|ragdoll|maine coon|norwegian forest|longhair|long-hair|fluffy/.test(q)) return 'longhair';
+  if (/siamese|shorthair|dsh|american sh|british sh|abyssinian|bengal|bombay/.test(q)) return 'shorthair';
+  return null;
+}
+
+function bcsTone(n?: number | null): 'ok' | 'due' | 'over' | 'unknown' {
+  if (n == null || Number.isNaN(n)) return 'unknown';
+  if (n <= 5 && n >= 4) return 'ok';
+  if (n >= 6 && n <= 7) return 'due';
+  if (n >= 8) return 'over';
+  if (n <= 3) return 'over';
+  return 'unknown';
+}
 
 interface Pet {
   id: string;
@@ -116,6 +138,7 @@ interface Pet {
   body_condition_score: number | null;
   target_weight_kg: number | null;
   previous_names: string[] | null;
+  coat?: string | null;
   ai_traits?: any;
 }
 
@@ -523,7 +546,10 @@ export default function PetRecordScreen() {
 
   const [pet, setPet] = useState<Pet | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
-  const [medicalHub, setMedicalHub] = useState<MedicalHub>('records');
+  const [openMed, setOpenMed] = useState<Record<string, boolean>>({ vaccinations: true });
+  const [examNote, setExamNote] = useState<string | null>(null);
+  const [petExams, setPetExams] = useState<any[]>([]);
+  const [detailsCoat, setDetailsCoat] = useState('');
   const [aiFindings, setAiFindings] = useState<any>(null);
   const [aiRuns, setAiRuns] = useState<any[]>([]);
   const [aiShared, setAiShared] = useState(false);
@@ -616,6 +642,7 @@ export default function PetRecordScreen() {
     labsCount: number;
     weightsCount?: number;
     pageCount?: number;
+    exams?: any[];
   } | null>(null);
   const parsedAttempted = useRef<Set<string>>(new Set());
   const [editableVax, setEditableVax] = useState<ExtractedVaccination[]>([]);
@@ -647,12 +674,18 @@ export default function PetRecordScreen() {
     setLoading(true);
     setError(null);
 
-    const { data: petData, error: petErr } = await supabase
+    const petRes = await supabase
       .from('pets')
-      .select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, body_condition_score, target_weight_kg, previous_names, ai_traits')
+      .select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, body_condition_score, target_weight_kg, previous_names, coat, ai_traits')
       .eq('id', petId)
       .maybeSingle();
 
+    let petData = petRes.data;
+    let petErr = petRes.error;
+    if (petErr && /coat/i.test(petErr.message || '')) {
+      const retry = await supabase.from('pets').select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, body_condition_score, target_weight_kg, previous_names, ai_traits').eq('id', petId).maybeSingle();
+      petData = retry.data as typeof petData; petErr = retry.error;
+    }
     if (petErr || !petData) {
       setError('Could not load this pet record.');
       setLoading(false);
@@ -798,18 +831,20 @@ export default function PetRecordScreen() {
       const { data: c2 } = await supabase.from('pet_colors').select('id, name, sort_order');
       setColors((c2 as ColorOption[]) || []);
     }
-    const [wRes, labRes, devRes, aiRes, deviceRes, chipRes] = await Promise.all([
+    const [wRes, labRes, devRes, aiRes, deviceRes, chipRes, examRes] = await Promise.all([
       supabase.from('weight_entries').select('weight_lb, measured_on, source, created_at').eq('pet_id', petId).order('measured_on', { ascending: false }).limit(40),
       supabase.from('lab_results').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(80),
       supabase.from('device_readings').select('*').eq('pet_id', petId).order('recorded_at', { ascending: false }).limit(80),
       supabase.from('ai_health_analyses').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(20),
       supabase.from('pet_devices').select('*').eq('pet_id', petId),
       supabase.from('pet_identifiers').select('microchip_number').eq('pet_id', petId).maybeSingle(),
+      supabase.from('pet_exams').select('*').eq('pet_id', petId).order('visit_date', { ascending: false }).limit(20),
     ]);
     setWeightEntries((wRes.data as any[]) || []);
     setLabRows((labRes.data as any[]) || []);
     setDeviceReadings((devRes.data as any[]) || []);
     setPetDevices((deviceRes.data as any[]) || []);
+    if (!examRes.error) setPetExams((examRes.data as any[]) || []);
     if (chipRes.error) setChipDenied(true);
     else setChipNumber(chipRes.data?.microchip_number || null);
     const runs = (aiRes.data as any[]) || [];
@@ -1079,6 +1114,7 @@ export default function PetRecordScreen() {
     setDetailsDob(pet?.date_of_birth || '');
     setDetailsSex(pet?.gender || '');
     setDetailsSpayed(Boolean(pet?.spayed_neutered));
+    setDetailsCoat(pet?.coat || pet?.ai_traits?.coat || inferCoat(pet?.breed_primary || pet?.breed, pet?.breed_notes) || '');
     setDetailsSheetVisible(true);
   };
 
@@ -1096,6 +1132,7 @@ export default function PetRecordScreen() {
       date_of_birth: detailsDob || null,
       gender: detailsSex || null,
       spayed_neutered: detailsSpayed,
+      coat: detailsCoat || null,
     }).eq('id', petId);
     setSavingDetails(false);
     if (error) { showBanner(error.message || 'Could not save details.'); return; }
@@ -1402,6 +1439,7 @@ export default function PetRecordScreen() {
       labsCount: labs.length,
       weightsCount: allWeights.length,
       pageCount: parsed.page_count || parsed.progress?.page_count,
+      exams: parsed.exams || [],
     });
   };
 
@@ -1649,6 +1687,19 @@ export default function PetRecordScreen() {
           notes: visit.notes || null,
           recorded_by: user.id,
         }));
+      }
+
+      for (const ex of extractionReview.exams || []) {
+        if (!ex.visit_date && !ex.vitals && !ex.systems) continue;
+        const { error } = await supabase.from('pet_exams').insert({
+          pet_id: petId,
+          visit_date: ex.visit_date || null,
+          clinic: ex.clinic || null,
+          vitals: ex.vitals || {},
+          systems: ex.systems || [],
+          source_document_id: sourceDocId,
+        });
+        if (error) errors.push(`Exam ${ex.visit_date || ''}: ${error.message}`);
       }
 
       for (const c of extractionReview.conditions || []) {
@@ -1912,6 +1963,36 @@ export default function PetRecordScreen() {
     ? pet.main_photo_url
     : (photos.find((g) => isUsablePhoto(g.photo_url))?.photo_url || null);
 
+  const lastExam = petExams[0] || null;
+  const prevExam = petExams[1] || null;
+  const labSeries = (matchers: string[]) => {
+    const rows = labRows.filter((r) => matchers.some((m) => new RegExp(m, 'i').test(String(r.analyte || r.name || ''))));
+    const sorted = [...rows].sort((a, b) => String(a.collected_on || a.created_at || '').localeCompare(String(b.collected_on || b.created_at || '')));
+    const nums = sorted.map((r) => parseFloat(r.value ?? r.value_num ?? r.value_text)).filter((n) => !Number.isNaN(n));
+    const cur = sorted[sorted.length - 1];
+    const prev = sorted[sorted.length - 2];
+    const curN = nums[nums.length - 1];
+    const prevN = nums[nums.length - 2];
+    return {
+      label: cur?.analyte || cur?.name || matchers[0],
+      value: cur ? String(cur.value ?? cur.value_text ?? cur.value_num ?? '—') : '—',
+      unit: cur?.unit || '',
+      delta: curN != null && prevN != null ? curN - prevN : null,
+      flag: String(cur?.flag || '').toLowerCase(),
+      nums,
+    };
+  };
+  const sdma = labSeries(['sdma']);
+  const creat = labSeries(['creatinine', 'creat']);
+  const kidney = sdma.nums.length ? sdma : creat;
+  const alt = labSeries(['\\balt\\b', 'alanine']);
+  const hct = labSeries(['hct', 'hematocrit', '\\bpcv\\b']);
+  const bcsVal = lastExam?.vitals?.bcs ?? pet.body_condition_score;
+  const prevBcs = prevExam?.vitals?.bcs;
+  const examWeight = lastExam?.vitals?.weight_lb;
+  const prevWeight = prevExam?.vitals?.weight_lb ?? (weightEntries[1]?.weight_lb);
+  const toggleMed = (k: string) => setOpenMed((s) => ({ ...s, [k]: !s[k] }));
+
   const runAiHealth = async () => {
     if (!pet || !petId) return;
     setAiBusy(true);
@@ -1964,7 +2045,7 @@ export default function PetRecordScreen() {
             notes: d.notes,
           };
         }),
-        device_readings: deviceReadings,
+        exams: petExams.map((e) => ({ visit_date: e.visit_date, clinic: e.clinic, vitals: e.vitals, systems: e.systems })),
       };
       console.log('[pet-health-analysis] payload', { weight_lb: record.weight_lb, conditions: record.conditions.length, entries: record.weight_entries.length });
       const res = await fetch('/api/pet-health-analysis', {
@@ -2058,15 +2139,15 @@ export default function PetRecordScreen() {
             <View style={styles.statusCard}>
               <View style={styles.tileRow}>
                 <StatusTile icon={Syringe} label="Vaccinated" sub={vaxSub} tone={vaxTone} onPress={() => {
-                  if (pendingDocs[0]) { setTab('medical'); setMedicalHub('records'); openConfirmFromParse(pendingDocs[0].id, pendingDocs[0].ai_summary || {}); }
-                  else { setTab('medical'); setMedicalHub('records'); }
+                  if (pendingDocs[0]) { setTab('medical'); openConfirmFromParse(pendingDocs[0].id, pendingDocs[0].ai_summary || {}); }
+                  else { setTab('medical'); }
                 }} />
                 <StatusTile icon={Heart} label="Spayed/Neutered" sub={pet.spayed_neutered ? 'Yes' : 'Not recorded'} tone={pet.spayed_neutered ? 'ok' : 'unknown'} />
                 <StatusTile icon={Shield} label="Microchipped" sub={chipNumber ? `••${String(chipNumber).slice(-4)}` : (pet.microchipped ? 'On file' : 'Not on file')} tone={(chipNumber || pet.microchipped) ? 'ok' : 'unknown'} />
               </View>
               <View style={styles.tileRow}>
                 <StatusTile icon={Scale} label="Weight" sub={weightSub} tone={weightTone} extraLink={canEdit ? 'Record' : undefined} extraOnPress={openWeight} />
-                <StatusTile icon={FlaskConical} label="FELV/FIV" sub={felvTone === 'unknown' ? 'Add' : felvSub} tone={felvTone} onPress={() => { setTab('medical'); setMedicalHub('labs'); }} />
+                <StatusTile icon={FlaskConical} label="FELV/FIV" sub={felvTone === 'unknown' ? 'Add' : felvSub} tone={felvTone} onPress={() => { setTab('medical'); }} />
                 <StatusTile icon={Activity} label="Activity" sub={activityTone === 'unknown' ? 'Connect' : activitySub} tone={activityTone} onPress={() => showBanner('Connect a litter box, feeder, or GPS collar from Me → Devices.', 'info')} />
               </View>
             </View>
@@ -2074,7 +2155,7 @@ export default function PetRecordScreen() {
               <View style={styles.ovCard}>
                 <View style={styles.ovCardHead}>
                   <Text style={styles.ovKicker}>NOTES FOR YOU</Text>
-                  <TouchableOpacity onPress={() => { setTab('medical'); setMedicalHub('history'); }}>
+                  <TouchableOpacity onPress={() => { setTab('medical'); }}>
                     <Text style={styles.linkTxt}>See all → History</Text>
                   </TouchableOpacity>
                 </View>
@@ -2146,7 +2227,7 @@ export default function PetRecordScreen() {
               <View style={styles.ovCard}>
                 <View style={styles.ovCardHead}>
                   <Text style={styles.ovKicker}>LATEST CONDITIONS</Text>
-                  <TouchableOpacity onPress={() => { setTab('medical'); setMedicalHub('records'); }}>
+                  <TouchableOpacity onPress={() => { setTab('medical'); }}>
                     <Text style={styles.linkTxt}>See all → Medical</Text>
                   </TouchableOpacity>
                 </View>
@@ -2158,7 +2239,7 @@ export default function PetRecordScreen() {
 
             <View style={styles.ovCard}>
               <View style={styles.ovCardHead}>
-                <Text style={styles.ovKicker}>DETAILS</Text>
+                <Text style={styles.ovKicker}>CHARACTERISTICS</Text>
                 {canEdit ? (
                   <TouchableOpacity onPress={openDetailsSheet}>
                     <Text style={styles.linkTxt}>Edit</Text>
@@ -2180,6 +2261,10 @@ export default function PetRecordScreen() {
                       </View>
                     ) : null}
                   </View>
+                </View>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>Coat</Text>
+                  <Text style={styles.detailV}>{titleCase(pet.coat || pet.ai_traits?.coat || inferCoat(pet.breed_primary || pet.breed, pet.breed_notes) || '') || '—'}</Text>
                 </View>
                 <View style={styles.detailTile}>
                   <Text style={styles.detailK}>Color</Text>
@@ -2323,52 +2408,102 @@ export default function PetRecordScreen() {
                 <Text style={styles.reviewBannerTxt}>Review all pending · {pendingDocs.length} document{pendingDocs.length === 1 ? '' : 's'}</Text>
               </TouchableOpacity>
             ) : null}
-            <View style={styles.healthHero}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Text style={styles.healthKicker}>{(pet.name || 'PET').toUpperCase()} · HEALTH SUMMARY</Text>
-                <Text style={[styles.healthStable, healthVerdict === 'MONITOR' && { color: '#FCE9C8' }]}>{healthVerdict}</Text>
-              </View>
-              <View style={styles.healthStats}>
-                <View style={styles.healthStat}>
-                  <Text style={styles.healthN}>{visitsThisYear}</Text>
-                  <Text style={styles.healthL}>Visits</Text>
-                </View>
-                <View style={styles.healthStat}>
-                  <Text style={styles.healthN}>{activeConditions.length}</Text>
-                  <Text style={styles.healthL}>Conditions</Text>
-                </View>
-                <View style={styles.healthStat}>
-                  <Text style={styles.healthN}>{weightDisplay}</Text>
-                  <Text style={styles.healthL}>{targetLb != null ? 'Weight / target' : 'Weight'}</Text>
-                </View>
-              </View>
-              {weightEntries.length > 0 ? (
-                <View style={{ marginTop: 10 }}>
-                  <WeightLineChart points={weightEntries.slice().reverse()} targetLb={targetLb} height={72} compact />
-                </View>
-              ) : null}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={styles.ovKicker}>{(pet.name || 'PET').toUpperCase()} · MEDICAL</Text>
+              <Text style={[styles.healthStable, { color: healthVerdict === 'MONITOR' ? Colors.accent : Colors.teal }]}>{healthVerdict}</Text>
             </View>
-            {vaccinations.some((v) => v.confirmed === false) ? (
-              <View style={styles.reviewBox}>
-                <Text style={styles.reviewTitle}>AI extracted items — confirm they are correct</Text>
-                {vaccinations.filter((v) => v.confirmed === false).map((v) => (
-                  <View key={v.id} style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
-                    <Text style={styles.emptyText}>{[v.brand, v.vaccine, v.dose].filter(Boolean).join(' · ')}</Text>
-                    <TouchableOpacity onPress={async () => { await supabase.from('pet_vaccinations').update({ confirmed: true }).eq('id', v.id); load(); }}>
-                      <Text style={{ fontFamily: Fonts.bold, color: Colors.tealDark }}>Confirm</Text>
-                    </TouchableOpacity>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+              {[
+                { k: 'Weight', v: latestLb != null ? `${latestLb} lb` : '—', nums: weightEntries.slice().reverse().map((w) => w.weight_lb), delta: weightEntries[0] && weightEntries[1] ? weightEntries[0].weight_lb - weightEntries[1].weight_lb : null, tone: weightTone },
+                { k: 'BCS', v: bcsVal != null ? String(bcsVal) : '—', nums: petExams.map((e) => Number(e.vitals?.bcs)).filter((n) => Number.isFinite(n)).reverse(), delta: bcsVal != null && prevBcs != null ? bcsVal - prevBcs : null, tone: bcsTone(bcsVal) },
+                { k: kidney.label || 'SDMA', v: kidney.value === '—' ? '—' : `${kidney.value}${kidney.unit ? ` ${kidney.unit}` : ''}`, nums: kidney.nums, delta: kidney.delta, tone: kidney.flag === 'high' || kidney.flag === 'abnormal' ? 'over' : kidney.nums.length ? 'ok' : 'unknown' },
+                { k: 'ALT', v: alt.value === '—' ? '—' : `${alt.value}${alt.unit ? ` ${alt.unit}` : ''}`, nums: alt.nums, delta: alt.delta, tone: alt.flag === 'high' || alt.flag === 'abnormal' ? 'over' : alt.nums.length ? 'ok' : 'unknown' },
+                { k: 'HCT', v: hct.value === '—' ? '—' : `${hct.value}${hct.unit ? ` ${hct.unit}` : ''}`, nums: hct.nums, delta: hct.delta, tone: hct.flag === 'low' ? 'due' : hct.flag === 'high' ? 'over' : hct.nums.length ? 'ok' : 'unknown' },
+                { k: 'Activity', v: visits7 ? `${visits7}/7d` : '—', nums: [], delta: null, tone: visits7 ? 'ok' : 'unknown' },
+              ].map((m) => (
+                <View key={m.k} style={[styles.ovCard, { width: '48%', gap: 6 }]}>
+                  <Text style={styles.detailK}>{m.k}</Text>
+                  <Text style={[styles.detailV, { color: m.tone === 'over' ? Colors.critical : m.tone === 'due' ? Colors.accent : Colors.navy }]}>{m.v}</Text>
+                  {m.delta != null ? <Text style={styles.ovFoot}>{m.delta > 0 ? '▲' : m.delta < 0 ? '▼' : '•'} {Math.abs(Math.round(m.delta * 10) / 10)} vs prior</Text> : null}
+                  {m.nums.length > 1 ? <LabSparkline values={m.nums} color={m.tone === 'over' ? Colors.critical : Colors.navy} /> : null}
+                </View>
+              ))}
+            </View>
+            <View style={styles.ovCard}>
+              <Text style={styles.ovKicker}>LAST EXAM{lastExam ? ` · ${formatDate(lastExam.visit_date)} · ${lastExam.clinic || 'Clinic'}` : ''}</Text>
+              {lastExam ? (
+                <>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+                    {[
+                      ['Temp', lastExam.vitals?.temp_f != null ? `${lastExam.vitals.temp_f}°F` : '—'],
+                      ['HR', lastExam.vitals?.hr != null ? String(lastExam.vitals.hr) : '—'],
+                      ['RR', lastExam.vitals?.rr != null ? String(lastExam.vitals.rr) : '—'],
+                      ['BCS', lastExam.vitals?.bcs != null ? String(lastExam.vitals.bcs) : '—'],
+                      ['Pain', lastExam.vitals?.pain != null ? String(lastExam.vitals.pain) : '—'],
+                      ['Hydration', lastExam.vitals?.hydration || '—'],
+                    ].map(([k, v]) => (
+                      <View key={k} style={{ width: '30%', gap: 2 }}>
+                        <Text style={styles.detailK}>{k}</Text>
+                        <Text style={[styles.detailV, k === 'BCS' ? { color: bcsTone(lastExam.vitals?.bcs) === 'ok' ? Colors.tealDark : bcsTone(lastExam.vitals?.bcs) === 'due' ? Colors.accent : bcsTone(lastExam.vitals?.bcs) === 'over' ? Colors.critical : Colors.navy } : null]}>{v}</Text>
+                      </View>
+                    ))}
                   </View>
-                ))}
+                  {(bcsVal != null && prevBcs != null) || (latestLb != null && prevWeight != null) ? (
+                    <Text style={styles.ovFoot}>
+                      {bcsVal != null && prevBcs != null ? `BCS ${prevBcs} → ${bcsVal}` : ''}
+                      {latestLb != null && prevWeight != null ? `  ·  weight ${prevWeight} → ${latestLb} lb` : ''}
+                    </Text>
+                  ) : null}
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                    {(lastExam.systems?.length ? lastExam.systems : EXAM_SYSTEMS.map((name) => ({ name, status: 'normal', note: null }))).map((s: any) => (
+                      <TouchableOpacity key={s.name} onPress={() => setExamNote(s.note || (s.status === 'abnormal' ? 'Abnormal — see visit notes' : 'Normal'))} style={{ backgroundColor: s.status === 'abnormal' ? Colors.criticalBg : Colors.tealBg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 }}>
+                        <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: s.status === 'abnormal' ? Colors.critical : Colors.tealDark }}>{s.name}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  {examNote ? <Text style={styles.ovFoot}>{examNote}</Text> : null}
+                </>
+              ) : (
+                <Text style={styles.emptyText}>No exam on file yet. Apply a clinic PDF to extract vitals and systems.</Text>
+              )}
+            </View>
+            <View style={styles.ovCard}>
+              <Text style={styles.ovKicker}>AI NOTES</Text>
+              <View style={styles.aiDisclaimer}>
+                <Text style={styles.aiDisclaimerTxt}>AI is not a veterinarian. Findings are for your vet — no diagnosis from Rescue Army.</Text>
               </View>
-            ) : null}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hubRow}>
-              {([['records','Records'],['labs','Labs'],['history','History'],['ai','AI Health']] as const).map(([id, label]) => (
-                <TouchableOpacity key={id} style={[styles.pillTab, medicalHub === id && styles.pillTabOn]} onPress={() => setMedicalHub(id)}>
-                  <Text style={[styles.pillTabTxt, medicalHub === id && styles.pillTabTxtOn]}>{label}</Text>
+              {aiFindings ? (
+                <View style={{ gap: 8 }}>
+                  <Text style={styles.docTitle}>Run {aiFindings.run_number || 1} · {formatDate(aiFindings.ran_at)}</Text>
+                  {aiRuns[1] ? <Text style={styles.ovFoot}>Changed since last note · Run {aiRuns[1].run_number}</Text> : null}
+                  {(aiFindings.findings || []).slice(0, 4).map((f: any, i: number) => (
+                    <Text key={i} style={styles.docClinic}>{f.title} — {f.body || f.detail}</Text>
+                  ))}
+                  {aiFindings.conclusion ? <Text style={styles.docTitle}>{aiFindings.conclusion}</Text> : null}
+                </View>
+              ) : <Text style={styles.emptyText}>No AI note yet.</Text>}
+              {aiRuns.slice(1).map((r) => (
+                <TouchableOpacity key={r.id} onPress={() => setAiFindings({ ...r, ran_at: r.created_at, conclusion: r.conclusion || r.summary })} style={{ paddingVertical: 6 }}>
+                  <Text style={styles.linkTxt}>Run {r.run_number} · {formatDate(r.created_at)} ▾</Text>
                 </TouchableOpacity>
               ))}
-            </ScrollView>
-            {medicalHub === 'records' && (
+              <TouchableOpacity style={[styles.aiPrimaryBtn, aiBusy && styles.btnDisabled]} disabled={aiBusy} onPress={runAiHealth} activeOpacity={0.85}>
+                {aiBusy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.aiPrimaryTxt}>Run AI Health</Text>}
+              </TouchableOpacity>
+              {aiFindings ? (
+                <TouchableOpacity style={styles.aiShareBtn} onPress={async () => {
+                  if (aiFindings.id) await supabase.from('ai_health_analyses').update({ shared_with_vet_at: new Date().toISOString() }).eq('id', aiFindings.id);
+                  setAiShared(true);
+                }}>
+                  <Text style={styles.aiShareTxt}>{aiShared ? 'Shared with vet ✓' : 'Share with vet'}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            <TouchableOpacity onPress={() => toggleMed('records')} style={styles.ovCardHead}>
+              <Text style={styles.ovKicker}>RECORDS</Text>
+              <Text style={styles.linkTxt}>{openMed.records === false ? 'Show' : 'Hide'}</Text>
+            </TouchableOpacity>
+            {openMed.records !== false && (
             <View>
 
             {/* Conditions */}
@@ -2657,7 +2792,11 @@ export default function PetRecordScreen() {
             )}
           </View>
             )}
-            {medicalHub === 'labs' && (
+            <TouchableOpacity onPress={() => toggleMed('labs')} style={styles.ovCardHead}>
+              <Text style={styles.ovKicker}>LABS</Text>
+              <Text style={styles.linkTxt}>{openMed.labs === false ? 'Show' : 'Hide'}</Text>
+            </TouchableOpacity>
+            {openMed.labs !== false && (
               <View>
                 {(() => {
                   const groups = new Map<string, any[]>();
@@ -2702,7 +2841,11 @@ export default function PetRecordScreen() {
                 })()}
               </View>
             )}
-            {medicalHub === 'history' && (
+            <TouchableOpacity onPress={() => toggleMed('visits')} style={styles.ovCardHead}>
+              <Text style={styles.ovKicker}>VISITS</Text>
+              <Text style={styles.linkTxt}>{openMed.visits === false ? 'Show' : 'Hide'}</Text>
+            </TouchableOpacity>
+            {openMed.visits !== false && (
             <View>
               {weightEntries.length > 0 ? (
                 <View style={{ backgroundColor: Colors.white, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: Colors.border, marginBottom: 14 }}>
@@ -2739,7 +2882,7 @@ export default function PetRecordScreen() {
             )}
           </View>
             )}
-            {medicalHub === 'ai' && (
+            {false && (
               <View style={{ gap: 12 }}>
                 <View style={styles.aiDisclaimer}>
                   <Text style={styles.aiDisclaimerTxt}>AI is not a veterinarian. Findings are for your vet — no diagnosis or treatment from Rescue Army.</Text>
@@ -3158,6 +3301,14 @@ export default function PetRecordScreen() {
                 {['Female', 'Male'].map((s) => (
                   <TouchableOpacity key={s} style={[styles.editActionBtn, detailsSex.toLowerCase() === s.toLowerCase() && { backgroundColor: Colors.navy }]} onPress={() => setDetailsSex(s)}>
                     <Text style={[styles.editActionText, detailsSex.toLowerCase() === s.toLowerCase() && { color: Colors.white }]}>{s === 'Female' ? '♀ Female' : '♂ Male'}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={[styles.editActionText, { marginTop: 14 }]}>Coat</Text>
+              <View style={styles.pillRow}>
+                {COAT_OPTIONS.map((c) => (
+                  <TouchableOpacity key={c} style={[styles.pill, detailsCoat === c && styles.pillActive]} onPress={() => setDetailsCoat(c)}>
+                    <Text style={[styles.pillText, detailsCoat === c && styles.pillTextActive]}>{titleCase(c)}</Text>
                   </TouchableOpacity>
                 ))}
               </View>

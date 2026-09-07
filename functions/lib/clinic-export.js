@@ -194,3 +194,36 @@ export function mergeParsed(parts) {
   return out;
 }
 
+export const EXAM_SYSTEMS = [
+  'Subjective', 'Oral-Nasal-Throat', 'Ears', 'Eyes', 'Cardiovascular', 'Respiratory',
+  'Abdominal', 'Genitourinary', 'Musculoskeletal', 'Integument', 'Lymphatics', 'Neurological', 'Rectal',
+];
+
+function examNum(v) {
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function parseExam(text, date, clinic) {
+  const slice = String(text || '').slice(0, 8000);
+  const vitals = {
+    temp_f: examNum((slice.match(/(?:temperature|temp)\s*[:=]?\s*(\d{2,3}(?:\.\d)?)\s*(?:°|deg)?\s*F/i) || [])[1]),
+    hr: examNum((slice.match(/(?:heart rate|HR|pulse)\s*[:=]?\s*(\d{2,3})/i) || [])[1]),
+    rr: examNum((slice.match(/(?:respiratory rate|resp(?:iratory)? rate|RR)\s*[:=]?\s*(\d{1,3})/i) || [])[1]),
+    bcs: examNum((slice.match(/BCS\s*[:=]?\s*(\d(?:\.\d)?)/i) || [])[1]),
+    pain: examNum((slice.match(/pain(?: score)?\s*[:=]?\s*(\d)/i) || [])[1]),
+    hydration: ((slice.match(/hydrat(?:ion|ed)\s*[:=]?\s*([A-Za-z-]{3,24})/i) || [])[1] || '').trim() || null,
+  };
+  const systems = EXAM_SYSTEMS.map((name) => {
+    const key = name.split(/[- ]/)[0];
+    const re = new RegExp(`${key}[^\\n]{0,140}(NSF|WNL|normal|abnormal|enlarged|inflamed|unremarkable)`, 'i');
+    const m = slice.match(re);
+    if (!m) return { name, status: 'normal', note: null };
+    const status = /abnormal|enlarged|inflamed/i.test(m[1]) ? 'abnormal' : 'normal';
+    return { name, status, note: m[0].slice(0, 180) };
+  });
+  const has = vitals.bcs || vitals.temp_f || vitals.hr || /physical exam|PE:|BCS/i.test(slice);
+  if (!has) return null;
+  return { visit_date: date || null, clinic: clinic || null, vitals, systems };
+}
+

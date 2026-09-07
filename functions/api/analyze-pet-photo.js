@@ -1,3 +1,12 @@
+
+function decodedBytes(b64) {
+  const raw = String(b64 || '').replace(/^data:[^;]+;base64,/, '');
+  return Math.floor(raw.length * 0.75);
+}
+function tooLarge(b64, max) {
+  return decodedBytes(b64) > max;
+}
+
 function getKey(env) {
   if (!env) return null;
   if (env.ANTHROPIC_API_KEY) return env.ANTHROPIC_API_KEY;
@@ -32,6 +41,7 @@ export async function onRequestPost(context) {
     const key = getKey(context.env);
     if (!imageBase64) return Response.json({ analyzed: false, error: 'No photo' }, { headers });
     if (!key) return Response.json({ analyzed: false, error: 'AI key missing on Cloudflare' }, { headers });
+    if (tooLarge(imageBase64, 9_500_000)) return Response.json({ analyzed: false, error: 'too_large', labeled: 'Image too large — please re-upload (max 10 MB)' }, { headers, status: 413 });
     const s = String(imageBase64);
     const prefix = s.slice(0, 40).toLowerCase();
     const raw = s.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');

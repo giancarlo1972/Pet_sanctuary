@@ -2266,7 +2266,7 @@ function getSevText(sev: string): string {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
-  col: { width: '100%', maxWidth: 880, alignSelf: 'center', flex: 1 },
+  col: { width: '100%', maxWidth: 720, alignSelf: 'center', flex: 1 },
   heroWrap: { aspectRatio: 4/3, borderRadius: 16, overflow: 'hidden', backgroundColor: Colors.surface, marginHorizontal: 16, marginTop: 12 },
   hero: { width: '100%', height: '100%' },
   changePhoto: { position: 'absolute', right: 12, bottom: 12, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(38,38,94,0.85)', alignItems: 'center', justifyContent: 'center' },

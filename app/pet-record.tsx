@@ -64,6 +64,7 @@ import AppHeader from '@/components/AppHeader';
 import { Page, CONTENT_MAX } from '@/components/Page';
 import { WeightLineChart, LabSparkline } from '@/components/PetCharts';
 import MedicalDashboard from '@/components/MedicalDashboard';
+import VetExamCard from '@/components/VetExamCard';
 import { Card, InnerTile } from '@/components/Card';
 import { extractPdfText } from '@/lib/pdf-text';
 import { SearchablePicker } from '@/components/SearchablePicker';
@@ -2362,6 +2363,16 @@ export default function PetRecordScreen() {
           {pet.gender ? <Text style={styles.petMeta}>{titleCase(pet.gender)}</Text> : null}
         </View>
 
+        <VetExamCard
+          exam={lastExam}
+          exams={petExams}
+          hints={[
+            ...activeConditions.map((c) => `${c.name} ${c.severity || ''}`),
+            ...medicalRecords.slice(0, 8).map((m) => `${m.title || ''} ${m.details || ''}`),
+          ].join(' ')}
+          onUpload={() => setTab('medical')}
+        />
+
         {/* Tabs */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabBar}>
           {TABS.map((t) => {
@@ -2455,7 +2466,7 @@ export default function PetRecordScreen() {
               <Text style={styles.ovFoot}>Device readings feed AI Health so patterns (weight, litter-box visits) show up in the analysis.</Text>
             </Card>
 
-            <Card identity>
+            <Card>
               <Text style={styles.ovKicker}>MICROCHIP</Text>
               <Text style={styles.chipMono}>{chipNumber || (pet.microchipped ? '•••• request access' : 'No microchip on file')}</Text>
               <Text style={styles.ovFoot}>Visible to the owner, verified org staff, and an active foster. Others must request access. Storing it here doesn’t register the chip — verify at the AAHA universal lookup after a move.</Text>

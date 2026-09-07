@@ -206,6 +206,7 @@ export function mergeParsed(parts) {
 export const EXAM_SYSTEMS = [
   'Subjective', 'Oral-Nasal-Throat', 'Ears', 'Eyes', 'Cardiovascular', 'Respiratory',
   'Abdominal', 'Genitourinary', 'Musculoskeletal', 'Integument', 'Lymphatics', 'Neurological', 'Rectal',
+  'Mucous membranes',
 ];
 
 function examNum(v) {
@@ -222,12 +223,13 @@ export function parseExam(text, date, clinic) {
     bcs: examNum((slice.match(/BCS\s*[:=]?\s*(\d(?:\.\d)?)/i) || [])[1]),
     pain: examNum((slice.match(/pain(?: score)?\s*[:=]?\s*(\d)/i) || [])[1]),
     hydration: ((slice.match(/hydrat(?:ion|ed)\s*[:=]?\s*([A-Za-z-]{3,24})/i) || [])[1] || '').trim() || null,
+    mm: ((slice.match(/mucous membranes?\s*[:=]?\s*(pink|pale|white|icteric|cyanotic|injected)/i) || slice.match(/\bMM\s*[:=]?\s*(pink|pale|white|icteric|cyanotic)/i) || [])[1] || '').trim() || null,
   };
   const systems = EXAM_SYSTEMS.map((name) => {
     const key = name.split(/[- ]/)[0];
     const re = new RegExp(`${key}[^\\n]{0,140}(NSF|WNL|normal|abnormal|enlarged|inflamed|unremarkable)`, 'i');
     const m = slice.match(re);
-    if (!m) return { name, status: 'normal', note: null };
+    if (!m) return { name, status: 'not_examined', note: null };
     const status = /abnormal|enlarged|inflamed/i.test(m[1]) ? 'abnormal' : 'normal';
     return { name, status, note: m[0].slice(0, 180) };
   });

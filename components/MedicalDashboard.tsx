@@ -6,11 +6,7 @@ import { AreaChart, HealthRing, RefBand } from '@/components/MedicalCharts';
 import { LabSparkline as MiniSpark } from '@/components/PetCharts';
 import { SourceBadge } from '@/components/SourceBadge';
 import { Card, InnerTile } from '@/components/Card';
-
-export const EXAM_PILLS = [
-  'Oral-Nasal-Throat', 'Ears', 'Eyes', 'Cardiovascular', 'Respiratory', 'Abdominal',
-  'Genitourinary', 'Musculoskeletal', 'Integument', 'Lymphatics', 'Neurological', 'Rectal',
-];
+export { EXAM_PILLS } from '@/components/VetExamCard';
 
 export function classifyLab(name: string): 'Hematology' | 'Chemistry' | 'Endocrinology' | 'Urinalysis' {
   const q = (name || '').toLowerCase();
@@ -54,22 +50,7 @@ export default function MedicalDashboard(props: {
   onShareAi: () => void;
   onSelectRun: (r: any) => void;
 }) {
-  const [sys, setSys] = useState<string | null>(null);
   const [labOpen, setLabOpen] = useState<Record<string, boolean>>({ Hematology: true, Chemistry: true, Endocrinology: true, Urinalysis: true });
-  const exam = props.lastExam;
-  const systems = useMemo(() => {
-    const from = exam?.systems || [];
-    return EXAM_PILLS.map((name) => {
-      const hit = from.find((s: any) => String(s.name || '').toLowerCase().includes(name.split(/[- ]/)[0].toLowerCase()) || String(s.name) === name);
-      const status = (hit?.status || 'normal').toLowerCase();
-      return { name, status, note: hit?.note || null };
-    });
-  }, [exam]);
-  const sysHistory = (name: string) =>
-    props.exams.map((e) => {
-      const hit = (e.systems || []).find((s: any) => String(s.name || '').toLowerCase().includes(name.split(/[- ]/)[0].toLowerCase()));
-      return hit ? { date: e.visit_date, status: hit.status, note: hit.note } : null;
-    }).filter(Boolean) as any[];
 
   const labItems = useMemo(() => {
     const groups = new Map<string, any[]>();
@@ -191,29 +172,6 @@ export default function MedicalDashboard(props: {
           </View>
         </InnerTile>
       </View>
-
-      <Card identity>
-        <Text style={styles.kicker}>VET EXAM{exam ? ` · ${formatDate(exam.visit_date)}` : ''}</Text>
-        <View style={styles.pillGrid}>
-          {systems.map((s) => {
-            const bg = s.status === 'abnormal' ? Colors.coralBg : s.status === 'watch' || s.status === 'monitoring' ? Colors.standardBg : Colors.tealBg;
-            const fg = s.status === 'abnormal' ? Colors.coral : s.status === 'watch' || s.status === 'monitoring' ? Colors.accentDark : Colors.tealDark;
-            return (
-              <TouchableOpacity key={s.name} onPress={() => setSys(sys === s.name ? null : s.name)} style={[styles.sysPill, { backgroundColor: bg }]}>
-                <Text style={[styles.sysTxt, { color: fg }]}>{s.name}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-        {sys ? (
-          <View style={{ marginTop: 8, gap: 4 }}>
-            <Text style={styles.body}>{systems.find((s) => s.name === sys)?.note || 'Normal — no extra note.'}</Text>
-            {sysHistory(sys).map((h, i) => (
-              <Text key={i} style={styles.foot}>{formatDate(h.date)} · {h.status}{h.note ? ` — ${h.note}` : ''}</Text>
-            ))}
-          </View>
-        ) : null}
-      </Card>
 
       {props.weightPts.length >= 1 ? (
       <Card>

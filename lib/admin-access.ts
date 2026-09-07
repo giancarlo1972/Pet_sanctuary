@@ -21,7 +21,7 @@ export function isPlatformAdmin(role?: string | null, email?: string | null) {
   const e = (email || '').toLowerCase().trim();
   if (!e) return false;
   if (EMAIL_OK.has(e)) return true;
-  if (e.endsWith('@ruuma.net')) return true;
+  if (e.endsWith('@ruuma.net') || e.endsWith('@rescue-army.com')) return true;
   if (e.includes('giancarlo.pereira')) return true;
   return false;
 }

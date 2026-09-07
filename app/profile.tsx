@@ -359,6 +359,22 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
         setPastPets(mapped.filter((r) => r.ended_on));
       }
 
+      const { data: ownedPets } = await supabase
+        .from('pets')
+        .select('id, name, species, breed, main_photo_url')
+        .eq('owner_id', userId);
+      if (ownedPets && ownedPets.length) {
+        setActivePets((prev) => {
+          const have = new Set(prev.map((r) => r.pet_id));
+          const extra = ownedPets.filter((p: any) => !have.has(p.id)).map((p: any) => ({
+            id: `own-${p.id}`, pet_id: p.id, pet_name: p.name || 'Unknown',
+            pet_photo: p.main_photo_url || null, species: p.species, breed: p.breed,
+            relationship: 'own', started_on: null, ended_on: null,
+          }));
+          return extra.length ? [...extra, ...prev] : prev;
+        });
+      }
+
       // === Due Soon reminders (my_pet_reminders view) ===
       const { data: reminderData } = await supabase
         .from('my_pet_reminders')
@@ -586,6 +602,12 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
   const isVerified = verifications.id_verified && verifications.phone_verified;
   const isOwner = isPlatformAdmin(profile?.role, profile?.email || email);
   const isOrgAdmin = isOwner || profile?.role === 'admin' || profile?.role === 'shelter';
+  const ROLE_LABEL: Record<string, string> = {
+    admin: 'Administrator', platform_admin: 'Administrator',
+    shelter: 'Org admin', org_admin: 'Org admin',
+    first_responder: 'First responder', volunteer: 'Volunteer', member: 'Member',
+  };
+  const roleLabel = ROLE_LABEL[(profile?.role || 'member').toLowerCase()] || 'Member';
 
 
   const trainingPill = verifications.responder_training === 'passed'
@@ -596,30 +618,8 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
 
   return (
     <>
-      {/* Scrim */}
-      {drawerOpen && (
-        <Animated.View style={[styles.scrim, { opacity: scrimAnim }]} pointerEvents="auto">
-          <TouchableOpacity style={styles.scrimTouchable} activeOpacity={1} onPress={closeDrawer} />
-        </Animated.View>
-      )}
-
-      {/* Drawer */}
-      <Animated.View style={[styles.drawer, { width: drawerWidth, transform: [{ translateX: slideAnim }] }]}>
-        <SafeAreaView style={styles.drawerInner}>
-          {/* Header */}
-          <View style={styles.drawerHeader}>
-            <TouchableOpacity style={styles.closeButton} onPress={closeDrawer}>
-              <X color={Colors.text} size={22} />
-            </TouchableOpacity>
-            <Text style={styles.drawerTitle}>Me</Text>
-            <TouchableOpacity style={styles.settingsButton} onPress={() => router.push('/inbox' as any)}>
-              <MessageCircle color={Colors.coral} size={20} />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.settingsButton} onPress={() => router.push('/edit-profile')}>
-              <Settings color={Colors.coral} size={20} />
-            </TouchableOpacity>
-          </View>
-
+      <View style={styles.container}>
+          <AppHeader title="Me" />
           <Page scroll={false}>
           <ScrollView style={styles.drawerScroll} showsVerticalScrollIndicator={false} contentContainerStyle={styles.drawerContent}>
             {loadError && (
@@ -651,26 +651,131 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>My Role</Text>
               <View style={styles.roleRow}>
-                {['Member','First responder','Volunteer','Org admin','Administrator'].map((label) => {
-                  const on = (label === 'Administrator' && isOwner) || (label === 'Org admin' && isOrgAdmin && !isOwner);
-                  return (
-                    <View key={label} style={[styles.roleChip, on && styles.roleChipOn]}>
-                      <Text style={[styles.roleChipTxt, on && styles.roleChipTxtOn]}>{label}</Text>
-                    </View>
-                  );
-                })}
+                <View style={[styles.roleChip, styles.roleChipOn]}>
+                  <Text style={[styles.roleChipTxt, styles.roleChipTxtOn]}>{roleLabel}</Text>
+                </View>
               </View>
               {isOwner ? (
-                <TouchableOpacity style={styles.adminCta} onPress={() => { closeDrawer(); router.replace('/admin'); }} activeOpacity={0.85}>
+                <TouchableOpacity style={styles.adminCta} onPress={() => { router.replace('/admin'); }} activeOpacity={0.85}>
                   <Shield color={Colors.white} size={18} />
                   <Text style={styles.adminCtaTxt}>Open admin console</Text>
                 </TouchableOpacity>
               ) : null}
               {manageOrg ? (
-                <TouchableOpacity style={styles.orgCta} onPress={() => { closeDrawer(); router.push('/org-admin'); }} activeOpacity={0.85}>
+                <TouchableOpacity style={styles.orgCta} onPress={() => { router.push('/org-admin'); }} activeOpacity={0.85}>
                   <Text style={styles.orgCtaTxt}>Manage {manageOrg.name}</Text>
                 </TouchableOpacity>
               ) : null}
+            </View>
+
+            {/* My Pets */}
+            <View style={styles.section}>
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.sectionTitle}>My Pets</Text>
+                <TouchableOpacity style={styles.addBtn} onPress={() => { router.push('/add-pet'); }} activeOpacity={0.85}>
+                  <Text style={styles.addBtnText}>+ Add</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Due Soon strip */}
+              {reminders.length > 0 && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.remindersStrip} contentContainerStyle={{ gap: 8, paddingRight: 16 }}>
+                  {reminders.map((r, i) => {
+                    const isOverdue = r.urgency === 'overdue';
+                    const color = isOverdue ? Colors.critical : Colors.urgent;
+                    const bg = isOverdue ? Colors.criticalBg : Colors.urgentBg;
+                    const dayLabel = isOverdue
+                      ? `${Math.abs(r.days_until_due)}d overdue`
+                      : `due in ${r.days_until_due}d`;
+                    return (
+                      <TouchableOpacity
+                        key={`${r.pet_id}-${i}`}
+                        style={[styles.reminderChip, { backgroundColor: bg, borderColor: `${color}33` }]}
+                        onPress={() => { router.push(`/pet-record?petId=${r.pet_id}`); }}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={styles.reminderPetName} numberOfLines={1}>{r.pet_name}</Text>
+                        <Text style={styles.reminderSep}>—</Text>
+                        <Text style={[styles.reminderLabel, { color }]} numberOfLines={1}>{r.label}</Text>
+                        <Text style={[styles.reminderDue, { color }]}>{dayLabel}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              )}
+
+              {activePets.length === 0 && pastPets.length === 0 ? (
+                <View style={styles.card}>
+                  <Text style={styles.emptyText}>No pets yet</Text>
+                  <TouchableOpacity
+                    style={styles.emptyAddBtn}
+                    onPress={() => { router.push('/add-pet'); }}
+                    activeOpacity={0.85}
+                  >
+                    <PawPrint color={Colors.white} size={16} />
+                    <Text style={styles.emptyAddBtnText}>Add your first pet</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <>
+                  {activePets.map((p) => (
+                    <TouchableOpacity
+                      key={p.id}
+                      style={styles.petRelCard}
+                      onPress={() => { router.push(`/pet-record?petId=${p.pet_id}`); }}
+                      activeOpacity={0.85}
+                    >
+                      {p.pet_photo ? (
+                        <SignedImage path={p.pet_photo} style={styles.petRelPhoto} />
+                      ) : (
+                        <View style={[styles.petRelPhoto, styles.petRelPhotoFallback]}>
+                          <PawPrint color={Colors.textTertiary} size={16} />
+                        </View>
+                      )}
+                      <View style={styles.petRelInfo}>
+                        <Text style={styles.petRelName}>{p.pet_name}</Text>
+                        <Text style={styles.petRelMeta}>{[p.species, p.breed].filter(Boolean).join(' · ') || 'Pet'}</Text>
+                        <Text style={styles.petRelMeta}>{[p.species, p.breed].filter(Boolean).join(' · ') || 'Pet'}</Text>
+                      </View>
+                      <View style={[styles.relPill, (p.relationship||'').includes('foster') && styles.relPillFoster, (p.relationship||'').includes('sponsor') && styles.relPillSponsor]}>
+                        <Text style={styles.relPillTxt}>{(p.relationship||'own').toLowerCase().includes('foster') ? 'I FOSTER' : (p.relationship||'').toLowerCase().includes('sponsor') ? 'I SPONSOR' : 'I OWN'}</Text>
+                      </View>
+                      <ChevronRight color={Colors.textTertiary} size={18} />
+                    </TouchableOpacity>
+                  ))}
+                  {pastPets.length > 0 && (
+                    <TouchableOpacity
+                      style={styles.pastToggle}
+                      onPress={() => setShowPastPets(!showPastPets)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.pastToggleText}>{showPastPets ? 'Hide' : 'Show'} Previously ({pastPets.length})</Text>
+                    </TouchableOpacity>
+                  )}
+                  {showPastPets && pastPets.map((p) => (
+                    <TouchableOpacity
+                      key={p.id}
+                      style={[styles.petRelCard, styles.petRelCardPast]}
+                      onPress={() => { router.push(`/pet-record?petId=${p.pet_id}`); }}
+                      activeOpacity={0.85}
+                    >
+                      {p.pet_photo ? (
+                        <SignedImage path={p.pet_photo} style={styles.petRelPhoto} />
+                      ) : (
+                        <View style={[styles.petRelPhoto, styles.petRelPhotoFallback]}>
+                          <PawPrint color={Colors.textTertiary} size={16} />
+                        </View>
+      )}
+                      <View style={styles.petRelInfo}>
+                        <Text style={styles.petRelName}>{p.pet_name}</Text>
+                        <Text style={styles.petRelMeta}>{[p.species, p.breed].filter(Boolean).join(' · ') || 'Pet'}</Text>
+                        <Text style={styles.petRelRel}>{p.relationship.charAt(0).toUpperCase() + p.relationship.slice(1)} · {formatShortDate(p.started_on)} – {formatShortDate(p.ended_on)}</Text>
+                      </View>
+                      <ChevronRight color={Colors.textTertiary} size={18} />
+                    </TouchableOpacity>
+                  ))}
+                </>
+              )}
             </View>
 
             {/* Trust & Verification */}
@@ -906,116 +1011,6 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
               </View>
             )}
 
-            {/* My Pets */}
-            <View style={styles.section}>
-              <View style={styles.sectionHeaderRow}>
-                <Text style={styles.sectionTitle}>My Pets</Text>
-                <TouchableOpacity style={styles.addBtn} onPress={() => { closeDrawer(); router.push('/add-pet'); }} activeOpacity={0.85}>
-                  <Text style={styles.addBtnText}>+ Add</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Due Soon strip */}
-              {reminders.length > 0 && (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.remindersStrip} contentContainerStyle={{ gap: 8, paddingRight: 16 }}>
-                  {reminders.map((r, i) => {
-                    const isOverdue = r.urgency === 'overdue';
-                    const color = isOverdue ? Colors.critical : Colors.urgent;
-                    const bg = isOverdue ? Colors.criticalBg : Colors.urgentBg;
-                    const dayLabel = isOverdue
-                      ? `${Math.abs(r.days_until_due)}d overdue`
-                      : `due in ${r.days_until_due}d`;
-                    return (
-                      <TouchableOpacity
-                        key={`${r.pet_id}-${i}`}
-                        style={[styles.reminderChip, { backgroundColor: bg, borderColor: `${color}33` }]}
-                        onPress={() => { closeDrawer(); router.push(`/pet-record?petId=${r.pet_id}`); }}
-                        activeOpacity={0.85}
-                      >
-                        <Text style={styles.reminderPetName} numberOfLines={1}>{r.pet_name}</Text>
-                        <Text style={styles.reminderSep}>—</Text>
-                        <Text style={[styles.reminderLabel, { color }]} numberOfLines={1}>{r.label}</Text>
-                        <Text style={[styles.reminderDue, { color }]}>{dayLabel}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              )}
-
-              {activePets.length === 0 && pastPets.length === 0 ? (
-                <View style={styles.card}>
-                  <Text style={styles.emptyText}>No pets yet</Text>
-                  <TouchableOpacity
-                    style={styles.emptyAddBtn}
-                    onPress={() => { closeDrawer(); router.push('/add-pet'); }}
-                    activeOpacity={0.85}
-                  >
-                    <PawPrint color={Colors.white} size={16} />
-                    <Text style={styles.emptyAddBtnText}>Add your first pet</Text>
-                  </TouchableOpacity>
-                </View>
-              ) : (
-                <>
-                  {activePets.map((p) => (
-                    <TouchableOpacity
-                      key={p.id}
-                      style={styles.petRelCard}
-                      onPress={() => { closeDrawer(); router.push(`/pet-record?petId=${p.pet_id}`); }}
-                      activeOpacity={0.85}
-                    >
-                      {p.pet_photo ? (
-                        <SignedImage path={p.pet_photo} style={styles.petRelPhoto} />
-                      ) : (
-                        <View style={[styles.petRelPhoto, styles.petRelPhotoFallback]}>
-                          <PawPrint color={Colors.textTertiary} size={16} />
-                        </View>
-                      )}
-                      <View style={styles.petRelInfo}>
-                        <Text style={styles.petRelName}>{p.pet_name}</Text>
-                        <Text style={styles.petRelMeta}>{[p.species, p.breed].filter(Boolean).join(' · ') || 'Pet'}</Text>
-                        <Text style={styles.petRelMeta}>{[p.species, p.breed].filter(Boolean).join(' · ') || 'Pet'}</Text>
-                      </View>
-                      <View style={[styles.relPill, (p.relationship||'').includes('foster') && styles.relPillFoster, (p.relationship||'').includes('sponsor') && styles.relPillSponsor]}>
-                        <Text style={styles.relPillTxt}>{(p.relationship||'own').toLowerCase().includes('foster') ? 'I FOSTER' : (p.relationship||'').toLowerCase().includes('sponsor') ? 'I SPONSOR' : 'I OWN'}</Text>
-                      </View>
-                      <ChevronRight color={Colors.textTertiary} size={18} />
-                    </TouchableOpacity>
-                  ))}
-                  {pastPets.length > 0 && (
-                    <TouchableOpacity
-                      style={styles.pastToggle}
-                      onPress={() => setShowPastPets(!showPastPets)}
-                      activeOpacity={0.85}
-                    >
-                      <Text style={styles.pastToggleText}>{showPastPets ? 'Hide' : 'Show'} Previously ({pastPets.length})</Text>
-                    </TouchableOpacity>
-                  )}
-                  {showPastPets && pastPets.map((p) => (
-                    <TouchableOpacity
-                      key={p.id}
-                      style={[styles.petRelCard, styles.petRelCardPast]}
-                      onPress={() => { closeDrawer(); router.push(`/pet-record?petId=${p.pet_id}`); }}
-                      activeOpacity={0.85}
-                    >
-                      {p.pet_photo ? (
-                        <SignedImage path={p.pet_photo} style={styles.petRelPhoto} />
-                      ) : (
-                        <View style={[styles.petRelPhoto, styles.petRelPhotoFallback]}>
-                          <PawPrint color={Colors.textTertiary} size={16} />
-                        </View>
-      )}
-                      <View style={styles.petRelInfo}>
-                        <Text style={styles.petRelName}>{p.pet_name}</Text>
-                        <Text style={styles.petRelMeta}>{[p.species, p.breed].filter(Boolean).join(' · ') || 'Pet'}</Text>
-                        <Text style={styles.petRelRel}>{p.relationship.charAt(0).toUpperCase() + p.relationship.slice(1)} · {formatShortDate(p.started_on)} – {formatShortDate(p.ended_on)}</Text>
-                      </View>
-                      <ChevronRight color={Colors.textTertiary} size={18} />
-                    </TouchableOpacity>
-                  ))}
-                </>
-              )}
-            </View>
-
             {/* Foster Rating */}
             {fosterSummary && fosterSummary.rating_count > 0 && (
               <View style={styles.section}>
@@ -1147,8 +1142,8 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
             {/* Activity links */}
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>My Activity</Text>
-              <DrawerMenuItem icon={<Heart color={Colors.coral} size={18} />} title="Saved Pets" onPress={() => { closeDrawer(); router.push('/favorites'); }} />
-              <DrawerMenuItem icon={<AlertTriangle color={Colors.urgent} size={18} />} title="My Reports" onPress={() => { closeDrawer(); router.push('/reports-tracking'); }} />
+              <DrawerMenuItem icon={<Heart color={Colors.coral} size={18} />} title="Saved Pets" onPress={() => { router.push('/favorites'); }} />
+              <DrawerMenuItem icon={<AlertTriangle color={Colors.urgent} size={18} />} title="My Reports" onPress={() => { router.push('/reports-tracking'); }} />
             </View>
 
             {/* Logout */}
@@ -1160,8 +1155,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
             </View>
           </ScrollView>
           </Page>
-        </SafeAreaView>
-      </Animated.View>
+      </View>
 
       {/* Application review modal */}
       <Modal visible={reviewModalVisible} animationType="slide" transparent onRequestClose={() => setReviewModalVisible(false)}>

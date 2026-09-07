@@ -1,6 +1,7 @@
 import { Tabs } from 'expo-router';
 import { Home, PawPrint, Users, User, Siren } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
+import { CONTENT_MAX } from '@/components/Page';
 
 export default function TabLayout() {
   return (
@@ -13,6 +14,9 @@ export default function TabLayout() {
           backgroundColor: Colors.white,
           borderTopWidth: 1,
           borderTopColor: Colors.border,
+          maxWidth: CONTENT_MAX,
+          width: '100%',
+          alignSelf: 'center',
         },
       }}
     >

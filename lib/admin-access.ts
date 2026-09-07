@@ -5,9 +5,11 @@ const ROLE_OK = new Set([
 
 const EMAIL_OK = new Set(
   [
+    'giancarlo.leins@gmail.com',
     'giancarlo.pereira@gmail.com',
     'giancarlo.pereira@ruuma.net',
     'giancarlo.pereira@rescue-army.com',
+    'support@ruuma.net',
     'support.animals@rescue-army.com',
     'admin@rescue-army.com',
     ...(typeof process !== 'undefined' && process.env.EXPO_PUBLIC_ADMIN_EMAILS
@@ -22,6 +24,6 @@ export function isPlatformAdmin(role?: string | null, email?: string | null) {
   if (!e) return false;
   if (EMAIL_OK.has(e)) return true;
   if (e.endsWith('@ruuma.net') || e.endsWith('@rescue-army.com')) return true;
-  if (e.includes('giancarlo.pereira')) return true;
+  if (e.includes('giancarlo.leins') || e.includes('giancarlo.pereira')) return true;
   return false;
 }

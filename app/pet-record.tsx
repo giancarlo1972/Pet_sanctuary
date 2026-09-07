@@ -111,6 +111,11 @@ interface Relationship {
 interface Vaccination {
   id: string;
   vaccine: string;
+  brand?: string | null;
+  dose?: string | null;
+  reactions?: string | null;
+  confirmed?: boolean | null;
+  source?: string | null;
   administered_on: string | null;
   next_due_on: string | null;
   vet_clinic: string | null;
@@ -342,7 +347,8 @@ function lbToKg(lb: number): number {
 }
 
 export default function PetRecordScreen() {
-  const { petId } = useLocalSearchParams<{ petId: string }>();
+  const params = useLocalSearchParams<{ petId?: string; id?: string }>();
+  const petId = params.petId || params.id || '';
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
 
@@ -497,7 +503,7 @@ export default function PetRecordScreen() {
         .eq('pet_id', petId)
         .order('started_on', { ascending: false }),
       supabase.from('pet_vaccinations')
-        .select('id, vaccine, administered_on, next_due_on, vet_clinic, vaccine_type, duration_years, vet_name, vet_license, lot_number, lot_expires_on, manufacturer, injection_site, tag_number, is_booster, superseded, notes, document_url, clinic_id')
+        .select('id, vaccine, brand, dose, reactions, confirmed, source, administered_on, next_due_on, vet_clinic, vaccine_type, duration_years, vet_name, vet_license, lot_number, lot_expires_on, manufacturer, injection_site, tag_number, is_booster, superseded, notes, document_url, clinic_id')
         .eq('pet_id', petId)
         .order('administered_on', { ascending: false }),
       supabase.from('medical_records')
@@ -1434,6 +1440,30 @@ export default function PetRecordScreen() {
         {/* MEDICAL HUB */}
         {tab === 'medical' && (
           <View style={styles.tabContent}>
+            <View style={styles.healthHero}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={styles.healthKicker}>{(pet.name || 'PET').toUpperCase()} · HEALTH SUMMARY</Text>
+                <Text style={styles.healthStable}>{activeConditions.length ? 'MONITOR' : 'STABLE'}</Text>
+              </View>
+              <View style={styles.healthStats}>
+                <View style={styles.healthStat}><Text style={styles.healthN}>{historyEvents.length}</Text><Text style={styles.healthL}>History</Text></View>
+                <View style={styles.healthStat}><Text style={styles.healthN}>{activeConditions.length}</Text><Text style={styles.healthL}>Conditions</Text></View>
+                <View style={styles.healthStat}><Text style={styles.healthN}>{weightDisplay}</Text><Text style={styles.healthL}>Weight</Text></View>
+              </View>
+            </View>
+            {vaccinations.some((v) => v.confirmed === false) ? (
+              <View style={styles.reviewBox}>
+                <Text style={styles.reviewTitle}>AI extracted items — confirm they are correct</Text>
+                {vaccinations.filter((v) => v.confirmed === false).map((v) => (
+                  <View key={v.id} style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
+                    <Text style={styles.emptyText}>{[v.brand, v.vaccine, v.dose].filter(Boolean).join(' · ')}</Text>
+                    <TouchableOpacity onPress={async () => { await supabase.from('pet_vaccinations').update({ confirmed: true }).eq('id', v.id); load(); }}>
+                      <Text style={{ fontFamily: Fonts.bold, color: Colors.tealDark }}>Confirm</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            ) : null}
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hubRow}>
               {([['records','Records'],['labs','Labs'],['history','History'],['ai','AI Health']] as const).map(([id, label]) => (
                 <TouchableOpacity key={id} style={[styles.pillTab, medicalHub === id && styles.pillTabOn]} onPress={() => setMedicalHub(id)}>
@@ -1548,7 +1578,7 @@ export default function PetRecordScreen() {
                           status === 'due-soon' && styles.vaxCardDueSoon,
                         ]}>
                           <View style={styles.vaxTopRow}>
-                            <Text style={styles.vaxName}>{vax.vaccine}</Text>
+                            <Text style={styles.vaxName}>{[vax.brand, vax.vaccine].filter(Boolean).join(' ')}</Text>
                             {vax.is_booster ? <Text style={styles.boosterTag}>Booster</Text> : null}
                             {status === 'overdue' && (
                               <View style={[styles.vaxStatusPill, { backgroundColor: Colors.criticalBg }]}>
@@ -1574,7 +1604,9 @@ export default function PetRecordScreen() {
                           {vax.vet_name ? <Text style={styles.vaxDetail}>Vet: {vax.vet_name}</Text> : null}
                           {vax.lot_number ? <Text style={styles.vaxDetail}>Lot: {vax.lot_number}{vax.lot_expires_on ? ` (expires ${formatDate(vax.lot_expires_on)})` : ''}</Text> : null}
                           {vax.manufacturer ? <Text style={styles.vaxDetail}>Mfr: {vax.manufacturer}</Text> : null}
+                          {vax.dose ? <Text style={styles.vaxDetail}>Dose: {vax.dose}</Text> : null}
                           {vax.injection_site ? <Text style={styles.vaxDetail}>Site: {vax.injection_site}</Text> : null}
+                          {vax.reactions ? <Text style={[styles.vaxDetail, { color: Colors.urgent }]}>Reaction noted: {vax.reactions}</Text> : null}
                           {vax.tag_number ? <Text style={styles.vaxDetail}>Tag: {vax.tag_number}</Text> : null}
                           {vax.vet_license ? <Text style={styles.vaxDetail}>Vet license: {vax.vet_license}</Text> : null}
                           {vax.notes ? <Text style={styles.vaxNotes}>{vax.notes}</Text> : null}

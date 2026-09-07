@@ -319,7 +319,7 @@ const styles = StyleSheet.create({
   entityAvTxt: { color: Colors.white, fontFamily: Fonts.bold },
   reassign: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy },
   scroll: { paddingBottom: 48 },
-  col: { width: '100%', maxWidth: 880, alignSelf: 'center', padding: 24, gap: 18 },
+  col: { width: '100%', maxWidth: 720, alignSelf: 'center', padding: 24, gap: 18 },
   hero: { backgroundColor: Colors.navy, borderRadius: 18, padding: 18 },
   heroTitle: { fontFamily: Fonts.extrabold, fontSize: 18, color: Colors.white },
   heroSub: { fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 2 },

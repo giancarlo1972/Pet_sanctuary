@@ -112,13 +112,13 @@ interface HomeStory {
 
 export default function HomeScreen() {
   const { user, session } = useAuth();
+  const [loginToast, setLoginToast] = useState<string | null>(null);
   useEffect(() => {
     if (Platform.OS === 'web' && typeof sessionStorage !== 'undefined') {
       const t = sessionStorage.getItem('ra_login_toast');
       if (t) { sessionStorage.removeItem('ra_login_toast'); setLoginToast(t); }
     }
   }, []);
-  const [loginToast, setLoginToast] = useState<string | null>(null);
   const [featured, setFeatured] = useState<Pet[]>([]);
   const [liveAlerts, setLiveAlerts] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);

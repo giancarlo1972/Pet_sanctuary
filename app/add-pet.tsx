@@ -24,8 +24,43 @@ export default function AddPetScreen() {
   const [location, setLocation] = useState('');
   const [isPublic, setIsPublic] = useState(true);
     const [availability, setAvailability] = useState('available');
+  const [relationship, setRelationship] = useState<'owner' | 'foster' | 'sponsor'>('owner');
+  const [ai, setAi] = useState<any>(null);
+  const [analyzing, setAnalyzing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
+
+
+  const pickPhoto = () => {
+    if (typeof document === 'undefined') { setBanner({ message: 'Photo AI is available on the website.', kind: 'info' }); return; }
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setAnalyzing(true); setBanner(null);
+      try {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(String(r.result));
+          r.onerror = reject;
+          r.readAsDataURL(file);
+        });
+        const res = await fetch('/api/analyze-pet-photo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: dataUrl }) });
+        const json = await res.json();
+        if (!json.analyzed) throw new Error(json.error || 'AI could not read the photo.');
+        setAi(json);
+        if (json.species) setSpecies(json.species);
+        if (json.breed_guess) setBreed(json.breed_guess);
+        if (json.life_stage) setAgeText(json.life_stage);
+      } catch (e: any) {
+        setBanner({ message: e.message || 'Photo analysis failed.', kind: 'error' });
+      }
+      setAnalyzing(false);
+    };
+    input.click();
+  };
 
   const handleSubmit = async () => {
     if (!name.trim()) { setBanner({ message: 'Pet name is required.', kind: 'error' }); return; }
@@ -44,12 +79,13 @@ export default function AddPetScreen() {
         is_public: isPublic,
         availability,
         owner_id: user.id,
+        ai_traits: ai ? { ...ai, confirmed: true } : null,
       }).select('id').single();
       if (error) throw error;
       await supabase.from('pet_relationships').insert({
         pet_id: data.id,
         user_id: user.id,
-        relationship: 'owner',
+        relationship,
         started_on: new Date().toISOString().slice(0, 10),
       });
       router.replace(`/my-pet?id=${data.id}`);
@@ -70,6 +106,32 @@ export default function AddPetScreen() {
       </View>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+          <Text style={styles.sectionLabel}>Relationship</Text>
+          <View style={styles.speciesRow}>
+            {([['owner','My pet'],['foster','Foster pet'],['sponsor','Sponsored pet']] as const).map(([k,l]) => (
+              <TouchableOpacity key={k} style={[styles.speciesPill, relationship === k && styles.speciesPillActive]} onPress={() => setRelationship(k)} activeOpacity={0.75}>
+                <Text style={[styles.speciesPillText, relationship === k && styles.speciesPillTextActive]}>{l}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={styles.sectionLabel}>Photo · AI guess</Text>
+          <TouchableOpacity style={styles.photoBtn} onPress={pickPhoto} disabled={analyzing} activeOpacity={0.85}>
+            {analyzing ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.submitText}>{ai ? 'Re-analyze photo' : 'Upload photo for AI traits'}</Text>}
+          </TouchableOpacity>
+          {ai ? (
+            <View style={styles.aiBox}>
+              <Text style={styles.aiNote}>AI visual guess, not DNA — tap a chip to keep it.</Text>
+              <View style={styles.speciesRow}>
+                {ai.species ? <View style={styles.aiChip}><Text style={styles.aiChipTxt}>{ai.species}</Text></View> : null}
+                {ai.breed_guess ? <View style={[styles.aiChip, styles.aiChipTeal]}><Text style={styles.aiChipTealTxt}>AI guess: {ai.breed_guess}{ai.confidence ? ` · ${Math.round(ai.confidence * 100)}%` : ''}</Text></View> : null}
+                {ai.life_stage ? <View style={styles.aiChip}><Text style={styles.aiChipTxt}>{ai.life_stage}</Text></View> : null}
+                {(ai.colors || []).map((c: string) => <View key={c} style={styles.aiChip}><Text style={styles.aiChipTxt}>{c}</Text></View>)}
+                {ai.coat ? <View style={styles.aiChip}><Text style={styles.aiChipTxt}>{ai.coat} coat</Text></View> : null}
+              </View>
+            </View>
+          ) : null}
+
           <Text style={styles.sectionLabel}>Name *</Text>
           <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="Pet name" placeholderTextColor={Colors.textTertiary} />
 
@@ -145,4 +207,11 @@ const styles = StyleSheet.create({
   submitBtn: { backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 16 },
   submitText: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.white },
   btnDisabled: { opacity: 0.6 },
+  photoBtn: { backgroundColor: Colors.navy, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginBottom: 8 },
+  aiBox: { backgroundColor: Colors.surface, borderRadius: 14, padding: 12, marginBottom: 8 },
+  aiNote: { fontSize: 11, fontFamily: Fonts.regular, fontStyle: 'italic', color: Colors.textTertiary, marginBottom: 8 },
+  aiChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border },
+  aiChipTeal: { borderColor: Colors.teal, backgroundColor: Colors.white },
+  aiChipTxt: { fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.navy },
+  aiChipTealTxt: { fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.teal },
 });

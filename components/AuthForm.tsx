@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
+import { isPlatformAdmin } from '@/lib/admin-access';
 
 interface AuthFormProps {
   variant?: 'plain' | 'modal';
@@ -11,7 +12,7 @@ interface AuthFormProps {
 
 function redirectAfterLogin() {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    return `${window.location.origin}/profile`;
+    return `${window.location.origin}/admin`;
   }
   return 'https://rescue-army.com/profile';
 }
@@ -39,7 +40,14 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
         const { error } = await supabase.auth.signUp({ email: email.trim(), password });
         if (error) throw error;
       }
-      router.replace('/(tabs)');
+      const { data: sess } = await supabase.auth.getUser();
+      const email = sess.user?.email || email.trim();
+      let role = '';
+      if (sess.user?.id) {
+        const { data: profile } = await supabase.from('profiles').select('role').eq('id', sess.user.id).maybeSingle();
+        role = profile?.role || '';
+      }
+      router.replace(isPlatformAdmin(role, email) ? '/admin' : '/(tabs)');
     } catch (err: any) {
       setError(err.message || 'Authentication failed.');
     } finally {

@@ -63,6 +63,9 @@ import AppHeader from '@/components/AppHeader';
 import { Page, CONTENT_MAX } from '@/components/Page';
 import { WeightLineChart, LabSparkline } from '@/components/PetCharts';
 import { extractPdfText } from '@/lib/pdf-text';
+import { SearchablePicker } from '@/components/SearchablePicker';
+import { DateField } from '@/components/DateField';
+import { matchCatalog, type CatalogRow } from '@/lib/catalog';
 
 function blobTypeFromName(path: string) {
   if (/\.pdf$/i.test(path)) return 'application/pdf';
@@ -455,6 +458,11 @@ function mapVaxRow(v: any) {
   return { given: null, due: null };
 }
 
+function ConfidenceDot({ level }: { level: 'high' | 'med' | 'low' | 'none' }) {
+  const color = level === 'high' ? Colors.teal : level === 'med' ? Colors.accent : level === 'low' ? Colors.coral : Colors.textTertiary;
+  return <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />;
+}
+
 function StatusTile({
   icon: Icon,
   label,
@@ -607,6 +615,10 @@ export default function PetRecordScreen() {
   const [applyingExtraction, setApplyingExtraction] = useState(false);
   const [confirmEdit, setConfirmEdit] = useState<Set<string>>(new Set());
   const [parseProgress, setParseProgress] = useState<string | null>(null);
+  const [vaxCatalog, setVaxCatalog] = useState<CatalogRow[]>([]);
+  const [labCatalog, setLabCatalog] = useState<CatalogRow[]>([]);
+  const [condCatalog, setCondCatalog] = useState<CatalogRow[]>([]);
+  const [medCatalog, setMedCatalog] = useState<CatalogRow[]>([]);
 
   const [photoUploading, setPhotoUploading] = useState(false);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
@@ -724,6 +736,16 @@ export default function PetRecordScreen() {
 
     const { data: clinicData } = await supabase.from('vet_clinics').select('id, name, address, phone, website').order('name');
     setClinics((clinicData as ClinicInfo[]) || []);
+    const [vaxCat, labCat, condCat, medCat] = await Promise.all([
+      supabase.from('vaccine_products').select('*').order('name'),
+      supabase.from('lab_analytes').select('*').order('name'),
+      supabase.from('condition_catalog').select('*').order('name'),
+      supabase.from('medications').select('*').order('name'),
+    ]);
+    if (!vaxCat.error && vaxCat.data) setVaxCatalog(vaxCat.data as CatalogRow[]);
+    if (!labCat.error && labCat.data) setLabCatalog(labCat.data as CatalogRow[]);
+    if (!condCat.error && condCat.data) setCondCatalog(condCat.data as CatalogRow[]);
+    if (!medCat.error && medCat.data) setMedCatalog(medCat.data as CatalogRow[]);
     setMedicalRecords((medRes.data as MedicalRecord[]) || []);
     setHistoryEvents((histRes.data as HistoryEvent[]) || []);
     setConditions((condRes.data as PetCondition[]) || []);
@@ -2808,7 +2830,19 @@ export default function PetRecordScreen() {
                 ))}
               </View>
               <Text style={styles.modalLabel}>Name *</Text>
-              <TextInput style={styles.modalInput} value={conditionForm.name} onChangeText={(v) => setConditionForm((p) => ({ ...p, name: v }))} placeholder="e.g. Hip dysplasia, Chicken allergy" placeholderTextColor={Colors.textTertiary} />
+              <SearchablePicker
+                items={conditionForm.kind === 'medication' ? medCatalog : condCatalog}
+                placeholder="Search conditions…"
+                onChange={(_id, item) => {
+                  if (!item) return;
+                  setConditionForm((p) => ({ ...p, name: item.name, kind: item.category === 'infectious' ? p.kind : p.kind }));
+                }}
+                onCustom={(label) => {
+                  setConditionForm((p) => ({ ...p, name: label }));
+                  void supabase.from('catalog_custom_pending').insert({ kind: 'condition', name: label, created_by: user?.id });
+                }}
+              />
+              {conditionForm.name ? <Text style={styles.confirmLine}>{conditionForm.name}</Text> : null}
               <Text style={styles.modalLabel}>Severity</Text>
               <View style={styles.pillRow}>
                 {SEVERITY_LEVELS.map((sev) => (
@@ -2822,8 +2856,7 @@ export default function PetRecordScreen() {
                   </TouchableOpacity>
                 ))}
               </View>
-              <Text style={styles.modalLabel}>Diagnosed on (YYYY-MM-DD)</Text>
-              <TextInput style={styles.modalInput} value={conditionForm.diagnosed_on} onChangeText={(v) => setConditionForm((p) => ({ ...p, diagnosed_on: v }))} placeholder="2024-06-01" placeholderTextColor={Colors.textTertiary} />
+              <DateField label="Diagnosed on" value={conditionForm.diagnosed_on} onChange={(v) => setConditionForm((p) => ({ ...p, diagnosed_on: v }))} />
               <View style={styles.toggleRow}>
                 <TouchableOpacity
                   style={[styles.toggleBtn, conditionForm.is_active && styles.toggleBtnActive]}
@@ -2837,8 +2870,7 @@ export default function PetRecordScreen() {
               </View>
               {!conditionForm.is_active && (
                 <>
-                  <Text style={styles.modalLabel}>Resolved on (YYYY-MM-DD)</Text>
-                  <TextInput style={styles.modalInput} value={conditionForm.resolved_on} onChangeText={(v) => setConditionForm((p) => ({ ...p, resolved_on: v }))} placeholder="2025-01-15" placeholderTextColor={Colors.textTertiary} />
+                  <DateField label="Resolved on" value={conditionForm.resolved_on} onChange={(v) => setConditionForm((p) => ({ ...p, resolved_on: v }))} />
                 </>
               )}
               <Text style={styles.modalLabel}>Notes</Text>
@@ -3176,53 +3208,74 @@ export default function PetRecordScreen() {
                 ) : null}
                 {editableVax.map((vax, i) => {
                   const editing = confirmEdit.has(`vax-${i}`);
-                  const rows: [string, string | null][] = [
-                    ['Given', vax.administered_on],
-                    ['Next due', vax.next_due_on],
-                    ['Manufacturer', vax.manufacturer],
-                    ['Lot', vax.lot_number],
-                    ['Vet', vax.vet_name],
-                    ['Clinic', vax.clinic_name],
-                    ['Dose', (vax as any).dose || null],
-                  ];
+                  const matched = matchCatalog(vax.vaccine, vaxCatalog);
                   return (
                     <View key={`vax-${i}`} style={[styles.confirmCard, extractionReview.vaxDuplicates.has(i) && styles.extractionItemDuplicate]}>
                       <View style={styles.ovCardHead}>
-                        <Text style={styles.docTitle}>{vax.vaccine || 'Vaccine'}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                          <ConfidenceDot level={matched.confidence} />
+                          <Text style={styles.docTitle}>{matched.row?.name || vax.vaccine || 'Vaccine'}</Text>
+                        </View>
                         <TouchableOpacity onPress={() => setConfirmEdit((s) => { const n = new Set(s); n.has(`vax-${i}`) ? n.delete(`vax-${i}`) : n.add(`vax-${i}`); return n; })}>
                           <Text style={styles.linkTxt}>{editing ? 'Done' : 'Edit'}</Text>
                         </TouchableOpacity>
                       </View>
+                      {matched.custom ? <Text style={styles.duplicateBadgeText}>Not in list — add as custom</Text> : null}
                       {extractionReview.vaxDuplicates.has(i) ? <Text style={styles.duplicateBadgeText}>Already recorded</Text> : null}
                       {editing ? (
                         <>
-                          <TextInput style={styles.extractionInput} value={vax.vaccine || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, vaccine: val } : v))} placeholder="Vaccine" placeholderTextColor={Colors.textTertiary} />
+                          <SearchablePicker
+                            items={vaxCatalog}
+                            value={matched.row?.id || null}
+                            placeholder="Search vaccines…"
+                            onChange={(_id, item) => {
+                              if (!item) return;
+                              setEditableVax((prev) => prev.map((v, idx) => idx === i ? {
+                                ...v,
+                                vaccine: item.name,
+                                manufacturer: item.manufacturer || v.manufacturer,
+                                duration_years: item.duration_years != null ? Number(item.duration_years) : v.duration_years,
+                              } : v));
+                            }}
+                            onCustom={(label) => {
+                              setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, vaccine: label } : v));
+                              void supabase.from('catalog_custom_pending').insert({ kind: 'vaccine', name: label, created_by: user?.id });
+                            }}
+                          />
                           <View style={styles.extractionRow}>
-                            <TextInput style={styles.extractionInputHalf} value={vax.administered_on || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, administered_on: val } : v))} placeholder="Given" placeholderTextColor={Colors.textTertiary} />
-                            <TextInput style={styles.extractionInputHalf} value={vax.next_due_on || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, next_due_on: val } : v))} placeholder="Next due" placeholderTextColor={Colors.textTertiary} />
+                            <DateField label="Given" value={vax.administered_on} onChange={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, administered_on: val } : v))} />
+                            <DateField label="Next due" value={vax.next_due_on} onChange={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, next_due_on: val } : v))} />
                           </View>
-                          <TextInput style={styles.extractionInput} value={vax.manufacturer || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, manufacturer: val } : v))} placeholder="Manufacturer" placeholderTextColor={Colors.textTertiary} />
-                          <TextInput style={styles.extractionInput} value={vax.lot_number || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, lot_number: val } : v))} placeholder="Lot" placeholderTextColor={Colors.textTertiary} />
-                          <TextInput style={styles.extractionInput} value={vax.vet_name || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, vet_name: val } : v))} placeholder="Vet" placeholderTextColor={Colors.textTertiary} />
                         </>
-                      ) : rows.filter(([, val]) => val).map(([label, val]) => (
-                        <Text key={label} style={styles.confirmLine}><Text style={styles.confirmK}>{label}  </Text>{val}</Text>
-                      ))}
+                      ) : (
+                        <>
+                          {vax.administered_on ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Given  </Text>{vax.administered_on}</Text> : <DateField label="Given" value={vax.administered_on} onChange={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, administered_on: val } : v))} />}
+                          {vax.next_due_on ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Next due  </Text>{vax.next_due_on}</Text> : null}
+                          {vax.manufacturer ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Manufacturer  </Text>{vax.manufacturer}</Text> : null}
+                          {vax.lot_number ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Lot  </Text>{vax.lot_number}</Text> : null}
+                        </>
+                      )}
                     </View>
                   );
                 })}
                 {editableLabs.flatMap((panel, pi) => (panel.results || []).map((result, ri) => {
                   const key = `lab-${pi}-${ri}`;
                   const editing = confirmEdit.has(key);
-                  const shown = [result.value_text, result.value_num != null ? String(result.value_num) : '', result.unit].filter(Boolean).join(' ');
+                  const matched = matchCatalog(result.analyte, labCatalog);
+                  const unit = result.unit || matched.row?.unit || '';
+                  const shown = [result.value_text, result.value_num != null ? String(result.value_num) : '', unit].filter(Boolean).join(' ');
                   return (
                     <View key={key} style={styles.confirmCard}>
                       <View style={styles.ovCardHead}>
-                        <Text style={styles.docTitle}>{result.analyte || 'Lab'}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                          <ConfidenceDot level={matched.confidence} />
+                          <Text style={styles.docTitle}>{matched.row?.name || result.analyte || 'Lab'}</Text>
+                        </View>
                         <TouchableOpacity onPress={() => setConfirmEdit((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; })}>
                           <Text style={styles.linkTxt}>{editing ? 'Done' : 'Edit'}</Text>
                         </TouchableOpacity>
                       </View>
+                      {matched.custom ? <Text style={styles.duplicateBadgeText}>Not in list — add as custom</Text> : null}
                       {editing ? (
                         <View style={styles.extractionRow}>
                           <TextInput style={styles.extractionInputSmall} value={result.value_text || ''} onChangeText={(val) => setEditableLabs((prev) => prev.map((p, idx) => idx === pi ? { ...p, results: p.results.map((r, ridx) => ridx === ri ? { ...r, value_text: val } : r) } : p))} placeholder="Value" placeholderTextColor={Colors.textTertiary} />

@@ -44,6 +44,7 @@ import {
   Download,
 } from 'lucide-react-native';
 import { InlineBanner } from '@/components/InlineBanner';
+import { prepareImageFile } from '@/lib/prepare-image';
 import { ConfirmDialog, type ConfirmConfig } from '@/components/ConfirmDialog';
 import { VetVaccinationModal, type Vaccination as FullVaccination, type VetClinic as ClinicInfo } from '@/components/VetVaccinationModal';
 import { VetLabResults } from '@/components/VetLabResults';
@@ -796,21 +797,19 @@ export default function PetRecordScreen() {
         const file = (e.target as HTMLInputElement).files?.[0];
         if (!file) return;
         setPhotoUploading(true);
-        const ext = file.name.split('.').pop() || 'jpg';
-        const filePath = `${user.id}/${Date.now()}.${ext}`;
-        const { error: upErr } = await supabase.storage.from('pet-documents').upload(filePath, file);
+        const prepared = await prepareImageFile(file);
+        const filePath = `${petId}/${Date.now()}.jpg`;
+        const { error: upErr } = await supabase.storage.from('pet-photos').upload(filePath, prepared.blob, { contentType: 'image/jpeg', upsert: true });
         if (upErr) { console.error('[pet-record] photo upload (web):', upErr); showBanner('Could not upload photo.'); setPhotoUploading(false); return; }
         const { error: insErr } = await supabase.from('pet_photos').insert({
           pet_id: petId,
           photo_url: filePath,
           sort_order: photos.length,
-          is_profile: photos.length === 0,
+          is_profile: true,
           uploaded_by: user.id,
         });
-        if (insErr) { console.error('[pet-record] photo insert (web):', insErr); showBanner('Could not add photo.'); setPhotoUploading(false); return; }
-        if (photos.length === 0) {
-          await supabase.from('pets').update({ main_photo_url: filePath }).eq('id', petId);
-        }
+        if (insErr) { console.error('[pet-record] photo insert (web):', insErr); }
+        await supabase.from('pets').update({ main_photo_url: filePath }).eq('id', petId);
         setPhotoUploading(false);
         load();
       };
@@ -1227,6 +1226,7 @@ export default function PetRecordScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <View style={styles.col}>
       <View style={[styles.header, { paddingTop: insets.top }]}>
         <TouchableOpacity style={styles.headerBack} onPress={() => router.back()} activeOpacity={0.75}>
           <ArrowLeft color={Colors.text} size={24} />
@@ -1239,21 +1239,26 @@ export default function PetRecordScreen() {
         {banner && (
           <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />
         )}
-        {/* Pet banner */}
-        <View style={styles.petBanner}>
+        {/* Pet hero */}
+        <View style={styles.heroWrap}>
           {pet.main_photo_url ? (
-            <SignedImage path={pet.main_photo_url} style={styles.petPhoto} />
+            <SignedImage path={pet.main_photo_url} style={styles.hero} />
           ) : (
-            <View style={[styles.petPhoto, styles.petPhotoFallback]}>
-              <PawPrint color={Colors.textTertiary} size={28} />
+            <View style={[styles.hero, styles.petPhotoFallback]}>
+              <PawPrint color={Colors.textTertiary} size={48} />
             </View>
           )}
-          <View style={styles.petBannerInfo}>
-            <Text style={styles.petName}>{pet.name || 'Unnamed'}{pet.previous_names?.length ? ` (formerly ${pet.previous_names.join(', ')})` : ''}</Text>
-            {breedDisplay !== '—' ? <Text style={styles.petMeta}>{breedDisplay}{pet.is_mixed ? ' (Mixed)' : ''}</Text> : null}
-            {pet.age_text ? <Text style={styles.petMeta}>{pet.age_text}</Text> : null}
-            {pet.gender ? <Text style={styles.petMeta}>{titleCase(pet.gender)}</Text> : null}
-          </View>
+          {canEdit ? (
+            <TouchableOpacity style={styles.changePhoto} onPress={uploadPhoto} disabled={photoUploading} activeOpacity={0.85}>
+              {photoUploading ? <ActivityIndicator color="#fff" size="small" /> : <Pencil color="#fff" size={16} />}
+            </TouchableOpacity>
+          ) : null}
+        </View>
+        <View style={styles.petBannerInfo}>
+          <Text style={styles.petName}>{pet.name || 'Unnamed'}{pet.previous_names?.length ? ` (formerly ${pet.previous_names.join(', ')})` : ''}</Text>
+          {breedDisplay !== '—' ? <Text style={styles.petMeta}>{breedDisplay}{pet.is_mixed ? ' (Mixed)' : ''}</Text> : null}
+          {pet.age_text ? <Text style={styles.petMeta}>{pet.age_text}</Text> : null}
+          {pet.gender ? <Text style={styles.petMeta}>{titleCase(pet.gender)}</Text> : null}
         </View>
 
         {/* Tabs */}
@@ -2207,6 +2212,7 @@ export default function PetRecordScreen() {
           </View>
         </Modal>
       )}
+      </View>
     </SafeAreaView>
   );
 }
@@ -2260,6 +2266,10 @@ function getSevText(sev: string): string {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
+  col: { width: '100%', maxWidth: 880, alignSelf: 'center', flex: 1 },
+  heroWrap: { aspectRatio: 4/3, borderRadius: 16, overflow: 'hidden', backgroundColor: Colors.surface, marginHorizontal: 16, marginTop: 12 },
+  hero: { width: '100%', height: '100%' },
+  changePhoto: { position: 'absolute', right: 12, bottom: 12, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(38,38,94,0.85)', alignItems: 'center', justifyContent: 'center' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
   header: {

@@ -179,7 +179,7 @@ function Stat({ n, l }: { n: string; l: string }) {
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: Colors.screen },
-  phone: { flex: 1, width: '100%', maxWidth: 430, alignSelf: 'center' },
+  phone: { flex: 1, width: '100%', width: '100%' },
   scroll: { padding: 16, paddingBottom: 48, gap: 12 },
   stats: { flexDirection: 'row', gap: 8 },
   stat: { flex: 1, backgroundColor: Colors.white, borderRadius: 14, padding: 12, alignItems: 'center' },

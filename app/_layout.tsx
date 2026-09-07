@@ -41,6 +41,7 @@ export default function RootLayout() {
           <Stack.Screen name="org-admin" />
           <Stack.Screen name="share-accept" />
           <Stack.Screen name="manage" />
+          <Stack.Screen name="platform" />
         </Stack>
         <StatusBar style="auto" />
       </>

@@ -1,23 +1,20 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator, Platform } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { PawPrint, Building2 } from 'lucide-react-native';
+import { PawPrint, Building2, TriangleAlert, TrendingUp, Users, LifeBuoy } from 'lucide-react-native';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 import { InlineBanner } from '@/components/InlineBanner';
 import { Colors } from '@/constants/Colors';
-import { Fonts, FontSizes } from '@/constants/Fonts';
+import { Fonts } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
-import { isPlatformAdmin } from '@/lib/admin-access';
 import SignedImage from '@/components/SignedImage';
 import { isUsablePhoto } from '@/lib/photos';
 
 type PetRow = { id: string; name: string | null; main_photo_url: string | null; species: string | null };
 type Member = { user_id: string; role: string; profiles?: { full_name: string | null; email: string | null } | null };
-type IdRow = { user_id: string; id_status: string | null; id_document_path: string | null; profiles?: { full_name: string | null; email: string | null } | null };
 
 export default function ManageScreen() {
   const { user, loading: authLoading, actingIsPlatform, actingIsOrgAdmin, actingAs } = useAuth();
@@ -31,16 +28,6 @@ export default function ManageScreen() {
   const [members, setMembers] = useState<Member[]>([]);
   const [results, setResults] = useState<{ id: string; pet_name: string; status: string; applicant_name: string }[]>([]);
   const [invite, setInvite] = useState('');
-  const [orgsQ, setOrgsQ] = useState<{ id: string; name: string; status: string | null }[]>([]);
-  const [idsQ, setIdsQ] = useState<IdRow[]>([]);
-  const [queue, setQueue] = useState<{ id: string; subject_type: string; flag_reason: string | null; status: string }[]>([]);
-  const [bugs, setBugs] = useState<{ id: string; title: string | null; body: string | null; status: string }[]>([]);
-  const [people, setPeople] = useState<{ id: string; email: string | null; full_name: string | null; role: string | null; blocked: boolean | null }[]>([]);
-  const [peopleQ, setPeopleQ] = useState('');
-  const [uploadEmail, setUploadEmail] = useState('');
-  const [resetEmail, setResetEmail] = useState('');
-  const [supportEmail, setSupportEmail] = useState('support.animals@rescue-army.com');
-  const [maintenance, setMaintenance] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
 
   const fail = (e: any, fallback: string) => setBanner({ kind: 'error', message: e?.message || fallback });
@@ -93,35 +80,6 @@ export default function ManageScreen() {
       })));
     } else setOrg(null);
 
-    if (platform) {
-      const { data: pendingOrgs } = await supabase.from('organizations').select('id, name, status')
-        .in('status', ['pending', 'submitted', 'review', 'pending_review']).limit(40);
-      setOrgsQ((pendingOrgs as any) || []);
-      const { data: ids } = await supabase.from('user_verifications')
-        .select('user_id, id_status, id_document_path').in('id_status', ['submitted', 'pending']).limit(40);
-      const uids = ((ids as any[]) || []).map((i) => i.user_id);
-      const { data: names } = uids.length
-        ? await supabase.from('profiles').select('id, full_name, email').in('id', uids)
-        : { data: [] as any[] };
-      const nmap: Record<string, any> = {};
-      (names || []).forEach((p: any) => { nmap[p.id] = p; });
-      setIdsQ(((ids as any[]) || []).map((i) => ({ ...i, profiles: nmap[i.user_id] })));
-      const { data: q } = await supabase.from('moderation_queue').select('id, subject_type, flag_reason, status').eq('status', 'pending').limit(40);
-      setQueue((q as any) || []);
-      const { data: b } = await supabase.from('bug_reports').select('id, title, body, status').order('created_at', { ascending: false }).limit(30);
-      setBugs((b as any) || []);
-      const { data: mems } = await supabase.from('profiles').select('id, email, full_name, role, blocked').order('email').limit(80);
-      if (mems) setPeople(mems as any);
-      else {
-        const { data: mems2 } = await supabase.from('profiles').select('id, email, full_name, role').order('email').limit(80);
-        setPeople(((mems2 || []) as any).map((m: any) => ({ ...m, blocked: false })));
-      }
-      const { data: settings } = await supabase.from('app_settings').select('key, value');
-      (settings || []).forEach((s: any) => {
-        if (s.key === 'support_email') setSupportEmail(String(s.value || '').replace(/^"|"$/g, ''));
-        if (s.key === 'maintenance_message') setMaintenance(String(s.value || '').replace(/^"|"$/g, ''));
-      });
-    }
     setLoading(false);
   }, [user, actingIsPlatform]);
 
@@ -142,27 +100,6 @@ export default function ManageScreen() {
     setInvite('');
     setBanner({ kind: 'success', message: `Added ${email} as org admin.` });
     load();
-  };
-
-  const decideOrg = async (id: string, status: string) => {
-    const { error } = await supabase.from('organizations').update({ status }).eq('id', id);
-    if (error) fail(error, 'Could not update organization.');
-    else { setBanner({ kind: 'success', message: `Org ${status}.` }); load(); }
-  };
-
-  const decideId = async (userId: string, ok: boolean) => {
-    const { error } = await supabase.from('user_verifications').update({
-      id_status: ok ? 'verified' : 'rejected',
-      id_verified: ok,
-    }).eq('user_id', userId);
-    if (error) fail(error, 'Could not update ID.');
-    else { setBanner({ kind: 'success', message: ok ? 'ID approved.' : 'ID rejected.' }); load(); }
-  };
-
-  const decideQueue = async (id: string, status: string) => {
-    const { error } = await supabase.from('moderation_queue').update({ status }).eq('id', id);
-    if (error) fail(error, 'Could not update queue.');
-    else load();
   };
 
   if (authLoading || loading) {
@@ -241,102 +178,26 @@ export default function ManageScreen() {
         {platform ? (
           <>
             <Text style={styles.kicker}>Platform</Text>
-            <Text style={styles.sub}>Approvals — orgs / IDs / responders</Text>
-            {orgsQ.map((o) => (
-              <View key={o.id} style={styles.card}>
-                <Text style={styles.name}>{o.name}</Text>
-                <Text style={styles.meta}>{o.status}</Text>
-                <View style={styles.actions}>
-                  <TouchableOpacity onPress={() => decideOrg(o.id, 'approved')}><Text style={styles.ok}>Approve</Text></TouchableOpacity>
-                  <TouchableOpacity onPress={() => decideOrg(o.id, 'rejected')}><Text style={styles.no}>Reject</Text></TouchableOpacity>
-                </View>
-              </View>
-            ))}
-            {idsQ.map((i) => (
-              <View key={i.user_id} style={styles.card}>
-                <Text style={styles.name}>{i.profiles?.full_name || i.profiles?.email || 'User'} · Government ID</Text>
-                <Text style={styles.meta}>{i.id_status}{i.id_document_path ? ` · ${i.id_document_path}` : ''}</Text>
-                <View style={styles.actions}>
-                  <TouchableOpacity onPress={() => decideId(i.user_id, true)}><Text style={styles.ok}>Approve</Text></TouchableOpacity>
-                  <TouchableOpacity onPress={() => decideId(i.user_id, false)}><Text style={styles.no}>Reject</Text></TouchableOpacity>
-                </View>
-              </View>
-            ))}
-            {orgsQ.length === 0 && idsQ.length === 0 ? <Text style={styles.meta}>No pending approvals.</Text> : null}
-
-            <Text style={styles.sub}>Support — upload / block / reset</Text>
-            <TextInput style={styles.input} value={peopleQ} onChangeText={setPeopleQ} placeholder="Search members" placeholderTextColor={Colors.textTertiary} />
-            {people.filter((m) => `${m.email || ''} ${m.full_name || ''}`.toLowerCase().includes(peopleQ.toLowerCase())).slice(0, 20).map((m) => (
-              <View key={m.id} style={styles.row}>
+            <Text style={styles.meta}>Search, filters, detail sheets, audit log. Hub only — not production yet.</Text>
+            {[
+              { key: 'pets', label: 'Pets', sub: 'Edit · reassign · hide · merge', Icon: PawPrint },
+              { key: 'reports', label: 'Reports', sub: 'Severity · assign · resolve', Icon: TriangleAlert },
+              { key: 'trends', label: 'Trends', sub: 'Needs · helpers · requests', Icon: TrendingUp },
+              { key: 'members', label: 'Members', sub: 'Roles · verify · block', Icon: Users },
+              { key: 'orgs', label: 'Organizations', sub: 'EIN · admins · RescueGroups', Icon: Building2 },
+              { key: 'issues', label: 'Member issues', sub: 'Bugs · tickets · flags', Icon: LifeBuoy },
+            ].map((s) => (
+              <TouchableOpacity key={s.key} style={styles.row} onPress={() => router.push(`/platform?section=${s.key}` as any)}>
+                <s.Icon color={Colors.navy} size={18} />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.name}>{m.full_name || m.email}</Text>
-                  <Text style={styles.meta}>{m.role || 'member'}{m.blocked ? ' · blocked' : ''}</Text>
+                  <Text style={styles.name}>{s.label}</Text>
+                  <Text style={styles.meta}>{s.sub}</Text>
                 </View>
-                <TouchableOpacity onPress={async () => {
-                  const { error } = await supabase.from('profiles').update({ blocked: !m.blocked }).eq('id', m.id);
-                  if (error) fail(error, 'Could not update block.'); else load();
-                }}><Text style={m.blocked ? styles.ok : styles.no}>{m.blocked ? 'Unblock' : 'Block'}</Text></TouchableOpacity>
-              </View>
+              </TouchableOpacity>
             ))}
-            <TextInput style={styles.input} value={uploadEmail} onChangeText={setUploadEmail} placeholder="Upload for user (email)" placeholderTextColor={Colors.textTertiary} autoCapitalize="none" />
-            <TouchableOpacity style={styles.ghost} onPress={async () => {
-              const email = uploadEmail.trim().toLowerCase();
-              if (!email) { setBanner({ kind: 'error', message: 'Enter a user email first.' }); return; }
-              const { data: ppl, error: e1 } = await supabase.from('profiles').select('id').ilike('email', email).maybeSingle();
-              if (e1 || !ppl) { fail(e1, 'No user with that email.'); return; }
-              const pick = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8 });
-              if (pick.canceled || !pick.assets?.[0]) { setBanner({ kind: 'info', message: 'Upload canceled.' }); return; }
-              const blob = await (await fetch(pick.assets[0].uri)).blob();
-              const path = `${ppl.id}/admin-${Date.now()}.jpg`;
-              const { error: up } = await supabase.storage.from('identity-docs').upload(path, blob, { contentType: 'image/jpeg', upsert: true });
-              if (up) { fail(up, 'Upload failed.'); return; }
-              const { error: uv } = await supabase.from('user_verifications').upsert({ user_id: ppl.id, id_document_path: path, id_status: 'submitted', id_verified: false });
-              if (uv) fail(uv, 'Saved file but could not mark submitted.');
-              else setBanner({ kind: 'success', message: 'Uploaded for user.' });
-              load();
-            }}><Text style={styles.ghostTxt}>Upload for user</Text></TouchableOpacity>
-            <TextInput style={styles.input} value={resetEmail} onChangeText={setResetEmail} placeholder="Reset password (email)" placeholderTextColor={Colors.textTertiary} autoCapitalize="none" />
-            <TouchableOpacity style={styles.ghost} onPress={async () => {
-              const email = resetEmail.trim().toLowerCase();
-              if (!email) { setBanner({ kind: 'error', message: 'Enter an email to send a reset.' }); return; }
-              const { error } = await supabase.auth.resetPasswordForEmail(email);
-              if (error) fail(error, 'Could not send reset.');
-              else setBanner({ kind: 'success', message: `Reset email sent to ${email}.` });
-            }}><Text style={styles.ghostTxt}>Send password reset</Text></TouchableOpacity>
-
-            <Text style={styles.sub}>Moderation & reviews</Text>
-            {queue.length === 0 ? <Text style={styles.meta}>Queue clear.</Text> : null}
-            {queue.map((q) => (
-              <View key={q.id} style={styles.card}>
-                <Text style={styles.name}>{q.subject_type}</Text>
-                <Text style={styles.meta}>{q.flag_reason || 'Flagged'}</Text>
-                <View style={styles.actions}>
-                  <TouchableOpacity onPress={() => decideQueue(q.id, 'approved')}><Text style={styles.ok}>Approve</Text></TouchableOpacity>
-                  <TouchableOpacity onPress={() => decideQueue(q.id, 'rejected')}><Text style={styles.no}>Reject</Text></TouchableOpacity>
-                </View>
-              </View>
-            ))}
-
-            <Text style={styles.sub}>Bug reports</Text>
-            {bugs.length === 0 ? <Text style={styles.meta}>No bugs filed.</Text> : null}
-            {bugs.map((b) => (
-              <View key={b.id} style={styles.card}>
-                <Text style={styles.name}>{b.title || 'Untitled'}</Text>
-                <Text style={styles.meta}>{b.status} · {b.body}</Text>
-              </View>
-            ))}
-
-            <Text style={styles.sub}>Settings</Text>
-            <TextInput style={styles.input} value={supportEmail} onChangeText={setSupportEmail} placeholder="Support email" autoCapitalize="none" />
-            <TextInput style={styles.input} value={maintenance} onChangeText={setMaintenance} placeholder="Maintenance message (empty = off)" />
-            <TouchableOpacity style={styles.primary} onPress={async () => {
-              const { error } = await supabase.from('app_settings').upsert([
-                { key: 'support_email', value: JSON.stringify(supportEmail), updated_by: user.id },
-                { key: 'maintenance_message', value: JSON.stringify(maintenance), updated_by: user.id },
-              ]);
-              if (error) fail(error, 'Could not save settings.');
-              else setBanner({ kind: 'success', message: 'Settings saved.' });
-            }}><Text style={styles.primaryTxt}>Save settings</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.ghost} onPress={() => router.push('/platform' as any)}>
+              <Text style={styles.ghostTxt}>Open platform home</Text>
+            </TouchableOpacity>
           </>
         ) : null}
       </Page>

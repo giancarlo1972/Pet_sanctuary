@@ -19,7 +19,7 @@ import {
   MapPin, Shield, ShieldCheck, LogOut, ChevronRight,
   EyeOff, Heart, TriangleAlert as AlertTriangle,
   FileText, Settings, Phone, IdCard, GraduationCap,
-  Award, PawPrint, Home, Clock, Check, X, Plus, MessageCircle, Pencil,
+  Award, PawPrint, Home, Clock, Check, X, Plus, MessageCircle, Pencil, Bell,
 } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';

@@ -294,6 +294,45 @@ interface ColorOption {
   id: number;
   name: string;
   sort_order: number;
+  hex?: string | null;
+}
+
+const COLOR_HEX: Record<string, string> = {
+  black: '#2A2A33', white: '#F5F5F5', gray: '#9AA1AC', grey: '#9AA1AC',
+  'blue / gray': '#6E7F95', 'blue-gray': '#6E7F95', blue: '#6E7F95',
+  orange: '#E0893A', brown: '#7A5230', cream: '#EAD9B8',
+  golden: '#D4A017', yellow: '#E5C35A', red: '#B54A3C', tan: '#C4A574',
+  chocolate: '#5C3317', fawn: '#C9A86A', silver: '#9AA1AC',
+};
+
+function hexForColor(name?: string | null, fromDb?: string | null) {
+  if (fromDb) return fromDb;
+  if (!name) return '#9AA1AC';
+  return COLOR_HEX[name.trim().toLowerCase()] || '#9AA1AC';
+}
+
+function ColorSwatches({ names, catalog }: { names: string[]; catalog: ColorOption[] }) {
+  const cleaned = names.map((n) => n.trim()).filter(Boolean);
+  if (cleaned.some((n) => /tuxedo/i.test(n))) {
+    return (
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <View style={{ width: 18, height: 18, borderRadius: 9, overflow: 'hidden', flexDirection: 'row', borderWidth: 1, borderColor: Colors.border }}>
+          <View style={{ flex: 1, backgroundColor: '#2A2A33' }} />
+          <View style={{ flex: 1, backgroundColor: '#F5F5F5' }} />
+        </View>
+        <Text style={{ fontFamily: Fonts.semibold, fontSize: 12, color: Colors.navy }}>Tuxedo</Text>
+      </View>
+    );
+  }
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+      {cleaned.map((n) => {
+        const row = catalog.find((c) => c.name.toLowerCase() === n.toLowerCase());
+        return <View key={n} style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: hexForColor(n, row?.hex || null), borderWidth: 1, borderColor: Colors.border }} />;
+      })}
+      <Text style={{ fontFamily: Fonts.semibold, fontSize: 12, color: Colors.navy }}>{cleaned.join(' / ') || '—'}</Text>
+    </View>
+  );
 }
 
 function formatDate(value: string | null): string {
@@ -499,6 +538,11 @@ export default function PetRecordScreen() {
   });
   const [selectingColorField, setSelectingColorField] = useState<'primary' | 'secondary' | null>(null);
   const [savingColor, setSavingColor] = useState(false);
+  const [detailsSheetVisible, setDetailsSheetVisible] = useState(false);
+  const [detailsDob, setDetailsDob] = useState('');
+  const [detailsSex, setDetailsSex] = useState('');
+  const [detailsSpayed, setDetailsSpayed] = useState(false);
+  const [savingDetails, setSavingDetails] = useState(false);
 
   const [docModalVisible, setDocModalVisible] = useState(false);
   const [docForm, setDocForm] = useState({
@@ -622,7 +666,7 @@ export default function PetRecordScreen() {
         .eq('pet_id', petId)
         .order('created_at', { ascending: false }),
       supabase.from('pet_breeds').select('id, species, name, sort_order').order('species').order('sort_order'),
-      supabase.from('pet_colors').select('id, name, sort_order').order('sort_order'),
+      supabase.from('pet_colors').select('id, name, sort_order, hex').order('sort_order'),
     ]);
 
     if (relsRes.data) {
@@ -669,6 +713,10 @@ export default function PetRecordScreen() {
     })));
     setBreeds((breedsRes.data as BreedOption[]) || []);
     setColors((colorsRes.data as ColorOption[]) || []);
+    if (colorsRes.error) {
+      const { data: c2 } = await supabase.from('pet_colors').select('id, name, sort_order');
+      setColors((c2 as ColorOption[]) || []);
+    }
     const [wRes, labRes, devRes, aiRes, deviceRes, chipRes] = await Promise.all([
       supabase.from('weight_entries').select('weight_lb, measured_on, source, created_at').eq('pet_id', petId).order('measured_on', { ascending: false }).limit(40),
       supabase.from('lab_results').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(80),
@@ -935,13 +983,43 @@ export default function PetRecordScreen() {
   };
 
   // === Color handlers ===
-  const openColorModal = () => {
+  const openDetailsSheet = () => {
+    setBreedForm({
+      breed_primary: pet?.breed_primary || '',
+      breed_secondary: pet?.breed_secondary || '',
+      is_mixed: pet?.is_mixed ?? false,
+      breed_notes: pet?.breed_notes || '',
+    });
     setColorForm({
       primary_color: pet?.primary_color || '',
       secondary_color: pet?.secondary_color || '',
       color_notes: pet?.color_notes || '',
     });
-    setColorModalVisible(true);
+    setDetailsDob(pet?.date_of_birth || '');
+    setDetailsSex(pet?.gender || '');
+    setDetailsSpayed(Boolean(pet?.spayed_neutered));
+    setDetailsSheetVisible(true);
+  };
+
+  const saveDetails = async () => {
+    if (!petId) return;
+    setSavingDetails(true);
+    const { error } = await supabase.from('pets').update({
+      breed_primary: breedForm.breed_primary || null,
+      breed_secondary: breedForm.breed_secondary || null,
+      is_mixed: breedForm.is_mixed,
+      breed_notes: breedForm.breed_notes.trim() || null,
+      primary_color: colorForm.primary_color || null,
+      secondary_color: colorForm.secondary_color || null,
+      color_notes: colorForm.color_notes.trim() || null,
+      date_of_birth: detailsDob || null,
+      gender: detailsSex || null,
+      spayed_neutered: detailsSpayed,
+    }).eq('id', petId);
+    setSavingDetails(false);
+    if (error) { showBanner(error.message || 'Could not save details.'); return; }
+    setDetailsSheetVisible(false);
+    load();
   };
 
   const saveColor = async () => {
@@ -1580,6 +1658,26 @@ export default function PetRecordScreen() {
     return notes.filter((n: any) => n && n.text).map((n: any) => ({ text: String(n.text), date: n.date || d.taken_on || null }));
   }).slice(0, 3);
   const ownerSince = currentRels.find((r) => r.relationship === 'owner')?.started_on;
+  const priorOwners = relationships.filter((r) => r.relationship === 'owner' && r.ended_on);
+  const withYouLabel = (() => {
+    if (!ownerSince) return '—';
+    if (pet.date_of_birth && priorOwners.length === 0) {
+      const weeks = (new Date(ownerSince).getTime() - new Date(pet.date_of_birth).getTime()) / (7 * 864e5);
+      if (weeks >= 0 && weeks <= 6) return `First owner · since ${Math.max(1, Math.round(weeks))} weeks old`;
+    }
+    return formatDate(ownerSince);
+  })();
+  const speciesLabel = (() => {
+    const s = (pet.species || '').toLowerCase();
+    if (s === 'cat') return 'Feline';
+    if (s === 'dog') return 'Canine';
+    return titleCase(pet.species) || '—';
+  })();
+  const sexSymbol = /female|spay/i.test(pet.gender || '') ? '♀' : /male|neuter/i.test(pet.gender || '') ? '♂' : '';
+  const sexLine = [sexSymbol, titleCase(pet.gender), pet.spayed_neutered ? ( /female/i.test(pet.gender || '') ? 'Spayed' : 'Neutered') : null].filter(Boolean).join(' · ').replace(/^♀ · /, '♀ ').replace(/^♂ · /, '♂ ');
+  const dobLine = pet.date_of_birth
+    ? `${new Date(pet.date_of_birth).toLocaleString('en-US', { month: 'short', year: 'numeric' })} · ${ageFromDob(pet.date_of_birth, pet.age_text)}`
+    : (pet.age_text || 'Add date of birth');
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'overview', label: 'Overview' },
@@ -1740,7 +1838,14 @@ export default function PetRecordScreen() {
                 <StatusTile icon={Shield} label="Microchipped" sub={chipNumber ? `••${String(chipNumber).slice(-4)}` : (pet.microchipped ? 'On file' : 'Not on file')} tone={(chipNumber || pet.microchipped) ? 'ok' : 'unknown'} />
               </View>
               <View style={styles.tileRow}>
-                <StatusTile icon={Scale} label="Weight" sub={weightSub} tone={weightTone} />
+                <View style={styles.statusTileWrap}>
+                  <StatusTile icon={Scale} label="Weight" sub={weightSub} tone={weightTone} />
+                  {canEdit ? (
+                    <TouchableOpacity onPress={openWeight} style={{ alignSelf: 'center', marginTop: -4 }}>
+                      <Text style={styles.linkTxt}>Record</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
                 <StatusTile icon={FlaskConical} label="FELV/FIV" sub={felvSub} tone={felvTone} />
                 <StatusTile icon={Activity} label="Activity" sub={activitySub} tone={activityTone} />
               </View>
@@ -1831,31 +1936,49 @@ export default function PetRecordScreen() {
               </View>
             ) : null}
 
-            <View style={styles.infoCard}>
-              <InfoRow icon={<PawPrint color={Colors.navy} size={16} />} label="Species" value={titleCase(pet.species)} />
-              <InfoRow icon={<Home color={Colors.navy} size={16} />} label="Breed" value={breedDisplay} />
-              {pet.ai_traits ? <InfoRow icon={<PawPrint color={Colors.navy} size={16} />} label="AI breed" value="visual guess" /> : null}
-              <InfoRow icon={<Palette color={Colors.navy} size={16} />} label="Color" value={colorDisplay} />
-              <InfoRow icon={<Calendar color={Colors.navy} size={16} />} label="DOB / age" value={[pet.date_of_birth ? formatDate(pet.date_of_birth) : null, ageFromDob(pet.date_of_birth, pet.age_text)].filter(Boolean).join(' · ') || '—'} />
-              <InfoRow icon={<Shield color={Colors.navy} size={16} />} label="Sex" value={titleCase(pet.gender) || '—'} />
-              <InfoRow icon={<Users color={Colors.navy} size={16} />} label="Owner since" value={ownerSince ? formatDate(ownerSince) : '—'} />
-            </View>
-            {canEdit && (
-              <View style={styles.editActionsRow}>
-                <TouchableOpacity style={styles.editActionBtn} onPress={openBreedModal} activeOpacity={0.85}>
-                  <Pencil color={Colors.navy} size={14} />
-                  <Text style={styles.editActionText}>Edit Breed</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.editActionBtn} onPress={openColorModal} activeOpacity={0.85}>
-                  <Pencil color={Colors.navy} size={14} />
-                  <Text style={styles.editActionText}>Edit Color</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.editActionBtn} onPress={openWeight} activeOpacity={0.85}>
-                  <Scale color={Colors.navy} size={14} />
-                  <Text style={styles.editActionText}>Record Weight</Text>
-                </TouchableOpacity>
+            <View style={styles.ovCard}>
+              <View style={styles.ovCardHead}>
+                <Text style={styles.ovKicker}>DETAILS</Text>
+                {canEdit ? (
+                  <TouchableOpacity onPress={openDetailsSheet}>
+                    <Text style={styles.linkTxt}>Edit</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
-            )}
+              <View style={styles.detailGrid}>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>Species</Text>
+                  <Text style={styles.detailV}>{speciesLabel}</Text>
+                </View>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>Breed</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <Text style={styles.detailV}>{breedDisplay}</Text>
+                    {pet.ai_traits ? (
+                      <View style={[styles.ovChip, styles.ovChipTeal, { paddingVertical: 2, paddingHorizontal: 8 }]}>
+                        <Text style={styles.ovChipTealTxt}>AI</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>Color</Text>
+                  <ColorSwatches names={[pet.primary_color || '', pet.secondary_color || ''].filter(Boolean)} catalog={colors} />
+                </View>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>Sex</Text>
+                  <Text style={styles.detailV}>{sexLine || '—'}</Text>
+                </View>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>Date of birth</Text>
+                  <Text style={styles.detailV}>{dobLine}</Text>
+                </View>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>With you since</Text>
+                  <Text style={styles.detailV}>{withYouLabel}</Text>
+                </View>
+              </View>
+            </View>
 
             <View style={styles.subHeader}>
               <View style={styles.subHeaderLeft}>
@@ -2707,7 +2830,7 @@ export default function PetRecordScreen() {
       </Modal>
 
       {/* === Breed Search Sub-Modal === */}
-      <Modal visible={selectingBreedField !== null && breedModalVisible} animationType="fade" transparent onRequestClose={() => setSelectingBreedField(null)}>
+      <Modal visible={selectingBreedField !== null} animationType="fade" transparent onRequestClose={() => setSelectingBreedField(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.searchModalCard}>
             <View style={styles.searchHeader}>
@@ -2766,8 +2889,57 @@ export default function PetRecordScreen() {
         </View>
       </Modal>
 
-      {/* === Color Search Sub-Modal === */}
-      <Modal visible={selectingColorField !== null && colorModalVisible} animationType="fade" transparent onRequestClose={() => setSelectingColorField(null)}>
+      <Modal visible={detailsSheetVisible} animationType="slide" transparent onRequestClose={() => setDetailsSheetVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+            <View style={styles.modalCard}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={styles.modalTitle}>Edit details</Text>
+                <TouchableOpacity onPress={() => setDetailsSheetVisible(false)}><X color={Colors.textTertiary} size={22} /></TouchableOpacity>
+              </View>
+              <Text style={styles.modalLabel}>Primary breed</Text>
+              <TouchableOpacity style={styles.dropdownBtn} onPress={() => setSelectingBreedField('primary')} activeOpacity={0.85}>
+                <Text style={breedForm.breed_primary ? styles.dropdownText : styles.dropdownPlaceholder}>{breedForm.breed_primary || 'Select breed'}</Text>
+                <ChevronDown color={Colors.textTertiary} size={18} />
+              </TouchableOpacity>
+              <Text style={styles.modalLabel}>Color</Text>
+              <TouchableOpacity style={styles.dropdownBtn} onPress={() => setSelectingColorField('primary')} activeOpacity={0.85}>
+                <Text style={colorForm.primary_color ? styles.dropdownText : styles.dropdownPlaceholder}>{colorForm.primary_color || 'Select color'}</Text>
+                <ChevronDown color={Colors.textTertiary} size={18} />
+              </TouchableOpacity>
+              <Text style={styles.modalLabel}>Secondary color</Text>
+              <TouchableOpacity style={styles.dropdownBtn} onPress={() => setSelectingColorField('secondary')} activeOpacity={0.85}>
+                <Text style={colorForm.secondary_color ? styles.dropdownText : styles.dropdownPlaceholder}>{colorForm.secondary_color || 'Optional'}</Text>
+                <ChevronDown color={Colors.textTertiary} size={18} />
+              </TouchableOpacity>
+              <Text style={styles.modalLabel}>Date of birth</Text>
+              {Platform.OS === 'web' ? (
+                // @ts-ignore web date input
+                <input type="date" value={detailsDob} onChange={(e: any) => setDetailsDob(e.target.value)} style={{ fontSize: 16, padding: 12, borderRadius: 10, border: `1px solid ${Colors.borderInput}`, fontFamily: Fonts.medium, color: Colors.navy, width: '100%' }} />
+              ) : (
+                <TextInput style={styles.modalInput} value={detailsDob} onChangeText={setDetailsDob} placeholder="YYYY-MM-DD" placeholderTextColor={Colors.textTertiary} />
+              )}
+              <Text style={styles.modalLabel}>Sex</Text>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {['Female', 'Male'].map((s) => (
+                  <TouchableOpacity key={s} style={[styles.editActionBtn, detailsSex.toLowerCase() === s.toLowerCase() && { backgroundColor: Colors.navy }]} onPress={() => setDetailsSex(s)}>
+                    <Text style={[styles.editActionText, detailsSex.toLowerCase() === s.toLowerCase() && { color: Colors.white }]}>{s === 'Female' ? '♀ Female' : '♂ Male'}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 }} onPress={() => setDetailsSpayed(!detailsSpayed)}>
+                <View style={{ width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: Colors.navy, backgroundColor: detailsSpayed ? Colors.navy : Colors.white }} />
+                <Text style={styles.editActionText}>Spayed / Neutered</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalSubmitBtn, savingDetails && styles.btnDisabled]} onPress={saveDetails} disabled={savingDetails} activeOpacity={0.85}>
+                {savingDetails ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.modalSubmitText}>Save details</Text>}
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
+
+      <Modal visible={selectingColorField !== null} animationType="fade" transparent onRequestClose={() => setSelectingColorField(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.searchModalCard}>
             <View style={styles.searchHeader}>
@@ -3081,6 +3253,10 @@ const styles = StyleSheet.create({
   statusIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   statusLabel: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy, textAlign: 'center' },
   statusSub: { fontFamily: Fonts.semibold, fontSize: 10.5, textAlign: 'center', lineHeight: 14 },
+  detailGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  detailTile: { width: '48%', gap: 4, backgroundColor: Colors.surface, borderRadius: 12, padding: 10 },
+  detailK: { fontFamily: Fonts.extrabold, fontSize: 10, letterSpacing: 0.6, color: Colors.textTertiary, textTransform: 'uppercase' },
+  detailV: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.navy },
   aiTitle: { fontFamily: Fonts.extrabold, color: Colors.critical, fontSize: FontSizes.md },
 
   tabContent: { paddingTop: 12, paddingHorizontal: 0 },

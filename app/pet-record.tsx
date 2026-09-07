@@ -316,10 +316,8 @@ function ColorSwatches({ names, catalog }: { names: string[]; catalog: ColorOpti
   if (cleaned.some((n) => /tuxedo/i.test(n))) {
     return (
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-        <View style={{ width: 18, height: 18, borderRadius: 9, overflow: 'hidden', flexDirection: 'row', borderWidth: 1, borderColor: Colors.border }}>
-          <View style={{ flex: 1, backgroundColor: '#2A2A33' }} />
-          <View style={{ flex: 1, backgroundColor: '#F5F5F5' }} />
-        </View>
+        <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: '#2A2A33', borderWidth: 1, borderColor: Colors.border }} />
+        <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: '#F5F5F5', borderWidth: 1, borderColor: Colors.border }} />
         <Text style={{ fontFamily: Fonts.semibold, fontSize: 12, color: Colors.navy }}>Tuxedo</Text>
       </View>
     );
@@ -437,22 +435,31 @@ function StatusTile({
   sub,
   tone,
   onPress,
+  extraLink,
+  extraOnPress,
 }: {
   icon: any;
   label: string;
   sub: string;
   tone: 'ok' | 'due' | 'over' | 'unknown';
   onPress?: () => void;
+  extraLink?: string;
+  extraOnPress?: () => void;
 }) {
-  const bg = tone === 'ok' ? Colors.tealBg : tone === 'due' ? Colors.standardBg : tone === 'over' ? Colors.criticalBg : Colors.surface;
-  const fg = tone === 'ok' ? Colors.tealDark : tone === 'due' ? Colors.accentDark : tone === 'over' ? Colors.critical : Colors.textTertiary;
+  const tileBg = tone === 'ok' ? Colors.tealBg : tone === 'due' ? Colors.standardBg : tone === 'over' ? Colors.criticalBg : Colors.surface;
+  const fg = tone === 'ok' ? Colors.teal : tone === 'due' ? Colors.accent : tone === 'over' ? Colors.critical : Colors.textTertiary;
   const inner = (
-    <View style={styles.statusTile}>
-      <View style={[styles.statusIcon, { backgroundColor: bg }]}>
-        <Icon color={fg} size={20} />
+    <View style={[styles.statusTile, { backgroundColor: tileBg }]}>
+      <View style={[styles.statusIcon, { backgroundColor: fg }]}>
+        <Icon color={Colors.white} size={20} />
       </View>
       <Text style={styles.statusLabel} numberOfLines={1}>{label}</Text>
       <Text style={[styles.statusSub, { color: fg }]} numberOfLines={2}>{sub}</Text>
+      {extraLink ? (
+        <TouchableOpacity onPress={extraOnPress} hitSlop={8}>
+          <Text style={styles.statusExtra}>{extraLink}</Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
   if (onPress) {
@@ -1508,7 +1515,10 @@ export default function PetRecordScreen() {
         });
         if (error) console.error('[pet-record] weight_entries insert', error);
       }
-      await supabase.from('pet_documents').update({ ai_status: 'confirmed' }).eq('id', sourceDocId);
+      await supabase.from('pet_documents').update({
+        ai_status: 'confirmed',
+        ai_summary: { ...(documents.find((d) => d.id === sourceDocId)?.ai_summary || {}), applied: true },
+      }).eq('id', sourceDocId);
       await supabase.from('document_extractions').update({
         status: 'applied',
         reviewed_by: user.id,
@@ -1607,15 +1617,25 @@ export default function PetRecordScreen() {
   const healthVerdict = (aiFindings?.verdict === 'MONITOR' || aiFindings?.verdict === 'WATCH')
     ? 'MONITOR'
     : 'STABLE';
-  const felvFiv = labRows.filter((l) => /felv|fiv/i.test(String(l.analyte || l.name || '')));
-  const vaxCount = vaccinations.filter((v) => v.confirmed !== false).length;
+  const confirmedVax = vaccinations.filter((v) => v.confirmed !== false);
+  const vaxCount = confirmedVax.length;
+  const pendingDocs = documents.filter((d) => {
+    const st = d.ai_status;
+    const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
+    if (st === 'confirmed' || ai.applied === true) return false;
+    return st === 'ready' || st === 'parsed';
+  });
+  const pendingItemCount = (d: PetDocument) => {
+    const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
+    return (ai.vaccinations?.length || 0) + (ai.labs?.length || 0) + (ai.visits?.length || 0) + (ai.conditions?.length || 0) + (ai.weight?.value ? 1 : 0);
+  };
   const nowMs = Date.now();
-  const vaxDues = vaccinations.map((v) => v.next_due_on).filter(Boolean).map((d) => new Date(String(d)).getTime()).filter((t) => !Number.isNaN(t));
-  const vaxTone: 'ok' | 'due' | 'over' | 'unknown' = vaxCount === 0 ? 'unknown'
-    : vaxDues.some((t) => t < nowMs) ? 'over'
-    : vaxDues.some((t) => t - nowMs < 30 * 864e5) ? 'due'
-    : 'ok';
-  const vaxSub = vaxTone === 'over' ? 'Overdue' : vaxTone === 'due' ? 'Due soon' : vaxTone === 'ok' ? 'Up to date' : 'No record';
+  const vaxDues = confirmedVax.map((v) => v.next_due_on).filter(Boolean).map((d) => new Date(String(d)).getTime()).filter((t) => !Number.isNaN(t));
+  const vaxTone: 'ok' | 'due' | 'over' | 'unknown' = vaxCount > 0
+    ? (vaxDues.some((t) => t < nowMs) ? 'over' : vaxDues.some((t) => t - nowMs < 30 * 864e5) ? 'due' : 'ok')
+    : pendingDocs.length > 0 ? 'due' : 'unknown';
+  const vaxSub = vaxTone === 'over' ? 'Overdue' : vaxTone === 'due' && vaxCount === 0 ? 'Review docs' : vaxTone === 'due' ? 'Due soon' : vaxTone === 'ok' ? 'Up to date' : 'No record';
+  const felvFiv = labRows.filter((l) => /felv|fiv/i.test(String(l.analyte || l.name || '')));
   const bcs = pet.body_condition_score;
   let weightTone: 'ok' | 'due' | 'over' | 'unknown' = 'unknown';
   let weightSub = latestLb != null ? `${latestLb} lb` : 'No weight';
@@ -1831,23 +1851,19 @@ export default function PetRecordScreen() {
         {/* OVERVIEW */}
         {tab === 'overview' && (
           <View style={styles.tabContent}>
-            <View style={styles.tileGrid}>
+            <View style={styles.statusCard}>
               <View style={styles.tileRow}>
-                <StatusTile icon={Syringe} label="Vaccinated" sub={vaxSub} tone={vaxTone} onPress={() => { setTab('medical'); setMedicalHub('records'); }} />
+                <StatusTile icon={Syringe} label="Vaccinated" sub={vaxSub} tone={vaxTone} onPress={() => {
+                  if (pendingDocs[0]) { setTab('medical'); setMedicalHub('records'); openConfirmFromParse(pendingDocs[0].id, pendingDocs[0].ai_summary || {}); }
+                  else { setTab('medical'); setMedicalHub('records'); }
+                }} />
                 <StatusTile icon={Heart} label="Spayed/Neutered" sub={pet.spayed_neutered ? 'Yes' : 'Not recorded'} tone={pet.spayed_neutered ? 'ok' : 'unknown'} />
                 <StatusTile icon={Shield} label="Microchipped" sub={chipNumber ? `••${String(chipNumber).slice(-4)}` : (pet.microchipped ? 'On file' : 'Not on file')} tone={(chipNumber || pet.microchipped) ? 'ok' : 'unknown'} />
               </View>
               <View style={styles.tileRow}>
-                <View style={styles.statusTileWrap}>
-                  <StatusTile icon={Scale} label="Weight" sub={weightSub} tone={weightTone} />
-                  {canEdit ? (
-                    <TouchableOpacity onPress={openWeight} style={{ alignSelf: 'center', marginTop: -4 }}>
-                      <Text style={styles.linkTxt}>Record</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
-                <StatusTile icon={FlaskConical} label="FELV/FIV" sub={felvSub} tone={felvTone} />
-                <StatusTile icon={Activity} label="Activity" sub={activitySub} tone={activityTone} />
+                <StatusTile icon={Scale} label="Weight" sub={weightSub} tone={weightTone} extraLink={canEdit ? 'Record' : undefined} extraOnPress={openWeight} />
+                <StatusTile icon={FlaskConical} label="FELV/FIV" sub={felvTone === 'unknown' ? 'Add' : felvSub} tone={felvTone} onPress={() => { setTab('medical'); setMedicalHub('labs'); }} />
+                <StatusTile icon={Activity} label="Activity" sub={activityTone === 'unknown' ? 'Connect' : activitySub} tone={activityTone} onPress={() => showBanner('Connect a litter box, feeder, or GPS collar from Me → Devices.', 'info')} />
               </View>
             </View>
             {ownerNotes.length > 0 ? (
@@ -1967,11 +1983,20 @@ export default function PetRecordScreen() {
                 </View>
                 <View style={styles.detailTile}>
                   <Text style={styles.detailK}>Sex</Text>
-                  <Text style={styles.detailV}>{sexLine || '—'}</Text>
+                  <Text style={styles.detailV}>
+                    {sexSymbol === '♀' ? <Text style={{ color: Colors.coral }}>♀ </Text> : sexSymbol === '♂' ? '♂ ' : ''}
+                    {sexLine.replace(/^[♀♂]\s*/, '') || '—'}
+                  </Text>
                 </View>
                 <View style={styles.detailTile}>
                   <Text style={styles.detailK}>Date of birth</Text>
-                  <Text style={styles.detailV}>{dobLine}</Text>
+                  {pet.date_of_birth ? (
+                    <Text style={styles.detailV}>{dobLine}</Text>
+                  ) : canEdit ? (
+                    <TouchableOpacity onPress={openDetailsSheet}><Text style={{ fontFamily: Fonts.bold, fontSize: 13, color: Colors.coral }}>Add date of birth</Text></TouchableOpacity>
+                  ) : (
+                    <Text style={styles.detailV}>—</Text>
+                  )}
                 </View>
                 <View style={styles.detailTile}>
                   <Text style={styles.detailK}>With you since</Text>
@@ -1980,54 +2005,53 @@ export default function PetRecordScreen() {
               </View>
             </View>
 
-            <View style={styles.subHeader}>
-              <View style={styles.subHeaderLeft}>
-                <ImageIcon color={Colors.navy} size={18} />
-                <Text style={styles.subHeaderText}>Photos</Text>
+            <View style={styles.ovCard}>
+              <View style={styles.ovCardHead}>
+                <Text style={styles.ovKicker}>PHOTOS</Text>
+                {canEdit && photos.length < 10 && (
+                  <TouchableOpacity style={styles.addBtn} onPress={uploadPhoto} disabled={photoUploading} activeOpacity={0.85}>
+                    {photoUploading ? <ActivityIndicator size="small" color={Colors.coral} /> : <Plus color={Colors.coral} size={16} />}
+                    <Text style={styles.addBtnText}>{photoUploading ? 'Uploading' : 'Add'}</Text>
+                  </TouchableOpacity>
+                )}
               </View>
-              {canEdit && photos.length < 10 && (
-                <TouchableOpacity style={styles.addBtn} onPress={uploadPhoto} disabled={photoUploading} activeOpacity={0.85}>
-                  {photoUploading ? <ActivityIndicator size="small" color={Colors.coral} /> : <Plus color={Colors.coral} size={16} />}
-                  <Text style={styles.addBtnText}>{photoUploading ? 'Uploading' : 'Add'}</Text>
-                </TouchableOpacity>
+              {photos.length === 0 ? (
+                <Text style={styles.emptyText}>No photos yet.</Text>
+              ) : (
+                <View style={styles.photoGrid}>
+                  {photos.map((photo, i) => (
+                    <View key={photo.id} style={styles.photoCell}>
+                      <TouchableOpacity onPress={() => canEdit && !photo.is_profile && setProfilePhoto(photo)} activeOpacity={0.85}>
+                        <SignedImage path={photo.photo_url} style={styles.photoThumb} />
+                      </TouchableOpacity>
+                      {photo.is_profile && (
+                        <View style={styles.profileBadge}>
+                          <Text style={styles.profileBadgeText}>Profile</Text>
+                        </View>
+                      )}
+                      {canEdit && (
+                        <TouchableOpacity style={styles.photoDeleteBtn} onPress={() => deletePhoto(photo)} activeOpacity={0.75}>
+                          <X color={Colors.white} size={12} />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  ))}
+                </View>
               )}
             </View>
-            {photos.length === 0 ? (
-              <Text style={styles.emptyText}>No photos yet.</Text>
-            ) : (
-              <View style={styles.photoGrid}>
-                {photos.map((photo, i) => (
-                  <View key={photo.id} style={styles.photoCell}>
-                    <TouchableOpacity onPress={() => canEdit && !photo.is_profile && setProfilePhoto(photo)} activeOpacity={0.85}>
-                      <SignedImage path={photo.photo_url} style={styles.photoThumb} />
-                    </TouchableOpacity>
-                    {photo.is_profile && (
-                      <View style={styles.profileBadge}>
-                        <Text style={styles.profileBadgeText}>Profile</Text>
-                      </View>
-                    )}
-                    {canEdit && (
-                      <TouchableOpacity style={styles.photoDeleteBtn} onPress={() => deletePhoto(photo)} activeOpacity={0.75}>
-                        <X color={Colors.white} size={12} />
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                ))}
-              </View>
-            )}
 
             <View style={styles.ovCard}>
               <Text style={styles.ovKicker}>{(pet.name || 'PET').toUpperCase()}’S STORY</Text>
               <Text style={styles.ovFoot}>Pull photos from Google or Apple Photos, then let AI draft a shareable story.</Text>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
-                <TouchableOpacity style={styles.editActionBtn} onPress={() => Linking.openURL('https://photos.google.com')} activeOpacity={0.85}>
-                  <Text style={styles.editActionText}>Google Photos</Text>
+                <TouchableOpacity style={styles.outlineChip} onPress={() => Linking.openURL('https://photos.google.com')} activeOpacity={0.85}>
+                  <Text style={styles.outlineChipTxt}>Google Photos</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.editActionBtn} onPress={() => Linking.openURL('https://www.icloud.com/photos')} activeOpacity={0.85}>
-                  <Text style={styles.editActionText}>Apple Photos</Text>
+                <TouchableOpacity style={styles.outlineChip} onPress={() => Linking.openURL('https://www.icloud.com/photos')} activeOpacity={0.85}>
+                  <Text style={styles.outlineChipTxt}>Apple Photos</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.editActionBtn, { backgroundColor: Colors.navy }]} onPress={() => router.push({ pathname: '/story-composer', params: { petId } })} activeOpacity={0.85}>
-                  <Text style={[styles.editActionText, { color: Colors.white }]}>Create story with AI</Text>
+                <TouchableOpacity style={styles.coralChip} onPress={() => router.push({ pathname: '/story-composer', params: { petId } })} activeOpacity={0.85}>
+                  <Text style={styles.coralChipTxt}>Create story with AI</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -2087,6 +2111,14 @@ export default function PetRecordScreen() {
         {/* MEDICAL HUB */}
         {tab === 'medical' && (
           <View style={styles.tabContent}>
+            {canEdit && pendingDocs.length > 0 ? (
+              <TouchableOpacity style={styles.reviewBanner} onPress={() => {
+                const d = pendingDocs[0];
+                openConfirmFromParse(d.id, d.ai_summary || {});
+              }} activeOpacity={0.85}>
+                <Text style={styles.reviewBannerTxt}>Review all pending · {pendingDocs.length} document{pendingDocs.length === 1 ? '' : 's'}</Text>
+              </TouchableOpacity>
+            ) : null}
             <View style={styles.healthHero}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Text style={styles.healthKicker}>{(pet.name || 'PET').toUpperCase()} · HEALTH SUMMARY</Text>
@@ -2369,10 +2401,12 @@ export default function PetRecordScreen() {
                       : status === 'failed'
                         ? "AI couldn't read this — retry or add manually"
                         : null;
+                const unreviewed = (status === 'ready' || status === 'parsed') && ai.applied !== true;
+                const nItems = pendingItemCount(doc);
                 return (
                 <View key={doc.id} style={styles.docCard}>
                   <TouchableOpacity style={styles.docMain} onPress={() => {
-                    if (status === 'ready' && canEdit) openConfirmFromParse(doc.id, ai);
+                    if (unreviewed && canEdit) openConfirmFromParse(doc.id, ai);
                     else openDocUrl(doc);
                   }} activeOpacity={0.85}>
                     <View style={styles.docIcon}>
@@ -2391,7 +2425,11 @@ export default function PetRecordScreen() {
                       {clinic ? <Text style={styles.docClinic}>{String(clinic)}</Text> : null}
                     </View>
                   </TouchableOpacity>
-                  {canEdit && status !== 'processing' ? (
+                  {canEdit && unreviewed ? (
+                    <TouchableOpacity style={styles.docDeleteBtn} onPress={() => openConfirmFromParse(doc.id, ai)} activeOpacity={0.85}>
+                      <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.coral }}>Review {nItems || ''}{nItems ? ' items' : ''}</Text>
+                    </TouchableOpacity>
+                  ) : canEdit && status !== 'processing' ? (
                     <TouchableOpacity style={styles.docDeleteBtn} onPress={() => {
                       parsedAttempted.current.delete(doc.id);
                       void triggerExtraction(doc.id, { path: doc.file_path }, false);
@@ -3233,9 +3271,25 @@ const styles = StyleSheet.create({
   ovChipTeal: { backgroundColor: Colors.teal, borderColor: Colors.teal },
   ovChipTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy },
   ovChipTealTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.white },
-  ovCard: { backgroundColor: Colors.white, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: Colors.border, gap: 8 },
+  ovCard: { backgroundColor: Colors.white, borderRadius: 16, padding: 14, borderWidth: 1, borderColor: Colors.border, gap: 8 },
+  ovKicker: { fontFamily: Fonts.extrabold, fontSize: 11, letterSpacing: 0.8, color: Colors.textTertiary, textTransform: 'uppercase' },
+  tabContent: { paddingTop: 12, paddingHorizontal: 0, gap: 14 },
+  statusCard: { backgroundColor: Colors.white, borderRadius: 16, padding: 14, borderWidth: 1, borderColor: Colors.border, gap: 10 },
+  tileRow: { flexDirection: 'row', gap: 10, width: '100%' },
+  statusTileWrap: { flex: 1 },
+  statusTile: { alignItems: 'center', gap: 6, padding: 12, borderRadius: 12 },
+  statusIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  statusLabel: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy, textAlign: 'center' },
+  statusSub: { fontFamily: Fonts.bold, fontSize: 11, textAlign: 'center', lineHeight: 14 },
+  statusExtra: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.tealDark, marginTop: 2 },
+  outlineChip: { borderWidth: 1.5, borderColor: Colors.borderInput, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
+  outlineChipTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy },
+  coralChip: { backgroundColor: Colors.coral, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
+  coralChipTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.white },
+  reviewBanner: { backgroundColor: Colors.standardBg, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: '#F3E2B0' },
+  reviewBannerTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.accentDark, textAlign: 'center' },
   ovCardHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  ovKicker: { fontFamily: Fonts.extrabold, fontSize: 11, letterSpacing: 0.8, color: Colors.textTertiary },
+  ovKicker: { fontFamily: Fonts.extrabold, fontSize: 11, letterSpacing: 0.8, color: Colors.textTertiary, textTransform: 'uppercase' },
   ovFoot: { fontFamily: Fonts.regular, fontSize: 11.5, color: Colors.textSecondary, lineHeight: 17 },
   ovStatN: { fontFamily: Fonts.extrabold, fontSize: 18, color: Colors.navy },
   deviceRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -3246,20 +3300,13 @@ const styles = StyleSheet.create({
   requestBtn: { backgroundColor: Colors.navy, borderRadius: 12, paddingVertical: 10, alignItems: 'center', marginTop: 4 },
   requestBtnTxt: { color: Colors.white, fontFamily: Fonts.bold, fontSize: 13 },
   linkTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.tealDark },
-  tileGrid: { gap: 10, alignItems: 'center' },
-  tileRow: { flexDirection: 'row', justifyContent: 'center', gap: 10, width: '100%' },
-  statusTileWrap: { flex: 1, maxWidth: 140 },
-  statusTile: { alignItems: 'center', gap: 6, paddingVertical: 8 },
-  statusIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  statusLabel: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy, textAlign: 'center' },
-  statusSub: { fontFamily: Fonts.semibold, fontSize: 10.5, textAlign: 'center', lineHeight: 14 },
   detailGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   detailTile: { width: '48%', gap: 4, backgroundColor: Colors.surface, borderRadius: 12, padding: 10 },
   detailK: { fontFamily: Fonts.extrabold, fontSize: 10, letterSpacing: 0.6, color: Colors.textTertiary, textTransform: 'uppercase' },
   detailV: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.navy },
   aiTitle: { fontFamily: Fonts.extrabold, color: Colors.critical, fontSize: FontSizes.md },
 
-  tabContent: { paddingTop: 12, paddingHorizontal: 0 },
+  tabContent: { paddingTop: 12, paddingHorizontal: 0, gap: 14 },
   healthHero: { backgroundColor: Colors.navy, borderRadius: 18, padding: 16, gap: 14, marginBottom: 8 },
   healthKicker: { fontFamily: Fonts.extrabold, fontSize: 11, color: '#B9BCE0', letterSpacing: 0.8 },
   healthStable: { fontFamily: Fonts.extrabold, fontSize: 11, color: Colors.teal, backgroundColor: 'rgba(255,255,255,0.14)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, overflow: 'hidden' },

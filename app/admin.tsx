@@ -7,6 +7,7 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
+import { isPlatformAdmin } from '@/lib/admin-access';
 import { SUPPORT_EMAIL, supportMailto } from '@/lib/contact';
 
 type QueueItem = {
@@ -17,8 +18,6 @@ type QueueItem = {
   status: string;
   title?: string;
 };
-
-const ADMIN_ROLES = new Set(['admin', 'administrator', 'org_admin', 'shelter']);
 
 export default function AdminScreen() {
   const { user, loading: authLoading } = useAuth();
@@ -34,10 +33,11 @@ export default function AdminScreen() {
     if (!user) { setLoading(false); return; }
     setLoading(true);
     setError(null);
-    const { data: profile } = await supabase.from('profiles').select('role, full_name').eq('id', user.id).maybeSingle();
+    const { data: profile } = await supabase.from('profiles').select('role, full_name, email').eq('id', user.id).maybeSingle();
     const r = (profile?.role || '').toLowerCase().trim();
+    const email = (user.email || profile?.email || '').toLowerCase();
     setRole(r || 'member');
-    if (!ADMIN_ROLES.has(r)) { setLoading(false); return; }
+    if (!isPlatformAdmin(r, email)) { setLoading(false); return; }
 
     const { data: q } = await supabase
       .from('moderation_queue')
@@ -113,7 +113,7 @@ export default function AdminScreen() {
     );
   }
 
-  if (!role || !ADMIN_ROLES.has(role)) {
+  if (!isPlatformAdmin(role, user?.email)) {
     return (
       <SafeAreaView style={styles.wrap} edges={['top']}>
         <AppHeader title="Admin" showBack />

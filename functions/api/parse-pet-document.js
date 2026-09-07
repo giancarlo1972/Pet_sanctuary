@@ -1,3 +1,12 @@
+
+function decodedBytes(b64) {
+  const raw = String(b64 || '').replace(/^data:[^;]+;base64,/, '');
+  return Math.floor(raw.length * 0.75);
+}
+function tooLarge(b64, max) {
+  return decodedBytes(b64) > max;
+}
+
 function getKey(env) {
   if (!env) return null;
   if (env.ANTHROPIC_API_KEY) return env.ANTHROPIC_API_KEY;
@@ -33,8 +42,12 @@ export async function onRequestPost(context) {
     const key = getKey(context.env);
     if (!key) return Response.json({ parsed: false, error: 'AI key missing' }, { headers });
     const content = [];
-    if (body.imageBase64) {
-      const s = String(body.imageBase64);
+    const imgs = Array.isArray(body.images) ? body.images : (body.imageBase64 ? [body.imageBase64] : []);
+    for (const s0 of imgs) {
+      const s = String(s0);
+      if (tooLarge(s, 9_500_000)) {
+        return Response.json({ parsed: false, error: 'too_large', labeled: 'Image too large — please re-upload (max 10 MB)' }, { headers, status: 413 });
+      }
       const raw = s.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
       let mediaType = 'image/jpeg';
       if (s.includes('image/png') || raw.startsWith('iVBORw0')) mediaType = 'image/png';

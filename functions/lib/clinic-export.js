@@ -227,3 +227,38 @@ export function parseExam(text, date, clinic) {
   return { visit_date: date || null, clinic: clinic || null, vitals, systems };
 }
 
+export function parseFlowsheet(text) {
+  const out = [];
+  const re = /(\d{1,2}\/\d{1,2}\/\d{2,4})(?:[ T](\d{1,2}:\d{2}))?[^\d]{0,24}(\d{2,3}(?:\.\d)?)[^\d]{1,8}(\d{2,3})[^\d]{1,8}(\d{1,3})/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const iso = toIso(m[1]);
+    if (!iso) continue;
+    const temp = parseFloat(m[3]);
+    const hr = parseFloat(m[4]);
+    const rr = parseFloat(m[5]);
+    if (temp < 96 || temp > 106 || hr < 40 || hr > 280 || rr < 8 || rr > 80) continue;
+    out.push({ at: m[2] ? `${iso}T${m[2]}` : iso, temp_f: temp, hr, rr, weight_lb: null, bcs: null });
+  }
+  return out;
+}
+
+export function parseMedsTable(text) {
+  const out = [];
+  const re = /(?:Inventory Item|Rx|Administered)\s*[—:-]\s*([A-Za-z][A-Za-z0-9 +\-\/]{2,40})/gi;
+  let m;
+  while ((m = re.exec(text))) {
+    const name = m[1].trim();
+    if (/vaccine|purevax|fvrcp|rabies/i.test(name)) continue;
+    out.push({ name, dose: null, route: /SQ|SC|IV|PO|IM/i.test(m[0]) ? (m[0].match(/SQ|SC|IV|PO|IM/i) || [])[0] : null, given_on: null, status: 'completed' });
+  }
+  if (/strongid|pyrantel/i.test(text)) out.push({ name: 'Strongid T', dose: null, route: 'PO', given_on: null, status: 'completed' });
+  const seen = new Set();
+  return out.filter((x) => {
+    const k = x.name.toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+

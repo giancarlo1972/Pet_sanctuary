@@ -8,6 +8,8 @@ import {
   parseConditions,
   batchBlocks,
   parseExam,
+  parseFlowsheet,
+  parseMedsTable,
 } from '../lib/clinic-export.js';
 
 function decodedBytes(b64) {
@@ -39,7 +41,10 @@ Return JSON only, no markdown:
   "date": "YYYY-MM-DD or null",
   "vaccinations": [{"name": "", "product": null, "manufacturer": null, "lot": null, "dose": null, "given": "YYYY-MM-DD date administered — never the due date", "next_due": "YYYY-MM-DD or null", "vet": null, "clinic": null, "reactions": null}],
   "conditions": [{"name": "", "kind": "condition|allergy", "status": "active|resolved|monitoring", "onset_date": "YYYY-MM-DD or null", "resolved_date": "YYYY-MM-DD or null", "notes": null}],
-  "medications": [{"name": "", "dose": null, "given_on": null}],
+  "medications": [{"name": "", "dose": null, "route": null, "given_on": null, "status": "active|completed"}],
+  "diagnostics": [{"kind": "imaging|pcr|other", "name": "", "result": null, "date": null}],
+  "vitals_series": [{"at": "YYYY-MM-DDTHH:MM or YYYY-MM-DD", "temp_f": null, "hr": null, "rr": null, "weight_lb": null, "bcs": null}],
+  "labs": [{"analyte": "", "value": "", "unit": null, "flag": "normal|high|low|abnormal|unknown", "collected_on": null, "ref_low": null, "ref_high": null, "group": "hematology|chemistry|endocrinology|urinalysis"}],
   "visits": [{"clinic": null, "date": "YYYY-MM-DD or null", "reason": null, "summary": null}],
   "labs": [{"analyte": "", "value": "", "unit": null, "flag": "normal|high|low|abnormal|unknown", "collected_on": null}],
   "weight": {"value": null, "unit": "lb|kg", "measured_on": null},
@@ -54,7 +59,11 @@ Rules:
 - conditions: one row per distinct issue. If a visit notes an existing problem is better or gone, set status=resolved (or monitoring), do not duplicate the name. Use onset_date/resolved_date when printed.
 - ai_note: 3–5 lines covering findings, any delta vs prior labs for the same analytes, and flags. Do not diagnose.
 - owner_notes: behavioral/lifestyle guidance quoted from the vet notes for the owner (diet, indoor-only, activity, follow-up at home). Not clinical findings, diagnoses, or lab values. Empty array if none.
-- exams: one per physical exam / wellness visit. vitals: temp_f (°F), hr, rr, bcs (1-9), pain (0-10), hydration (e.g. adequate). systems MUST cover: Subjective, Oral-Nasal-Throat, Ears, Eyes, Cardiovascular, Respiratory, Abdominal, Genitourinary, Musculoskeletal, Integument, Lymphatics, Neurological, Rectal. status=normal (NSF/WNL) or abnormal with the vet note.`;
+- exams: one per physical exam / wellness visit. vitals: temp_f (°F), hr, rr, bcs (1-9), pain (0-10), hydration (e.g. adequate). systems MUST cover 12: Oral-Nasal-Throat, Ears, Eyes, Cardiovascular, Respiratory, Abdominal, Genitourinary, Musculoskeletal, Integument, Lymphatics, Neurological, Rectal. status=normal|watch|abnormal with the vet note.
+- vitals_series: EVERY timestamped vital from hospitalization/flowsheets (T/P/R charts), plus exam vitals. One row per time.
+- medications: every drug administered or prescribed (name, dose, route PO/SC/IV, date, active vs completed).
+- diagnostics: imaging (x-ray, ultrasound) and PCR/Idexx panels with the printed result text.
+- labs: include urinalysis, PCV, Total Solids, CK, Triglycerides, Spec fPL. Set group. Include ref_low/ref_high when printed.`;
 
 const MODELS = ['claude-haiku-4-5', 'claude-3-5-haiku-latest', 'claude-3-5-sonnet-20241022'];
 const SYSTEM = 'Respond with a single JSON object only, no markdown, no commentary';
@@ -336,6 +345,9 @@ async function parseClinicExport(env, key, documentId, text, pageCount) {
     labs: dedupeLabs,
     weights,
     exams,
+    vitals_series: parseFlowsheet(text),
+    medications: parseMedsTable(text),
+    diagnostics: [],
     weight: latestW,
     identity: header,
     page_count: pageCount,

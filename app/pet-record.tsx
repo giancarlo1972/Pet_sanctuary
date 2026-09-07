@@ -62,6 +62,7 @@ import { useAuth } from '@/lib/context/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import { Page, CONTENT_MAX } from '@/components/Page';
 import { WeightLineChart, LabSparkline } from '@/components/PetCharts';
+import MedicalDashboard from '@/components/MedicalDashboard';
 import { extractPdfText } from '@/lib/pdf-text';
 import { SearchablePicker } from '@/components/SearchablePicker';
 import { DateField } from '@/components/DateField';
@@ -549,6 +550,9 @@ export default function PetRecordScreen() {
   const [openMed, setOpenMed] = useState<Record<string, boolean>>({ vaccinations: true });
   const [examNote, setExamNote] = useState<string | null>(null);
   const [petExams, setPetExams] = useState<any[]>([]);
+  const [medsGiven, setMedsGiven] = useState<any[]>([]);
+  const [diagnostics, setDiagnostics] = useState<any[]>([]);
+  const [vitalRows, setVitalRows] = useState<any[]>([]);
   const [detailsCoat, setDetailsCoat] = useState('');
   const [aiFindings, setAiFindings] = useState<any>(null);
   const [aiRuns, setAiRuns] = useState<any[]>([]);
@@ -831,7 +835,7 @@ export default function PetRecordScreen() {
       const { data: c2 } = await supabase.from('pet_colors').select('id, name, sort_order');
       setColors((c2 as ColorOption[]) || []);
     }
-    const [wRes, labRes, devRes, aiRes, deviceRes, chipRes, examRes] = await Promise.all([
+    const [wRes, labRes, devRes, aiRes, deviceRes, chipRes, examRes, medsRes, diagRes, vitRes] = await Promise.all([
       supabase.from('weight_entries').select('weight_lb, measured_on, source, created_at').eq('pet_id', petId).order('measured_on', { ascending: false }).limit(40),
       supabase.from('lab_results').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(400),
       supabase.from('device_readings').select('*').eq('pet_id', petId).order('recorded_at', { ascending: false }).limit(80),
@@ -839,6 +843,9 @@ export default function PetRecordScreen() {
       supabase.from('pet_devices').select('*').eq('pet_id', petId),
       supabase.from('pet_identifiers').select('microchip_number').eq('pet_id', petId).maybeSingle(),
       supabase.from('pet_exams').select('*').eq('pet_id', petId).order('visit_date', { ascending: false }).limit(20),
+      supabase.from('medications_given').select('*').eq('pet_id', petId).order('administered_on', { ascending: false }).limit(40),
+      supabase.from('pet_diagnostics').select('*').eq('pet_id', petId).order('taken_on', { ascending: false }).limit(40),
+      supabase.from('pet_vitals').select('*').eq('pet_id', petId).order('recorded_at', { ascending: true }).limit(200),
     ]);
     setWeightEntries((wRes.data as any[]) || []);
     let labs = (labRes.data as any[]) || [];
@@ -862,6 +869,9 @@ export default function PetRecordScreen() {
     setDeviceReadings((devRes.data as any[]) || []);
     setPetDevices((deviceRes.data as any[]) || []);
     if (!examRes.error) setPetExams((examRes.data as any[]) || []);
+    if (!medsRes.error) setMedsGiven((medsRes.data as any[]) || []);
+    if (!diagRes.error) setDiagnostics((diagRes.data as any[]) || []);
+    if (!vitRes.error) setVitalRows((vitRes.data as any[]) || []);
     if (chipRes.error) setChipDenied(true);
     else setChipNumber(chipRes.data?.microchip_number || null);
     const runs = (aiRes.data as any[]) || [];
@@ -1759,6 +1769,40 @@ export default function PetRecordScreen() {
         } else {
           console.log('[apply] exam ok', visitDate, data?.id);
         }
+        const v = ex.vitals || {};
+        if (visitDate && (v.temp_f || v.hr || v.rr || v.bcs || v.weight_lb)) {
+          await supabase.from('pet_vitals').insert({
+            pet_id: petId, recorded_at: visitDate, temp_f: v.temp_f ?? null, hr: v.hr ?? null, rr: v.rr ?? null,
+            weight_lb: v.weight_lb ?? null, bcs: v.bcs ?? null, source_document_id: sourceDocId,
+          });
+        }
+      }
+
+      for (const m of (rawDoc.medications || extractionReview.data && (extractionReview as any).medications || [])) {
+        if (!m?.name) continue;
+        const { error } = await supabase.from('medications_given').insert({
+          pet_id: petId, name: m.name, dose: m.dose || null, route: m.route || null,
+          administered_on: m.given_on || m.administered_on || null, status: m.status || 'completed',
+          source_document_id: sourceDocId,
+        });
+        if (error) console.log('[apply] med fail', m.name, error.message);
+      }
+      for (const d of (rawDoc.diagnostics || [])) {
+        if (!d?.name) continue;
+        const { error } = await supabase.from('pet_diagnostics').insert({
+          pet_id: petId, kind: d.kind || 'other', name: d.name, result: d.result || null,
+          taken_on: d.date || d.taken_on || null, source_document_id: sourceDocId,
+        });
+        if (error) console.log('[apply] diag fail', d.name, error.message);
+      }
+      for (const v of (rawDoc.vitals_series || [])) {
+        const at = v.at || v.recorded_at;
+        if (!at) continue;
+        const { error } = await supabase.from('pet_vitals').insert({
+          pet_id: petId, recorded_at: at, temp_f: v.temp_f ?? null, hr: v.hr ?? null, rr: v.rr ?? null,
+          weight_lb: v.weight_lb ?? null, bcs: v.bcs ?? null, source_document_id: sourceDocId,
+        });
+        if (error) console.log('[apply] vital fail', at, error.message);
       }
 
       for (const c of extractionReview.conditions || []) {
@@ -2495,97 +2539,42 @@ export default function PetRecordScreen() {
                 <Text style={styles.reviewBannerTxt}>Review all pending · {pendingDocs.length} document{pendingDocs.length === 1 ? '' : 's'}</Text>
               </TouchableOpacity>
             ) : null}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={styles.ovKicker}>{(pet.name || 'PET').toUpperCase()} · MEDICAL</Text>
-              <Text style={[styles.healthStable, { color: healthVerdict === 'MONITOR' ? Colors.accent : Colors.teal }]}>{healthVerdict}</Text>
-            </View>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-              {[
-                { k: 'Weight', v: latestLb != null ? `${latestLb} lb` : '—', nums: weightEntries.slice().reverse().map((w) => w.weight_lb), delta: weightEntries[0] && weightEntries[1] ? weightEntries[0].weight_lb - weightEntries[1].weight_lb : null, tone: weightTone },
-                { k: 'BCS', v: bcsVal != null ? String(bcsVal) : '—', nums: petExams.map((e) => Number(e.vitals?.bcs)).filter((n) => Number.isFinite(n)).reverse(), delta: bcsVal != null && prevBcs != null ? bcsVal - prevBcs : null, tone: bcsTone(bcsVal) },
-                { k: kidney.label || 'SDMA', v: kidney.value === '—' ? '—' : `${kidney.value}${kidney.unit ? ` ${kidney.unit}` : ''}`, nums: kidney.nums, delta: kidney.delta, tone: kidney.flag === 'high' || kidney.flag === 'abnormal' ? 'over' : kidney.nums.length ? 'ok' : 'unknown' },
-                { k: 'ALT', v: alt.value === '—' ? '—' : `${alt.value}${alt.unit ? ` ${alt.unit}` : ''}`, nums: alt.nums, delta: alt.delta, tone: alt.flag === 'high' || alt.flag === 'abnormal' ? 'over' : alt.nums.length ? 'ok' : 'unknown' },
-                { k: 'HCT', v: hct.value === '—' ? '—' : `${hct.value}${hct.unit ? ` ${hct.unit}` : ''}`, nums: hct.nums, delta: hct.delta, tone: hct.flag === 'low' ? 'due' : hct.flag === 'high' ? 'over' : hct.nums.length ? 'ok' : 'unknown' },
-                { k: 'Activity', v: visits7 ? `${visits7}/7d` : '—', nums: [], delta: null, tone: visits7 ? 'ok' : 'unknown' },
-              ].map((m) => (
-                <View key={m.k} style={[styles.ovCard, { width: '48%', gap: 6 }]}>
-                  <Text style={styles.detailK}>{m.k}</Text>
-                  <Text style={[styles.detailV, { color: m.tone === 'over' ? Colors.critical : m.tone === 'due' ? Colors.accent : Colors.navy }]}>{m.v}</Text>
-                  {m.delta != null ? <Text style={styles.ovFoot}>{m.delta > 0 ? '▲' : m.delta < 0 ? '▼' : '•'} {Math.abs(Math.round(m.delta * 10) / 10)} vs prior</Text> : null}
-                  {m.nums.length > 0 ? <LabSparkline values={m.nums} color={m.tone === 'over' ? Colors.critical : m.tone === 'due' ? Colors.accent : Colors.teal} height={40} /> : null}
-                </View>
-              ))}
-            </View>
-            <View style={styles.ovCard}>
-              <Text style={styles.ovKicker}>LAST EXAM{lastExam ? ` · ${formatDate(lastExam.visit_date)} · ${lastExam.clinic || 'Clinic'}` : ''}</Text>
-              {lastExam ? (
-                <>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
-                    {[
-                      ['Temp', lastExam.vitals?.temp_f != null ? `${lastExam.vitals.temp_f}°F` : '—'],
-                      ['HR', lastExam.vitals?.hr != null ? String(lastExam.vitals.hr) : '—'],
-                      ['RR', lastExam.vitals?.rr != null ? String(lastExam.vitals.rr) : '—'],
-                      ['BCS', lastExam.vitals?.bcs != null ? String(lastExam.vitals.bcs) : '—'],
-                      ['Pain', lastExam.vitals?.pain != null ? String(lastExam.vitals.pain) : '—'],
-                      ['Hydration', lastExam.vitals?.hydration || '—'],
-                    ].map(([k, v]) => (
-                      <View key={k} style={{ width: '30%', gap: 2 }}>
-                        <Text style={styles.detailK}>{k}</Text>
-                        <Text style={[styles.detailV, k === 'BCS' ? { color: bcsTone(lastExam.vitals?.bcs) === 'ok' ? Colors.tealDark : bcsTone(lastExam.vitals?.bcs) === 'due' ? Colors.accent : bcsTone(lastExam.vitals?.bcs) === 'over' ? Colors.critical : Colors.navy } : null]}>{v}</Text>
-                      </View>
-                    ))}
-                  </View>
-                  {(bcsVal != null && prevBcs != null) || (latestLb != null && prevWeight != null) ? (
-                    <Text style={styles.ovFoot}>
-                      {bcsVal != null && prevBcs != null ? `BCS ${prevBcs} → ${bcsVal}` : ''}
-                      {latestLb != null && prevWeight != null ? `  ·  weight ${prevWeight} → ${latestLb} lb` : ''}
-                    </Text>
-                  ) : null}
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                    {(lastExam.systems?.length ? lastExam.systems : EXAM_SYSTEMS.map((name) => ({ name, status: 'normal', note: null }))).map((s: any) => (
-                      <TouchableOpacity key={s.name} onPress={() => setExamNote(s.note || (s.status === 'abnormal' ? 'Abnormal — see visit notes' : 'Normal'))} style={{ backgroundColor: s.status === 'abnormal' ? Colors.criticalBg : Colors.tealBg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 }}>
-                        <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: s.status === 'abnormal' ? Colors.critical : Colors.tealDark }}>{s.name}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                  {examNote ? <Text style={styles.ovFoot}>{examNote}</Text> : null}
-                </>
-              ) : (
-                <Text style={styles.emptyText}>No exam on file yet. Apply a clinic PDF to extract vitals and systems.</Text>
-              )}
-            </View>
-            <View style={styles.ovCard}>
-              <Text style={styles.ovKicker}>AI NOTES</Text>
-              <View style={styles.aiDisclaimer}>
-                <Text style={styles.aiDisclaimerTxt}>AI is not a veterinarian. Findings are for your vet — no diagnosis from Rescue Army.</Text>
-              </View>
-              {aiFindings ? (
-                <View style={{ gap: 8 }}>
-                  <Text style={styles.docTitle}>Run {aiFindings.run_number || 1} · {formatDate(aiFindings.ran_at)}</Text>
-                  {aiRuns[1] || aiFindings.diff_vs_previous ? <Text style={styles.ovFoot}>{aiFindings.diff_vs_previous || `Changed since last note · Run ${aiRuns[1]?.run_number}`}</Text> : null}
-                  {(aiFindings.findings || []).slice(0, 4).map((f: any, i: number) => (
-                    <Text key={i} style={styles.docClinic}>{f.title} — {f.body || f.detail}</Text>
-                  ))}
-                  {aiFindings.conclusion ? <Text style={styles.docTitle}>{aiFindings.conclusion}</Text> : null}
-                </View>
-              ) : <Text style={styles.emptyText}>No AI note yet.</Text>}
-              {aiRuns.slice(1).map((r) => (
-                <TouchableOpacity key={r.id} onPress={() => setAiFindings({ ...r, ran_at: r.created_at, conclusion: r.conclusion || r.summary })} style={{ paddingVertical: 6 }}>
-                  <Text style={styles.linkTxt}>Run {r.run_number} · {formatDate(r.created_at)} ▾</Text>
-                </TouchableOpacity>
-              ))}
-              <TouchableOpacity style={[styles.aiPrimaryBtn, aiBusy && styles.btnDisabled]} disabled={aiBusy} onPress={runAiHealth} activeOpacity={0.85}>
-                {aiBusy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.aiPrimaryTxt}>Run AI Health</Text>}
-              </TouchableOpacity>
-              {aiFindings ? (
-                <TouchableOpacity style={styles.aiShareBtn} onPress={async () => {
-                  if (aiFindings.id) await supabase.from('ai_health_analyses').update({ shared_with_vet_at: new Date().toISOString() }).eq('id', aiFindings.id);
-                  setAiShared(true);
-                }}>
-                  <Text style={styles.aiShareTxt}>{aiShared ? 'Shared with vet ✓' : 'Share with vet'}</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
+            <MedicalDashboard
+              petName={pet.name || 'Pet'}
+              verdict={healthVerdict}
+              healthScore={typeof aiFindings?.health_score === 'number'
+                ? aiFindings.health_score
+                : Math.max(20, Math.min(100, (healthVerdict === 'STABLE' ? 88 : 64) - (aiFindings?.findings || []).filter((f: any) => /urgent/i.test(f.severity)).length * 10))}
+              latestLb={latestLb}
+              targetLb={targetLb}
+              weightDelta={weightEntries[0] && weightEntries[1] ? weightEntries[0].weight_lb - weightEntries[1].weight_lb : null}
+              weightPts={weightEntries.slice().reverse().map((w) => ({ v: w.weight_lb, at: w.measured_on, out: targetLb != null && w.weight_lb > targetLb * 1.08 }))}
+              bcs={bcsVal}
+              bcsDelta={bcsVal != null && prevBcs != null ? bcsVal - prevBcs : null}
+              bcsPts={petExams.map((e) => ({ v: Number(e.vitals?.bcs), at: e.visit_date })).filter((p) => Number.isFinite(p.v)).reverse()}
+              risks={(aiFindings?.findings || []).slice(0, 3).map((f: any) => f.title).filter(Boolean)}
+              lastExam={lastExam}
+              exams={petExams}
+              vitals={[
+                ...vitalRows,
+                ...petExams.map((e) => ({ recorded_at: e.visit_date, ...(e.vitals || {}) })),
+                ...weightEntries.map((w) => ({ recorded_at: w.measured_on, weight_lb: w.weight_lb })),
+              ]}
+              labRows={labRows}
+              labCatalog={labCatalog}
+              meds={medsGiven}
+              diagnostics={diagnostics}
+              aiFindings={aiFindings}
+              aiRuns={aiRuns}
+              aiBusy={aiBusy}
+              aiShared={aiShared}
+              onRunAi={runAiHealth}
+              onShareAi={async () => {
+                if (aiFindings?.id) await supabase.from('ai_health_analyses').update({ shared_with_vet_at: new Date().toISOString() }).eq('id', aiFindings.id);
+                setAiShared(true);
+              }}
+              onSelectRun={(r) => setAiFindings({ ...r, ran_at: r.created_at, conclusion: r.conclusion || r.summary })}
+            />
             <TouchableOpacity onPress={() => toggleMed('records')} style={styles.ovCardHead}>
               <Text style={styles.ovKicker}>RECORDS</Text>
               <Text style={styles.linkTxt}>{openMed.records === false ? 'Show' : 'Hide'}</Text>

@@ -67,8 +67,8 @@ export default function PetsScreen() {
       let local: Pet[] = [];
       const { data, error } = await supabase
         .from('pets')
-        .select('id, name, breed, species, age_text, main_photo_url, location, status, created_at')
-        .eq('status', 'available')
+        .select('id, name, breed, species, age_text, main_photo_url, location, status, created_at, listing_type')
+        .eq('listing_type', 'adoptable')
         .eq('is_public', true)
         .order('created_at', { ascending: false });
       if (!error && data) {

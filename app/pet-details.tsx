@@ -1086,7 +1086,8 @@ const styles = StyleSheet.create({
   },
 
   // Bottom actions — fixed footer
-  bottomActions: { width: '100%', {
+  bottomActions: {
+    width: '100%',
     position: 'absolute', bottom: 0, left: 0, right: 0,
     flexDirection: 'row', backgroundColor: Colors.white,
     paddingHorizontal: 20, paddingTop: 16, gap: 12,

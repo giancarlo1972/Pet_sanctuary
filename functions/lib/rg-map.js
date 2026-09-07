@@ -54,7 +54,6 @@ export function mapPet(a) {
 }
 
 
-export { photoFrom, yes, decode, ageFromDob, mapPet };
 
 export const PET_FIELDS = [
   'animalID','animalName','animalBreed','animalSpecies','animalSex','animalGeneralAge','animalBirthdate','animalAgeString',

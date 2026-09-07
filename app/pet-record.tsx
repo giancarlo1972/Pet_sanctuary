@@ -65,7 +65,7 @@ import { WeightLineChart, LabSparkline } from '@/components/PetCharts';
 import { extractPdfText } from '@/lib/pdf-text';
 import { SearchablePicker } from '@/components/SearchablePicker';
 import { DateField } from '@/components/DateField';
-import { matchCatalog, type CatalogRow } from '@/lib/catalog';
+import { matchCatalog, vaccineType, type CatalogRow } from '@/lib/catalog';
 
 function blobTypeFromName(path: string) {
   if (/\.pdf$/i.test(path)) return 'application/pdf';
@@ -338,12 +338,17 @@ function ColorSwatches({ names, catalog }: { names: string[]; catalog: ColorOpti
   );
 }
 
+function parseLocalParts(iso: string | null): { y: number; m: number; d: number } | null {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  return { y: +m[1], m: +m[2], d: +m[3] };
+}
+
 function formatDate(value: string | null): string {
-  if (!value) return '—';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '—';
+  const p = parseLocalParts(value);
+  if (!p) return value ? String(value) : '—';
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+  return `${months[p.m - 1]} ${p.d}, ${p.y}`;
 }
 
 function titleCase(value: string | null): string {
@@ -352,13 +357,13 @@ function titleCase(value: string | null): string {
 }
 
 function daysUntil(dateStr: string | null): number | null {
-  if (!dateStr) return null;
-  const d = new Date(dateStr);
-  if (Number.isNaN(d.getTime())) return null;
+  const p = parseLocalParts(dateStr);
+  if (!p) return null;
+  const d = new Date(p.y, p.m - 1, p.d);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   d.setHours(0, 0, 0, 0);
-  return Math.round((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  return Math.round((d.getTime() - today.getTime()) / 864e5);
 }
 
 function vaccinationStatus(nextDue: string | null): 'overdue' | 'due-soon' | 'ok' | 'none' {
@@ -437,24 +442,30 @@ function ageFromDob(dob?: string | null, ageText?: string | null) {
 function parseAnyDate(v: any): string | null {
   if (v == null || v === '') return null;
   const s = String(v).trim();
-  const iso = s.match(/^(\d{4}-\d{2}-\d{2})/);
-  if (iso) return iso[1];
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
   const mdy = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
   if (mdy) {
     const y = mdy[3].length === 2 ? `20${mdy[3]}` : mdy[3];
     return `${y}-${mdy[1].padStart(2, '0')}-${mdy[2].padStart(2, '0')}`;
   }
-  const t = Date.parse(s);
-  if (!Number.isNaN(t)) return new Date(t).toISOString().slice(0, 10);
+  const named = s.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (named) {
+    const months: Record<string, string> = { jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06', jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12' };
+    const mo = months[named[1].slice(0, 3).toLowerCase()];
+    if (mo) return `${named[3]}-${mo}-${named[2].padStart(2, '0')}`;
+  }
   return null;
 }
 
 function mapVaxRow(v: any) {
-  const a = parseAnyDate(v.given || v.administered_on || v.administered_date || v.given_on || v.date_given || v.date);
-  const b = parseAnyDate(v.next_due || v.next_due_on || v.valid_until || v.expires_on || v.due_date);
-  const dates = [a, b].filter(Boolean).sort() as string[];
-  if (dates.length === 1) return { given: dates[0], due: null };
-  if (dates.length === 2) return { given: dates[0], due: dates[1] };
+  const given = parseAnyDate(v.given || v.administered_on || v.administered_date || v.given_on || v.date_given);
+  const due = parseAnyDate(v.next_due || v.next_due_on || v.valid_until || v.expires_on || v.due_date);
+  const dateField = parseAnyDate(v.date);
+  if (given && due) return given <= due ? { given, due } : { given: due, due: given };
+  if (given) return { given, due: due || null };
+  if (due && !given) return { given: null, due };
+  if (dateField) return { given: dateField, due: null };
   return { given: null, due: null };
 }
 
@@ -615,6 +626,7 @@ export default function PetRecordScreen() {
   const [applyingExtraction, setApplyingExtraction] = useState(false);
   const [confirmEdit, setConfirmEdit] = useState<Set<string>>(new Set());
   const [parseProgress, setParseProgress] = useState<string | null>(null);
+  const [openVaxHist, setOpenVaxHist] = useState<Set<string>>(new Set());
   const [vaxCatalog, setVaxCatalog] = useState<CatalogRow[]>([]);
   const [labCatalog, setLabCatalog] = useState<CatalogRow[]>([]);
   const [condCatalog, setCondCatalog] = useState<CatalogRow[]>([]);
@@ -1480,27 +1492,52 @@ export default function PetRecordScreen() {
         });
       }
 
-      // 1. vaccinations — core columns only (source_document_id / brand / confirmed break inserts)
+      // 1. vaccinations — doses only; reminders update next_due on that type
+      const seenDose = new Set<string>();
       for (let i = 0; i < editableVax.length; i++) {
         if (extractionReview.vaxDuplicates.has(i)) continue;
         const v = editableVax[i];
         if (!v.vaccine) continue;
+        const type = vaccineType(v.vaccine);
+        if (!v.administered_on && v.next_due_on) {
+          const current = vaccinations
+            .filter((e) => vaccineType(e.vaccine) === type && e.administered_on)
+            .sort((a, b) => String(b.administered_on).localeCompare(String(a.administered_on)))[0];
+          if (current) {
+            console.log('[apply] reminder → next_due', type, v.next_due_on, 'on', current.id);
+            const res = await supabase.from('pet_vaccinations').update({ next_due_on: v.next_due_on }).eq('id', current.id);
+            if (res.error) errors.push(`Reminder ${type}: ${res.error.message}`);
+            else appliedCount++;
+          }
+          continue;
+        }
+        if (!v.administered_on) continue;
+        const key = `${type}|${v.administered_on}`;
+        if (seenDose.has(key)) continue;
+        seenDose.add(key);
+        if (vaccinations.some((e) => vaccineType(e.vaccine) === type && e.administered_on === v.administered_on)) continue;
         const payload = {
           pet_id: petId,
           vaccine: v.vaccine,
-          administered_on: v.administered_on || null,
+          vaccine_type: type,
+          administered_on: v.administered_on,
           next_due_on: v.next_due_on || null,
           manufacturer: v.manufacturer || null,
           lot_number: v.lot_number || null,
           vet_name: v.vet_name || null,
           vet_clinic: v.clinic_name || null,
           recorded_by: user.id,
+          superseded: false,
         };
         console.log('[apply] vax payload', payload);
         const res = await supabase.from('pet_vaccinations').insert(payload).select('id').maybeSingle();
         console.log('[apply] vax result', res.error || res.data);
-        if (res.error) errors.push(`Vaccination "${v.vaccine}": ${res.error.message}`);
-        else appliedCount++;
+        if (res.error) { errors.push(`Vaccination "${v.vaccine}": ${res.error.message}`); continue; }
+        appliedCount++;
+        const older = vaccinations.filter((e) => vaccineType(e.vaccine) === type && String(e.administered_on || '') < String(v.administered_on));
+        if (older.length) {
+          await supabase.from('pet_vaccinations').update({ superseded: true }).in('id', older.map((e) => e.id));
+        }
       }
 
       // 2. labs — live schema is lab_panels + lab_results.panel_id
@@ -1563,6 +1600,7 @@ export default function PetRecordScreen() {
             weight_kg: kg,
             weight_measured_on: newest.measured_on,
             ...(ident.bcs ? { body_condition_score: ident.bcs } : {}),
+            ...(ident.bcs >= 8 && !pet?.target_weight_kg ? { target_weight_kg: lbToKg(15) } : {}),
             ...(ident.date_of_birth ? { date_of_birth: ident.date_of_birth } : {}),
           }).eq('id', petId));
         }
@@ -1710,9 +1748,10 @@ export default function PetRecordScreen() {
     if (!best || String(w.measured_on) > String(best.measured_on)) return w;
     return best;
   }, null as typeof weightEntries[0] | null);
-  const latestLb = latestWeightRow?.weight_lb
-    ?? (pet.weight_kg != null ? kgToLb(pet.weight_kg) : null);
-  const targetLb = pet.target_weight_kg != null ? kgToLb(pet.target_weight_kg) : null;
+  const latestLb = latestWeightRow?.weight_lb != null
+    ? Math.round(Number(latestWeightRow.weight_lb) * 100) / 100
+    : (pet.weight_kg != null ? kgToLb(pet.weight_kg) : null);
+  const targetLb = pet.target_weight_kg != null ? kgToLb(pet.target_weight_kg) : (pet.body_condition_score != null && pet.body_condition_score >= 8 ? 15 : null);
   const weightDisplay = latestLb != null ? `${latestLb} lb` : '—';
   const currentRels = relationships.filter((r) => !r.ended_on);
   const pastRels = relationships.filter((r) => r.ended_on);
@@ -1739,7 +1778,21 @@ export default function PetRecordScreen() {
     ? 'MONITOR'
     : 'STABLE';
   const confirmedVax = vaccinations.filter((v) => v.confirmed !== false);
-  const vaxCount = confirmedVax.length;
+  const vaxGroups = (() => {
+    const map = new Map<string, Vaccination[]>();
+    for (const v of confirmedVax) {
+      const t = vaccineType(v.vaccine);
+      if (!map.has(t)) map.set(t, []);
+      map.get(t)!.push(v);
+    }
+    return [...map.entries()].map(([type, rows]) => {
+      const sorted = rows.slice().sort((a, b) => String(b.administered_on || '').localeCompare(String(a.administered_on || '')));
+      const current = sorted.find((r) => r.administered_on) || sorted[0];
+      const history = sorted.filter((r) => r.id !== current?.id);
+      return { type, current, history };
+    });
+  })();
+  const vaxCount = vaxGroups.filter((g) => g.current?.administered_on).length;
   const pendingDocs = documents.filter((d) => {
     const st = d.ai_status;
     const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
@@ -1751,14 +1804,15 @@ export default function PetRecordScreen() {
     return (ai.vaccinations?.length || 0) + (ai.labs?.length || 0) + (ai.visits?.length || 0) + (ai.conditions?.length || 0) + (ai.weight?.value ? 1 : 0);
   };
   const nowMs = Date.now();
-  const vaxDues = confirmedVax.map((v) => v.next_due_on).filter(Boolean).map((d) => new Date(String(d)).getTime()).filter((t) => !Number.isNaN(t));
+  const vaxDues = confirmedVax.map((v) => v.next_due_on).filter(Boolean).map((d) => {
+    const p = parseLocalParts(String(d));
+    return p ? new Date(p.y, p.m - 1, p.d).getTime() : NaN;
+  }).filter((t) => !Number.isNaN(t));
   const vaxTone: 'ok' | 'due' | 'over' | 'unknown' = vaxCount > 0
     ? (vaxDues.some((t) => t < nowMs) ? 'over' : vaxDues.some((t) => t - nowMs < 30 * 864e5) ? 'due' : 'ok')
     : pendingDocs.length > 0 ? 'due' : 'unknown';
   const thruIso = confirmedVax.map((v) => v.next_due_on || v.administered_on).filter(Boolean).sort().pop();
-  const thruLabel = thruIso
-    ? new Date(String(thruIso)).toLocaleString('en-US', { month: 'short', year: 'numeric' })
-    : null;
+  const thruLabel = thruIso ? formatDate(String(thruIso)) : null;
   const vaxSub = vaxTone === 'over' ? 'Overdue'
     : vaxCount === 0 ? (pendingDocs.length > 0 ? 'Review docs' : 'No record')
     : thruLabel ? `Valid thru ${thruLabel}`
@@ -1770,7 +1824,7 @@ export default function PetRecordScreen() {
   if (latestLb != null && targetLb != null) {
     if (latestLb > targetLb * 1.08 || (bcs != null && bcs >= 7)) {
       weightTone = 'due';
-      weightSub = `${latestLb} → ${targetLb} lb target`;
+      weightSub = `Overweight · ${latestLb} → ${targetLb} lb`;
     } else if (latestLb < targetLb * 0.92 || (bcs != null && bcs <= 3)) {
       weightTone = 'over';
       weightSub = `${latestLb} lb · underweight`;
@@ -1779,7 +1833,7 @@ export default function PetRecordScreen() {
       weightSub = `${latestLb} lb · Ideal`;
     }
   } else if (bcs != null) {
-    if (bcs >= 7) { weightTone = 'due'; weightSub = `${weightSub} · Overweight`; }
+    if (bcs >= 7) { weightTone = 'due'; weightSub = `Overweight · ${weightSub}`; }
     else if (bcs <= 3) { weightTone = 'over'; weightSub = `${weightSub} · Underweight`; }
     else { weightTone = 'ok'; weightSub = `${weightSub} · Ideal`; }
   }
@@ -2385,80 +2439,62 @@ export default function PetRecordScreen() {
             {vaccinations.length === 0 ? (
               <Text style={styles.emptyText}>No vaccinations recorded.</Text>
             ) : (
-              (() => {
-                const activeVax = vaccinations.filter((v) => !v.superseded);
-                const supersededVax = vaccinations.filter((v) => v.superseded);
+              vaxGroups.map(({ type, current, history }) => {
+                if (!current) return null;
+                const status = vaccinationStatus(current.next_due_on);
+                const open = openVaxHist.has(type);
                 return (
-                  <>
-                    {activeVax.map((vax) => {
-                      const status = vaccinationStatus(vax.next_due_on);
-                      return (
-                        <View key={vax.id} style={[
-                          styles.vaxCard,
-                          status === 'overdue' && styles.vaxCardOverdue,
-                          status === 'due-soon' && styles.vaxCardDueSoon,
-                        ]}>
-                          <View style={styles.vaxTopRow}>
-                            <Text style={styles.vaxName}>{[vax.brand, vax.vaccine].filter(Boolean).join(' ')}</Text>
-                            {vax.is_booster ? <Text style={styles.boosterTag}>Booster</Text> : null}
-                            {status === 'overdue' && (
-                              <View style={[styles.vaxStatusPill, { backgroundColor: Colors.criticalBg }]}>
-                                <CircleAlert color={Colors.critical} size={12} />
-                                <Text style={[styles.vaxStatusText, { color: Colors.critical }]}>Overdue</Text>
-                              </View>
-                            )}
-                            {status === 'due-soon' && (
-                              <View style={[styles.vaxStatusPill, { backgroundColor: Colors.urgentBg }]}>
-                                <Clock color={Colors.urgent} size={12} />
-                                <Text style={[styles.vaxStatusText, { color: Colors.urgent }]}>Due soon</Text>
-                              </View>
-                            )}
-                            {status === 'ok' && (
-                              <View style={[styles.vaxStatusPill, { backgroundColor: Colors.tealBg }]}>
-                                <Text style={[styles.vaxStatusText, { color: Colors.tealDark }]}>Valid through {formatDate(vax.next_due_on)}</Text>
-                              </View>
-                            )}
-                          </View>
-                          <Text style={styles.vaxDetail}>Given: {formatDate(vax.administered_on)}</Text>
-                          <Text style={styles.vaxDetail}>Next due: {formatDate(vax.next_due_on)}</Text>
-                          {vax.vet_clinic ? <Text style={styles.vaxDetail}>Clinic: {vax.vet_clinic}</Text> : null}
-                          {vax.vet_name ? <Text style={styles.vaxDetail}>Vet: {vax.vet_name}</Text> : null}
-                          {vax.lot_number ? <Text style={styles.vaxDetail}>Lot: {vax.lot_number}{vax.lot_expires_on ? ` (expires ${formatDate(vax.lot_expires_on)})` : ''}</Text> : null}
-                          {vax.manufacturer ? <Text style={styles.vaxDetail}>Mfr: {vax.manufacturer}</Text> : null}
-                          {vax.dose ? <Text style={styles.vaxDetail}>Dose: {vax.dose}</Text> : null}
-                          {vax.injection_site ? <Text style={styles.vaxDetail}>Site: {vax.injection_site}</Text> : null}
-                          {vax.reactions ? <Text style={[styles.vaxDetail, { color: Colors.urgent }]}>Reaction noted: {vax.reactions}</Text> : null}
-                          {vax.tag_number ? <Text style={styles.vaxDetail}>Tag: {vax.tag_number}</Text> : null}
-                          {vax.vet_license ? <Text style={styles.vaxDetail}>Vet license: {vax.vet_license}</Text> : null}
-                          {vax.notes ? <Text style={styles.vaxNotes}>{vax.notes}</Text> : null}
-                          {canEdit && (
-                            <View style={styles.vaxActions}>
-                              <TouchableOpacity style={styles.vaxEditBtn} onPress={() => openEditVax(vax)} activeOpacity={0.85}>
-                                <Text style={styles.vaxEditText}>Edit</Text>
-                              </TouchableOpacity>
-                              <TouchableOpacity style={styles.vaxDeleteBtn} onPress={() => deleteVax(vax.id)} activeOpacity={0.85}>
-                                <Trash2 color={Colors.critical} size={14} />
-                              </TouchableOpacity>
-                            </View>
-                          )}
+                  <View key={type} style={[
+                    styles.vaxCard,
+                    status === 'overdue' && styles.vaxCardOverdue,
+                    status === 'due-soon' && styles.vaxCardDueSoon,
+                  ]}>
+                    <View style={styles.vaxTopRow}>
+                      <Text style={styles.vaxName}>{type}</Text>
+                      {status === 'overdue' && (
+                        <View style={[styles.vaxStatusPill, { backgroundColor: Colors.criticalBg }]}>
+                          <CircleAlert color={Colors.critical} size={12} />
+                          <Text style={[styles.vaxStatusText, { color: Colors.critical }]}>Overdue</Text>
                         </View>
-                      );
-                    })}
-                    {supersededVax.length > 0 && (
-                      <Text style={[styles.sectionLabel, { marginTop: 12 }]}>History ({supersededVax.length})</Text>
-                    )}
-                    {supersededVax.map((vax) => (
-                      <View key={vax.id} style={[styles.vaxCard, { opacity: 0.55 }]}>
-                        <View style={styles.vaxTopRow}>
-                          <Text style={styles.vaxName}>{vax.vaccine}</Text>
-                          <Text style={[styles.vaxStatusText, { color: Colors.textTertiary }]}>Superseded</Text>
+                      )}
+                      {status === 'due-soon' && (
+                        <View style={[styles.vaxStatusPill, { backgroundColor: Colors.urgentBg }]}>
+                          <Clock color={Colors.urgent} size={12} />
+                          <Text style={[styles.vaxStatusText, { color: Colors.urgent }]}>Due soon</Text>
                         </View>
-                        <Text style={styles.vaxDetail}>Given: {formatDate(vax.administered_on)}</Text>
+                      )}
+                      {(status === 'ok' || status === 'none') && current.next_due_on && (
+                        <View style={[styles.vaxStatusPill, { backgroundColor: Colors.tealBg }]}>
+                          <Text style={[styles.vaxStatusText, { color: Colors.tealDark }]}>Valid thru {formatDate(current.next_due_on)}</Text>
+                        </View>
+                      )}
+                    </View>
+                    {current.administered_on ? <Text style={styles.vaxDetail}>Given: {formatDate(current.administered_on)}</Text> : <Text style={styles.vaxDetail}>No dose on file — due {formatDate(current.next_due_on)}</Text>}
+                    {current.manufacturer ? <Text style={styles.vaxDetail}>Mfr: {current.manufacturer}</Text> : null}
+                    {current.lot_number ? <Text style={styles.vaxDetail}>Lot: {current.lot_number}</Text> : null}
+                    {canEdit && (
+                      <View style={styles.vaxActions}>
+                        <TouchableOpacity style={styles.vaxEditBtn} onPress={() => openEditVax(current)} activeOpacity={0.85}>
+                          <Text style={styles.vaxEditText}>Edit</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.vaxDeleteBtn} onPress={() => deleteVax(current.id)} activeOpacity={0.85}>
+                          <Trash2 color={Colors.critical} size={14} />
+                        </TouchableOpacity>
                       </View>
-                    ))}
-                  </>
+                    )}
+                    {history.length > 0 ? (
+                      <TouchableOpacity onPress={() => setOpenVaxHist((s) => { const n = new Set(s); n.has(type) ? n.delete(type) : n.add(type); return n; })} style={{ marginTop: 8 }}>
+                        <Text style={styles.linkTxt}>History ({history.length})</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    {open ? history.map((h) => (
+                      <View key={h.id} style={{ marginTop: 8, opacity: 0.7 }}>
+                        <Text style={styles.vaxDetail}>{h.vaccine} · {formatDate(h.administered_on)}</Text>
+                      </View>
+                    )) : null}
+                  </View>
                 );
-              })()
+              })
             )}
 
             {/* Vet Summary Export */}
@@ -3214,7 +3250,7 @@ export default function PetRecordScreen() {
                       <View style={styles.ovCardHead}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
                           <ConfidenceDot level={matched.confidence} />
-                          <Text style={styles.docTitle}>{matched.row?.name || vax.vaccine || 'Vaccine'}</Text>
+                          <Text style={styles.docTitle}>{matched.row?.name || vax.vaccine || 'Vaccine'}{!vax.administered_on && vax.next_due_on ? ' · reminder' : ''}</Text>
                         </View>
                         <TouchableOpacity onPress={() => setConfirmEdit((s) => { const n = new Set(s); n.has(`vax-${i}`) ? n.delete(`vax-${i}`) : n.add(`vax-${i}`); return n; })}>
                           <Text style={styles.linkTxt}>{editing ? 'Done' : 'Edit'}</Text>

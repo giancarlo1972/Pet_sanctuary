@@ -113,11 +113,14 @@ function normalizeLab(l) {
 }
 
 function normalizeVax(v) {
-  const given = v?.given || v?.administered_on || v?.given_on || v?.date_given || v?.date || null;
+  const given = v?.given || v?.administered_on || v?.given_on || v?.date_given || null;
   const due = v?.next_due || v?.next_due_on || v?.valid_until || v?.expires_on || null;
-  const dates = [given, due].filter(Boolean).map(String).sort();
-  const date = dates[0] || null;
-  const next_due = dates.length === 2 ? dates[1] : null;
+  let date = given || null;
+  let next_due = due || null;
+  if (date && next_due && String(date) > String(next_due)) {
+    const t = date; date = next_due; next_due = t;
+  }
+  if (!date && !next_due && v?.date) date = v.date;
   return {
     brand: v?.brand || v?.product || null,
     name: v?.name || v?.vaccine || v?.product || '',

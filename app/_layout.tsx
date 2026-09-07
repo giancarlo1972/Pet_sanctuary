@@ -31,7 +31,7 @@ export default function RootLayout() {
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="admin" />
-          <Stack.Screen name="pet-care" />
+          <Stack.Screen name="pet-record" />
           <Stack.Screen name="updates" />
           <Stack.Screen name="invoices" />
           <Stack.Screen name="nearby-clinics" />

@@ -29,7 +29,7 @@ export default function EditProfileScreen() {
 
   useEffect(() => {
     if (!user) return;
-    supabase.from('profiles').select('*').eq('id', user.id).maybeSingle()
+    Promise.resolve(supabase.from('profiles').select('*').eq('id', user.id).maybeSingle())
       .then(({ data }) => {
         if (data) {
           setFullName(data.full_name || '');

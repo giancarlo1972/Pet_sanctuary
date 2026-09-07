@@ -611,7 +611,7 @@ export default function PetRecordScreen() {
     data: ExtractedData;
     extractionId: string;
     vaxDuplicates: Set<number>;
-    conditions: { name: string; kind?: string; notes?: string }[];
+    conditions: { name: string; kind?: string; notes?: string; status?: string; onset_date?: string; resolved_date?: string }[];
     visitsCount: number;
     labsCount: number;
     weightsCount?: number;
@@ -1471,7 +1471,7 @@ export default function PetRecordScreen() {
     const sourceDocId = extractionReview.documentId;
     let appliedCount = 0;
     const errors: string[] = [];
-    const run = async (label: string, fn: () => Promise<any>) => {
+    const run = async (label: string, fn: () => any) => {
       try {
         const res = await fn();
         if (res?.error) { errors.push(`${label}: ${res.error.message}`); return null; }
@@ -3505,7 +3505,6 @@ const styles = StyleSheet.create({
   reviewBanner: { backgroundColor: Colors.standardBg, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: '#F3E2B0' },
   reviewBannerTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.accentDark, textAlign: 'center' },
   ovCardHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  ovKicker: { fontFamily: Fonts.extrabold, fontSize: 11, letterSpacing: 0.8, color: Colors.textTertiary, textTransform: 'uppercase' },
   ovFoot: { fontFamily: Fonts.regular, fontSize: 11.5, color: Colors.textSecondary, lineHeight: 17 },
   ovStatN: { fontFamily: Fonts.extrabold, fontSize: 18, color: Colors.navy },
   deviceRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -3521,8 +3520,9 @@ const styles = StyleSheet.create({
   detailK: { fontFamily: Fonts.extrabold, fontSize: 10, letterSpacing: 0.6, color: Colors.textTertiary, textTransform: 'uppercase' },
   detailV: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.navy },
   aiTitle: { fontFamily: Fonts.extrabold, color: Colors.critical, fontSize: FontSizes.md },
+  reviewBox: { backgroundColor: Colors.standardBg, borderRadius: 14, padding: 14, gap: 8 },
+  reviewTitle: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.accentDark },
 
-  tabContent: { paddingTop: 12, paddingHorizontal: 0, gap: 14 },
   healthHero: { backgroundColor: Colors.navy, borderRadius: 18, padding: 16, gap: 14, marginBottom: 8 },
   healthKicker: { fontFamily: Fonts.extrabold, fontSize: 11, color: '#B9BCE0', letterSpacing: 0.8 },
   healthStable: { fontFamily: Fonts.extrabold, fontSize: 11, color: Colors.teal, backgroundColor: 'rgba(255,255,255,0.14)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, overflow: 'hidden' },

@@ -27,7 +27,7 @@ export default function ApplicationScreen() {
 
   useEffect(() => {
     if (!petId) return;
-    supabase.from('pets').select('name, breed, species, main_photo_url').eq('id', petId).maybeSingle()
+    Promise.resolve(supabase.from('pets').select('name, breed, species, main_photo_url').eq('id', petId).maybeSingle())
       .then(({ data }) => { if (data) setPet(data); })
       .finally(() => setLoading(false));
   }, [petId]);

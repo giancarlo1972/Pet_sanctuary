@@ -179,7 +179,7 @@ function Stat({ n, l }: { n: string; l: string }) {
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: Colors.screen },
-  phone: { flex: 1, width: '100%', width: '100%' },
+  phone: { flex: 1, width: '100%' },
   scroll: { padding: 16, paddingBottom: 48, gap: 12 },
   stats: { flexDirection: 'row', gap: 8 },
   stat: { flex: 1, backgroundColor: Colors.white, borderRadius: 14, padding: 12, alignItems: 'center' },
@@ -202,4 +202,10 @@ const styles = StyleSheet.create({
   uberTxt: { color: Colors.white, fontFamily: Fonts.bold },
   lyft: { flex: 1, backgroundColor: Colors.coral, borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
   lyftTxt: { color: Colors.white, fontFamily: Fonts.bold },
+  kindRow: { flexDirection: 'row', gap: 8 },
+  kindBtn: { flex: 1, borderWidth: 1, borderColor: Colors.border, borderRadius: 12, paddingVertical: 10, alignItems: 'center' },
+  kindOn: { backgroundColor: Colors.navy, borderColor: Colors.navy },
+  kindTxt: { fontFamily: Fonts.bold, color: Colors.navy },
+  kindTxtOn: { color: Colors.white },
+  badge: { fontFamily: Fonts.extrabold, fontSize: 10, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, overflow: 'hidden' },
 });

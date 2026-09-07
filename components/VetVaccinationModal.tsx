@@ -10,6 +10,7 @@ import { ConfirmDialog, type ConfirmConfig } from '@/components/ConfirmDialog';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
+import { useSignedUrl } from '@/hooks/useSignedUrls';
 import { SearchablePicker } from '@/components/SearchablePicker';
 import { DateField } from '@/components/DateField';
 import type { CatalogRow } from '@/lib/catalog';

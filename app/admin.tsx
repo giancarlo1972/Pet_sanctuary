@@ -27,7 +27,7 @@ export default function AdminScreen() {
   const wide = width >= 900;
   const [role, setRole] = useState<string | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [orgs, setOrgs] = useState<{ id: string; name: string; status: string | null }[]>([]);
+  const [orgs, setOrgs] = useState<{ id: string; name: string; status: string | null; org_type?: string | null }[]>([]);
   const [allOrgs, setAllOrgs] = useState<any[]>([]);
   const [editOrg, setEditOrg] = useState<any | null>(null);
   const [editName, setEditName] = useState('');
@@ -367,4 +367,7 @@ const styles = StyleSheet.create({
   h1: { fontFamily: Fonts.extrabold, fontSize: FontSizes.xl, color: Colors.navy },
   body: { fontFamily: Fonts.regular, fontSize: FontSizes.sm, color: Colors.textSecondary, lineHeight: 20 },
   phone: { flex: 1, width: '100%' },
+  sheetScrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  sheet: { backgroundColor: Colors.white, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, gap: 10 },
+  input: { borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, fontFamily: Fonts.regular, color: Colors.text },
 });

@@ -17,5 +17,5 @@
     "typeRoots": ["./node_modules/@types", "./types"]
   },
   "include": ["**/*.ts", "**/*.tsx", ".env.d.ts"],
-  "exclude": ["node_modules", ".expo"]
+  "exclude": ["node_modules", ".expo", "dist", "Rescue-Army 14.08 package"]
 }

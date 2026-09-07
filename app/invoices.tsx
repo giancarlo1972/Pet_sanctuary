@@ -205,7 +205,7 @@ export default function InvoicesScreen() {
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: Colors.screen },
-  phone: { flex: 1, width: '100%', width: '100%' },
+  phone: { flex: 1, width: '100%' },
   scroll: { padding: 16, paddingBottom: 48, gap: 12 },
   kicker: { fontFamily: Fonts.extrabold, fontSize: 10, color: Colors.coral, letterSpacing: 0.8 },
   h2: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.navy },

@@ -74,6 +74,7 @@ interface ReportDetail {
   ai_risk_tags: string[] | null;
   ai_age_range: string | null;
   ai_analyzed_at: string | null;
+  pet_id?: string | null;
 }
 
 const REPORT_TYPE_LABELS: Record<string, string> = {
@@ -262,7 +263,7 @@ export default function ReportDetailsScreen() {
     report.ai_colors && report.ai_colors.length > 0 && { label: 'Colors', value: report.ai_colors.join(', ') },
     report.ai_coat && { label: 'Coat', value: report.ai_coat },
     report.ai_confidence != null && { label: 'Confidence', value: `${Math.round(Number(report.ai_confidence) * 100)}%` },
-  ].filter(Boolean);
+  ].filter((f): f is { label: string; value: string } => Boolean(f && typeof f === 'object'));
 
   const physicalFields = [
     report.animal_kind && { label: 'Animal', value: report.animal_kind },
@@ -271,7 +272,7 @@ export default function ReportDetailsScreen() {
     report.life_stage && { label: 'Life stage', value: report.life_stage },
     report.size && { label: 'Size', value: report.size },
     report.colors && report.colors.length > 0 && { label: 'Colors', value: report.colors.join(', ') },
-  ].filter(Boolean);
+  ].filter((f): f is { label: string; value: string } => Boolean(f && typeof f === 'object'));
 
   const riskTags = report.ai_risk_tags || [];
   const aiDone = report.ai_analyzed_at != null;
@@ -307,7 +308,7 @@ export default function ReportDetailsScreen() {
                   >
                     <SignedImage
                       path={p}
-                      style={[styles.thumb, activePhoto === i && styles.thumbActive]}
+                      style={activePhoto === i ? [styles.thumb, styles.thumbActive] as any : styles.thumb}
                     />
                   </TouchableOpacity>
                 ))}
@@ -380,8 +381,8 @@ export default function ReportDetailsScreen() {
             <View style={styles.traitsGrid}>
               {physicalFields.map((f, i) => (
                 <View key={i} style={styles.traitItem}>
-                  <Text style={styles.traitLabel}>{f!.label}</Text>
-                  <Text style={styles.traitValue}>{f!.value}</Text>
+                  <Text style={styles.traitLabel}>{f.label}</Text>
+                  <Text style={styles.traitValue}>{f.value}</Text>
                 </View>
               ))}
             </View>
@@ -401,8 +402,8 @@ export default function ReportDetailsScreen() {
             <View style={styles.traitsGrid}>
               {aiFields.map((f, i) => (
                 <View key={i} style={styles.traitItem}>
-                  <Text style={styles.traitLabel}>{f!.label}</Text>
-                  <Text style={styles.traitValue}>{f!.value}</Text>
+                  <Text style={styles.traitLabel}>{f.label}</Text>
+                  <Text style={styles.traitValue}>{f.value}</Text>
                 </View>
               ))}
             </View>

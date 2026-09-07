@@ -25,6 +25,7 @@ export default function AdminScreen() {
   const [role, setRole] = useState<string | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [orgs, setOrgs] = useState<{ id: string; name: string; status: string | null; ein: string | null }[]>([]);
+  const [allOrgs, setAllOrgs] = useState<{ id: string; name: string; org_type: string | null; status: string | null }[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -54,6 +55,12 @@ export default function AdminScreen() {
       .order('name')
       .limit(40);
     setOrgs(orgRows ?? []);
+    const { data: allRows } = await supabase
+      .from('organizations')
+      .select('id, name, org_type, status')
+      .order('name')
+      .limit(80);
+    setAllOrgs(allRows ?? []);
     setLoading(false);
   }, [user]);
 
@@ -158,6 +165,22 @@ export default function AdminScreen() {
           </View>
           {error ? <Text style={styles.err}>{error}</Text> : null}
 
+          <Section title="Organizations · All entities">
+            {allOrgs.length === 0 ? <Empty /> : null}
+            {allOrgs.map((o) => (
+              <View key={o.id} style={styles.entity}>
+                <View style={[styles.entityAv, { backgroundColor: Colors.navy }]}>
+                  <Text style={styles.entityAvTxt}>{(o.name || '?').charAt(0).toUpperCase()}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>{o.name}</Text>
+                  <Text style={styles.meta}>{(o.org_type || 'Organization')} · {o.status || 'unknown'}</Text>
+                </View>
+                <Text style={styles.reassign}>Reassign</Text>
+              </View>
+            ))}
+            <Text style={styles.noteTxt}>Each entity gets one Org admin who manages its own members. Platform admins can reassign, suspend, or step in.</Text>
+          </Section>
           <Section title="Org verifications">
             {orgs.length === 0 && orgsQ.length === 0 ? <Empty /> : null}
             {orgs.map((o) => (
@@ -230,6 +253,10 @@ function Card({
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: Colors.screen },
+  entity: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: Colors.white, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: Colors.border },
+  entityAv: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  entityAvTxt: { color: Colors.white, fontFamily: Fonts.bold },
+  reassign: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy },
   scroll: { paddingBottom: 48 },
   col: { width: '100%', maxWidth: 560, alignSelf: 'center', padding: 16, gap: 18 },
   hero: { backgroundColor: Colors.navy, borderRadius: 18, padding: 18 },

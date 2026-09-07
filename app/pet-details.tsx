@@ -481,7 +481,7 @@ export default function PetDetailsScreen() {
       try {
         await supabase.from('pet_relationships').insert({ pet_id: data.id, user_id: user.id, relationship: 'owner' });
       } catch { /* table optional */ }
-      router.push(`/pet-care?petId=${data.id}`);
+      router.push(`/pet-record?petId=${data.id}`);
     } catch (err: any) {
       setBanner({ message: err?.message || 'Could not add this pet to your profile.', kind: 'error' });
     }

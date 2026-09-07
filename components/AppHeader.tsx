@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Bell, ChevronLeft } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
+import { useAuth } from '@/lib/context/AuthContext';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 
@@ -14,6 +15,7 @@ interface AppHeaderProps {
 
 export default function AppHeader({ title, showBack = false, rightAction }: AppHeaderProps) {
   const router = useRouter();
+  const { user } = useAuth();
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -34,8 +36,8 @@ export default function AppHeader({ title, showBack = false, rightAction }: AppH
             <TouchableOpacity style={styles.bellBtn} onPress={() => router.push('/updates')} activeOpacity={0.85}>
               <Bell color={Colors.navy} size={18} />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.meBtn} onPress={() => router.push('/(tabs)/profile')} activeOpacity={0.85}>
-              <Text style={styles.meText}>Me</Text>
+            <TouchableOpacity style={styles.meBtn} onPress={() => router.push(user ? '/(tabs)/profile' : '/auth')} activeOpacity={0.85}>
+              <Text style={styles.meText}>{user ? 'Me' : 'Sign in'}</Text>
             </TouchableOpacity>
           </View>
         )}

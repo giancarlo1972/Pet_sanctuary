@@ -98,6 +98,7 @@ export default function ProfileScreen() {
 function ProfileDrawer({ userId, email, signOut }: { userId: string; email: string; signOut: () => Promise<void> }) {
   const safeBack = useSafeBack('/(tabs)');
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [manageOrg, setManageOrg] = useState<{ id: string; name: string } | null>(null);
   const [verifications, setVerifications] = useState<Verifications>({ id_verified: false, phone_verified: false, responder_training: 'none' });
   const [modItems, setModItems] = useState<ModItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -321,6 +322,17 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
           }
         }
       }
+      const { data: om } = await supabase
+        .from('organization_members')
+        .select('organization_id, organizations(id, name)')
+        .eq('user_id', userId)
+        .eq('role', 'admin')
+        .maybeSingle();
+      if (om && (om as any).organizations) {
+        const o = (om as any).organizations;
+        setManageOrg({ id: o.id, name: o.name });
+      } else setManageOrg(null);
+
       // === My Pets (pet_relationships) ===
       const { data: relsData } = await supabase
         .from('pet_relationships')
@@ -568,6 +580,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
   const isOwner = isPlatformAdmin(profile?.role, profile?.email || email);
   const isOrgAdmin = isOwner || profile?.role === 'admin' || profile?.role === 'shelter';
 
+
   const trainingPill = verifications.responder_training === 'passed'
     ? { bg: Colors.tealBg, color: Colors.tealDark, text: 'Passed' }
     : verifications.responder_training === 'in_review'
@@ -643,6 +656,11 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                 <TouchableOpacity style={styles.adminCta} onPress={() => { closeDrawer(); router.push('/admin'); }} activeOpacity={0.85}>
                   <Shield color={Colors.white} size={18} />
                   <Text style={styles.adminCtaTxt}>Open admin console</Text>
+                </TouchableOpacity>
+              ) : null}
+              {manageOrg ? (
+                <TouchableOpacity style={styles.orgCta} onPress={() => { closeDrawer(); router.push('/org-admin'); }} activeOpacity={0.85}>
+                  <Text style={styles.orgCtaTxt}>Manage {manageOrg.name}</Text>
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -1422,6 +1440,8 @@ const styles = StyleSheet.create({
   roleChipTxtOn: { color: Colors.white },
   adminCta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: Colors.navy, borderRadius: 14, paddingVertical: 16, marginTop: 4 },
   adminCtaTxt: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.white },
+  orgCta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: Colors.teal, borderRadius: 14, paddingVertical: 16, marginTop: 8 },
+  orgCtaTxt: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.white },
 
   // Profile section
   profileSection: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 24, marginTop: 20 },

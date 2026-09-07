@@ -31,7 +31,7 @@ import { isPlatformAdmin } from '@/lib/admin-access';
 import { supabase } from '@/lib/supabase';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
-import AuthForm from '@/components/AuthForm';
+import { InlineBanner } from '@/components/InlineBanner';
 import SignedImage from '@/components/SignedImage';
 import SharePetSheet from '@/components/SharePetSheet';
 import { isUsablePhoto } from '@/lib/photos';
@@ -55,6 +55,8 @@ type Verifications = {
   id_verified: boolean;
   phone_verified: boolean;
   responder_training: string;
+  id_status?: string | null;
+  phone?: string | null;
 };
 
 type ModItem = {
@@ -105,6 +107,12 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
   const [profile, setProfile] = useState<Profile | null>(null);
   const [manageOrg, setManageOrg] = useState<{ id: string; name: string } | null>(null);
   const [verifications, setVerifications] = useState<Verifications>({ id_verified: false, phone_verified: false, responder_training: 'none' });
+  const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [idBusy, setIdBusy] = useState(false);
+  const [phoneBusy, setPhoneBusy] = useState(false);
   const [modItems, setModItems] = useState<ModItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -112,26 +120,83 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerWidth, setDrawerWidth] = useState(DRAWER_WIDTH);
     const uploadId = async () => {
-    const pick = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 0.8 });
-    if (pick.canceled || !pick.assets?.[0]) return;
-    const uri = pick.assets[0].uri;
-    const blob = await (await fetch(uri)).blob();
-    const path = `${userId}/gov-id.jpg`;
-    const { error: upErr } = await supabase.storage.from('id-docs').upload(path, blob, {
-      contentType: blob.type || 'image/jpeg',
-      upsert: true,
-    });
-    if (upErr) {
-      console.error('[profile] id upload', upErr);
+    try {
+      setIdBusy(true);
+      let file: { blob: Blob; mime: string; ext: string } | null = null;
+      if (Platform.OS === 'web' && typeof document !== 'undefined') {
+        file = await new Promise((resolve) => {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = 'image/*,application/pdf';
+          input.onchange = async () => {
+            const f = input.files?.[0];
+            if (!f) { resolve(null); return; }
+            const ext = (f.name.split('.').pop() || 'jpg').toLowerCase();
+            resolve({ blob: f, mime: f.type || (ext === 'pdf' ? 'application/pdf' : 'image/jpeg'), ext });
+          };
+          input.click();
+        });
+      } else {
+        const pick = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8 });
+        if (pick.canceled || !pick.assets?.[0]) { setBanner({ kind: 'info', message: 'ID upload canceled.' }); setIdBusy(false); return; }
+        const blob = await (await fetch(pick.assets[0].uri)).blob();
+        file = { blob, mime: blob.type || 'image/jpeg', ext: 'jpg' };
+      }
+      if (!file) { setBanner({ kind: 'info', message: 'ID upload canceled.' }); setIdBusy(false); return; }
+      const path = `${userId}/${Date.now()}.${file.ext}`;
+      const { error: upErr } = await supabase.storage.from('identity-docs').upload(path, file.blob, {
+        contentType: file.mime,
+        upsert: true,
+      });
+      if (upErr) { setBanner({ kind: 'error', message: upErr.message || 'Could not upload ID.' }); setIdBusy(false); return; }
+      const { error: uvErr } = await supabase.from('user_verifications').upsert({
+        user_id: userId,
+        id_document_path: path,
+        id_status: 'submitted',
+        id_verified: false,
+      });
+      if (uvErr) { setBanner({ kind: 'error', message: uvErr.message || 'Uploaded, but could not mark submitted.' }); setIdBusy(false); return; }
+      setVerifications((v) => ({ ...v, id_verified: false, id_status: 'submitted' }));
+      setBanner({ kind: 'success', message: 'ID submitted · awaiting review.' });
+    } catch (e: any) {
+      setBanner({ kind: 'error', message: e?.message || 'ID upload failed.' });
+    } finally {
+      setIdBusy(false);
+    }
+  };
+
+  const sendPhoneCode = async () => {
+    const phone = phoneNumber.trim();
+    if (!phone) { setBanner({ kind: 'error', message: 'Enter a phone number first.' }); return; }
+    setPhoneBusy(true);
+    const { error: upd } = await supabase.auth.updateUser({ phone });
+    const { error: otp } = await supabase.auth.signInWithOtp({ phone });
+    if (otp) {
+      setBanner({ kind: 'error', message: otp.message || upd?.message || 'Could not send code. Enable Phone under Supabase → Authentication → Providers.' });
+      setPhoneBusy(false);
       return;
     }
-    await supabase.from('user_verifications').upsert({
+    setOtpSent(true);
+    setBanner({ kind: 'success', message: 'Code sent. Enter the 6 digits below.' });
+    setPhoneBusy(false);
+  };
+
+  const verifyPhoneCode = async () => {
+    const phone = phoneNumber.trim();
+    const token = otpCode.trim();
+    if (token.length < 6) { setBanner({ kind: 'error', message: 'Enter the 6-digit code.' }); return; }
+    setPhoneBusy(true);
+    const { error } = await supabase.auth.verifyOtp({ phone, token, type: 'sms' });
+    if (error) { setBanner({ kind: 'error', message: error.message || 'Code did not match.' }); setPhoneBusy(false); return; }
+    const { error: uv } = await supabase.from('user_verifications').upsert({
       user_id: userId,
-      id_document_path: path,
-      id_status: 'pending',
-      id_verified: false,
+      phone_verified: true,
+      phone,
     });
-    setVerifications((v) => ({ ...v, id_verified: false }));
+    if (uv) { setBanner({ kind: 'error', message: uv.message || 'Verified with Auth, but could not save on profile.' }); setPhoneBusy(false); return; }
+    setVerifications((v) => ({ ...v, phone_verified: true, phone }));
+    setBanner({ kind: 'success', message: 'Phone verified.' });
+    setPhoneBusy(false);
   };
   const slideAnim = useRef(new Animated.Value(DRAWER_WIDTH)).current;
   const scrimAnim = useRef(new Animated.Value(0)).current;
@@ -242,12 +307,18 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
       }
       setProfile(profileRow);
 
-      const { data: verifRow } = await supabase
+      const { data: verifRow, error: verifErr } = await supabase
         .from('user_verifications')
-        .select('id_verified, phone_verified, responder_training')
+        .select('id_verified, phone_verified, responder_training, id_status, phone')
         .eq('user_id', userId)
         .maybeSingle();
-      if (verifRow) setVerifications(verifRow);
+      if (verifErr) {
+        const { data: v2 } = await supabase.from('user_verifications').select('id_verified, phone_verified, responder_training').eq('user_id', userId).maybeSingle();
+        if (v2) setVerifications(v2 as Verifications);
+      } else if (verifRow) {
+        setVerifications(verifRow as Verifications);
+        if ((verifRow as any).phone) setPhoneNumber((verifRow as any).phone);
+      }
 
       const { data: modData } = await supabase
         .from('moderation_queue')
@@ -676,6 +747,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
       <View style={styles.container}>
           <AppHeader title="Me" />
           <Page>
+            {banner ? <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} /> : null}
             {loadError && (
               <View style={styles.errorBox}><Text style={styles.errorText}>{loadError}</Text></View>
             )}
@@ -704,17 +776,10 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
             </View>
 
             <View style={styles.section}>
-              {isOwner ? (
-                <TouchableOpacity style={styles.adminCta} onPress={() => { router.replace('/admin'); }} activeOpacity={0.85}>
-                  <Shield color={Colors.white} size={18} />
-                  <Text style={styles.adminCtaTxt}>Open admin console</Text>
-                </TouchableOpacity>
-              ) : null}
-              {manageOrg ? (
-                <TouchableOpacity style={styles.orgCta} onPress={() => { router.push('/org-admin'); }} activeOpacity={0.85}>
-                  <Text style={styles.orgCtaTxt}>Manage {manageOrg.name}</Text>
-                </TouchableOpacity>
-              ) : null}
+              <TouchableOpacity style={styles.adminCta} onPress={() => { router.push('/manage'); }} activeOpacity={0.85}>
+                <Shield color={Colors.white} size={18} />
+                <Text style={styles.adminCtaTxt}>Manage</Text>
+              </TouchableOpacity>
             </View>
 
             {/* My Pets */}
@@ -829,23 +894,63 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
               <VerificationRow
                   icon={<IdCard color={Colors.navy} size={18} />}
                   label="Government ID"
-                  onPress={uploadId}
+                  onPress={idBusy ? undefined : uploadId}
                   pill={verifications.id_verified
                     ? { bg: Colors.tealBg, color: Colors.tealDark, text: 'Verified' }
-                    : { bg: Colors.surface, color: Colors.textTertiary, text: 'Tap to upload' }}
+                    : (verifications.id_status === 'submitted' || verifications.id_status === 'pending')
+                      ? { bg: Colors.standardBg, color: Colors.accentDark, text: 'Submitted · awaiting review' }
+                      : verifications.id_status === 'rejected'
+                        ? { bg: Colors.criticalBg, color: Colors.critical, text: 'Rejected · tap to re-upload' }
+                        : { bg: Colors.surface, color: Colors.textTertiary, text: idBusy ? 'Uploading…' : 'Tap to upload image or PDF' }}
                 />
                 <View style={styles.divider} />
-                <VerificationRow
-                  icon={<Phone color={Colors.navy} size={18} />}
-                  label="Phone"
-                  pill={verifications.phone_verified ? { bg: Colors.tealBg, color: Colors.tealDark, text: 'Verified' } : { bg: Colors.surface, color: Colors.textTertiary, text: 'Pending' }}
-                />
-                <View style={styles.divider} />
-                <VerificationRow
-                  icon={<GraduationCap color={Colors.navy} size={18} />}
-                  label="Responder training"
-                  pill={trainingPill}
-                />
+                <View style={styles.privacyRow}>
+                  <View style={styles.privacyLeft}>
+                    <Phone color={Colors.navy} size={18} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.privacyLabel}>Phone</Text>
+                      {verifications.phone_verified ? (
+                        <Text style={styles.privacyDesc}>{phoneNumber || 'Verified'}</Text>
+                      ) : (
+                        <>
+                          <TextInput
+                            style={styles.phoneInput}
+                            value={phoneNumber}
+                            onChangeText={setPhoneNumber}
+                            placeholder="+1 555 555 0100"
+                            placeholderTextColor={Colors.textTertiary}
+                            keyboardType="phone-pad"
+                          />
+                          <TouchableOpacity onPress={sendPhoneCode} disabled={phoneBusy} style={{ marginTop: 8 }}>
+                            <Text style={styles.addBtnText}>{phoneBusy ? 'Sending…' : 'Send code'}</Text>
+                          </TouchableOpacity>
+                          {otpSent ? (
+                            <>
+                              <TextInput
+                                style={styles.phoneInput}
+                                value={otpCode}
+                                onChangeText={setOtpCode}
+                                placeholder="6-digit code"
+                                placeholderTextColor={Colors.textTertiary}
+                                keyboardType="number-pad"
+                                maxLength={6}
+                              />
+                              <TouchableOpacity onPress={verifyPhoneCode} disabled={phoneBusy} style={{ marginTop: 8 }}>
+                                <Text style={styles.addBtnText}>{phoneBusy ? 'Checking…' : 'Verify code'}</Text>
+                              </TouchableOpacity>
+                            </>
+                          ) : null}
+                        </>
+                      )}
+                    </View>
+                  </View>
+                  {verifications.phone_verified ? (
+                    <View style={[styles.verifPill, { backgroundColor: Colors.tealBg }]}>
+                      <Check color={Colors.tealDark} size={11} />
+                      <Text style={[styles.verifPillText, { color: Colors.tealDark }]}>Verified</Text>
+                    </View>
+                  ) : null}
+                </View>
               </View>
             </View>
 
@@ -1520,6 +1625,7 @@ const styles = StyleSheet.create({
   privacyLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
   privacyLabel: { fontSize: FontSizes.md, fontFamily: Fonts.semibold, color: Colors.text },
   privacyDesc: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 2 },
+  phoneInput: { marginTop: 8, borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, fontFamily: Fonts.regular, color: Colors.text, fontSize: FontSizes.sm },
 
   // Badges
   badgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

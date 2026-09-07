@@ -1212,8 +1212,9 @@ export default function PetRecordScreen() {
   };
 
   const openConfirmFromParse = (documentId: string, parsed: any) => {
+    console.log('[parse-pet-document] vaccines', parsed.vaccinations);
     const vax = (parsed.vaccinations || []).map((v: any) => ({
-      vaccine: v.name || v.vaccine || '',
+      vaccine: v.name || v.vaccine || v.product || '',
       brand: v.brand || null,
       dose: v.dose || null,
       administered_on: v.date || v.given_on || v.administered_on || null,
@@ -1308,7 +1309,9 @@ export default function PetRecordScreen() {
       const result = await resp.json().catch(() => ({ parsed: false, error: 'bad json', reason: 'model_error' }));
       console.log('[parse-pet-document] response', resp.status, {
         parsed: result.parsed, reason: result.reason, error: result.error,
-        vax: result.vaccinations?.length, visits: result.visits?.length, labs: result.labs?.length,
+        vax: result.vaccinations?.length,
+        vaxNames: (result.vaccinations || []).map((v: any) => v.name || v.vaccine || v.product),
+        visits: result.visits?.length, labs: result.labs?.length,
       });
       if (!resp.ok || !result.parsed) {
         const reason = result.reason || (result.error === 'too_large' ? 'too_large' : result.error === 'no_file' || result.labeled?.includes('missing') ? 'no_file' : 'model_error');
@@ -1341,20 +1344,32 @@ export default function PetRecordScreen() {
   const applyExtraction = async () => {
     if (!extractionReview || !petId || !user) return;
     setApplyingExtraction(true);
+    const sourceDocId = extractionReview.documentId;
+    let appliedCount = 0;
+    const errors: string[] = [];
+    const run = async (label: string, fn: () => Promise<any>) => {
+      try {
+        const res = await fn();
+        if (res?.error) { errors.push(`${label}: ${res.error.message}`); return null; }
+        appliedCount++;
+        return res;
+      } catch (e: any) {
+        errors.push(`${label}: ${e?.message || e}`);
+        return null;
+      }
+    };
 
     try {
-      const sourceDocId = extractionReview.documentId;
-      let appliedCount = 0;
-      const errors: string[] = [];
-
-      // Insert non-duplicate vaccinations
+      // 1. vaccinations
       for (let i = 0; i < editableVax.length; i++) {
         if (extractionReview.vaxDuplicates.has(i)) continue;
         const v = editableVax[i];
         if (!v.vaccine) continue;
-        const { error } = await supabase.from('pet_vaccinations').insert({
+        await run(`Vaccination "${v.vaccine}"`, () => supabase.from('pet_vaccinations').insert({
           pet_id: petId,
           vaccine: v.vaccine,
+          brand: v.brand || null,
+          dose: v.dose || null,
           administered_on: v.administered_on || null,
           next_due_on: v.next_due_on || null,
           duration_years: v.duration_years || null,
@@ -1369,100 +1384,89 @@ export default function PetRecordScreen() {
           vet_clinic: v.clinic_name || null,
           recorded_by: user.id,
           source_document_id: sourceDocId,
-        });
-        if (error) { console.error('[pet-record] vax insert from extraction:', error); errors.push(`Vaccination "${v.vaccine}": ${error.message}`); }
-        else appliedCount++;
+          confirmed: true,
+          source: 'ai_extracted',
+        }));
       }
 
-      // Insert lab panels + results
+      // 2. labs
       for (const panel of editableLabs) {
-        if (!panel.panel_name) continue;
-        const { data: panelData, error: panelErr } = await supabase.from('lab_panels').insert({
-          pet_id: petId,
-          panel_name: panel.panel_name,
-          collected_on: panel.collected_on || null,
-          vet_name: panel.vet_name || null,
-          notes: null,
-          recorded_by: user.id,
-        }).select().single();
-        if (panelErr) { console.error('[pet-record] lab panel insert:', panelErr); errors.push(`Lab panel "${panel.panel_name}": ${panelErr.message}`); continue; }
-
-        for (const result of (panel.results || [])) {
+        for (const result of panel.results || []) {
           if (!result.analyte) continue;
-          const { error: resErr } = await supabase.from('lab_results').insert({
-            panel_id: panelData.id,
-            analyte: result.analyte,
-            value_num: result.value_num,
-            value_text: result.value_text || null,
-            unit: result.unit || null,
-            ref_low: result.ref_low,
-            ref_high: result.ref_high,
-            flag: result.flag || null,
-          });
-          if (resErr) { console.error('[pet-record] lab result insert:', resErr); errors.push(`Lab result "${result.analyte}": ${resErr.message}`); }
-          else appliedCount++;
-        }
-      }
-
-      // Insert weight as care event + update pet
-      if (editableWeight.value != null) {
-        const kg = editableWeight.unit === 'lb' ? lbToKg(editableWeight.value) : editableWeight.value;
-        const { error: petWtErr } = await supabase.from('pets').update({
-          weight_kg: kg,
-          weight_measured_on: editableWeight.measured_on || new Date().toISOString().slice(0, 10),
-        }).eq('id', petId);
-        if (petWtErr) { console.error('[pet-record] weight from extraction:', petWtErr); errors.push(`Weight: ${petWtErr.message}`); }
-        else {
-          const { error: evtErr } = await supabase.from('pet_care_events').insert({
+          await run(`Lab "${result.analyte}"`, () => supabase.from('lab_results').insert({
             pet_id: petId,
-            event_type: 'weight',
-            occurred_on: editableWeight.measured_on || new Date().toISOString().slice(0, 10),
-            title: 'Weight recorded (from document)',
-            notes: `${editableWeight.value} ${editableWeight.unit || 'kg'}`,
-            weight_kg: kg,
-            recorded_by: user.id,
-            source_document_id: sourceDocId,
-          });
-          if (evtErr) console.error('[pet-record] weight event from extraction:', evtErr);
-          else appliedCount++;
+            name: result.analyte,
+            analyte: result.analyte,
+            value: result.value_text || (result.value_num != null ? String(result.value_num) : null),
+            value_text: result.value_text || null,
+            value_num: result.value_num,
+            unit: result.unit,
+            flag: result.flag,
+            collected_on: panel.collected_on,
+            source: 'ai_extracted',
+            confirmed: true,
+          }));
         }
       }
 
-      // Insert procedures as care events
-      for (const proc of editableProcedures) {
-        if (!proc.title && !proc.event_type) continue;
-        const { error } = await supabase.from('pet_care_events').insert({
+      // 3. weight — always insert an entry; update pets only if newer
+      if (editableWeight.value != null) {
+        const unit = (editableWeight.unit || 'lb').toLowerCase();
+        const lb = unit === 'kg' ? editableWeight.value * 2.20462 : editableWeight.value;
+        const kg = unit === 'lb' ? lbToKg(editableWeight.value) : editableWeight.value;
+        const measured = editableWeight.measured_on || new Date().toISOString().slice(0, 10);
+        await run('Weight entry', () => supabase.from('weight_entries').insert({
+          pet_id: petId, weight_lb: lb, measured_on: measured, source: 'ai_extracted',
+        }));
+        const currentMeasured = pet?.weight_measured_on || '';
+        if (!currentMeasured || measured > currentMeasured) {
+          await run('Pet weight', () => supabase.from('pets').update({
+            weight_kg: kg,
+            weight_measured_on: measured,
+          }).eq('id', petId));
+        }
+        await run('Weight event', () => supabase.from('pet_care_events').insert({
           pet_id: petId,
-          event_type: proc.event_type || 'procedure',
-          occurred_on: proc.occurred_on || null,
-          title: proc.title || null,
-          notes: proc.notes || null,
-          cost_cents: proc.cost_cents || null,
+          event_type: 'weight',
+          occurred_on: measured,
+          title: 'Weight recorded (from document)',
+          notes: `${editableWeight.value} ${editableWeight.unit || 'lb'}`,
+          weight_kg: kg,
           recorded_by: user.id,
           source_document_id: sourceDocId,
-        });
-        if (error) { console.error('[pet-record] procedure insert from extraction:', error); errors.push(`Procedure "${proc.title}": ${error.message}`); }
-        else appliedCount++;
+        }));
       }
 
+      // 4. visits
       for (const visit of editableProcedures) {
-        const { error } = await supabase.from('medical_records').insert({
+        if (!visit.title && !visit.event_type) continue;
+        await run(`Visit "${visit.title || 'Visit'}"`, () => supabase.from('medical_records').insert({
           pet_id: petId,
           record_type: visit.event_type || 'visit',
           title: visit.title || 'Visit',
           details: visit.notes || null,
           record_date: visit.occurred_on || new Date().toISOString().slice(0, 10),
-        });
-        if (error) console.error('[pet-record] visit insert', error);
-        else appliedCount++;
+        }));
+        await run(`Visit event "${visit.title || 'Visit'}"`, () => supabase.from('pet_care_events').insert({
+          pet_id: petId,
+          event_type: visit.event_type && ['visit', 'procedure', 'vaccination', 'medication', 'lab', 'note', 'grooming', 'other', 'weight'].includes(visit.event_type)
+            ? visit.event_type : 'visit',
+          occurred_on: visit.occurred_on || null,
+          title: visit.title || null,
+          notes: visit.notes || null,
+          cost_cents: visit.cost_cents || null,
+          recorded_by: user.id,
+          source_document_id: sourceDocId,
+        }));
       }
+
       for (const c of extractionReview.conditions || []) {
         if (!c.name) continue;
         const status = (c.status || 'active').toLowerCase();
         const key = c.name.trim().toLowerCase();
         const existing = conditions.find((x) => (x.name || '').trim().toLowerCase() === key);
         if (existing) {
-          const { error } = await supabase.from('pet_conditions').update({
+          await run(`Condition "${c.name}"`, () => supabase.from('pet_conditions').update({
             status,
             is_active: status === 'active',
             notes: c.notes || existing.notes,
@@ -1470,11 +1474,9 @@ export default function PetRecordScreen() {
             resolved_date: status === 'resolved' ? (c.resolved_date || new Date().toISOString().slice(0, 10)) : existing.resolved_date,
             resolved_on: status === 'resolved' ? (c.resolved_date || new Date().toISOString().slice(0, 10)) : existing.resolved_on,
             source_document_id: sourceDocId,
-          }).eq('id', existing.id);
-          if (error) console.error('[pet-record] condition update', error);
-          else appliedCount++;
+          }).eq('id', existing.id));
         } else {
-          const { error } = await supabase.from('pet_conditions').insert({
+          await run(`Condition "${c.name}"`, () => supabase.from('pet_conditions').insert({
             pet_id: petId,
             kind: c.kind || 'condition',
             name: c.name,
@@ -1485,36 +1487,10 @@ export default function PetRecordScreen() {
             diagnosed_on: c.onset_date || null,
             resolved_date: c.resolved_date || null,
             source_document_id: sourceDocId,
-          });
-          if (error) console.error('[pet-record] condition insert', error);
-          else appliedCount++;
+          }));
         }
       }
-      for (const panel of editableLabs) {
-        for (const result of panel.results || []) {
-          if (!result.analyte) continue;
-          const { error } = await supabase.from('lab_results').insert({
-            pet_id: petId,
-            name: result.analyte,
-            value: result.value_text || (result.value_num != null ? String(result.value_num) : null),
-            unit: result.unit,
-            flag: result.flag,
-            collected_on: panel.collected_on,
-            source: 'ai_extracted',
-            confirmed: true,
-          });
-          if (error) console.error('[pet-record] lab_results insert', error);
-        }
-      }
-      if (editableWeight.value != null) {
-        const lb = (editableWeight.unit || 'lb').toLowerCase() === 'kg'
-          ? editableWeight.value * 2.20462
-          : editableWeight.value;
-        const { error } = await supabase.from('weight_entries').insert({
-          pet_id: petId, weight_lb: lb, measured_on: editableWeight.measured_on || new Date().toISOString().slice(0, 10), source: 'ai_extracted',
-        });
-        if (error) console.error('[pet-record] weight_entries insert', error);
-      }
+
       await supabase.from('pet_documents').update({
         ai_status: 'confirmed',
         ai_summary: { ...(documents.find((d) => d.id === sourceDocId)?.ai_summary || {}), applied: true },
@@ -1596,7 +1572,11 @@ export default function PetRecordScreen() {
   const breedDisplay = [pet.breed_primary, pet.breed_secondary].filter(Boolean).join(' / ')
     || pet.breed || '—';
   const colorDisplay = [pet.primary_color, pet.secondary_color].filter(Boolean).join(' / ') || '—';
-  const latestLb = weightEntries[0]?.weight_lb
+  const latestWeightRow = [...weightEntries]
+    .filter((w) => w.measured_on)
+    .sort((a, b) => String(b.measured_on).localeCompare(String(a.measured_on)))[0]
+    || weightEntries[0];
+  const latestLb = latestWeightRow?.weight_lb
     ?? (pet.weight_kg != null ? kgToLb(pet.weight_kg) : null);
   const targetLb = pet.target_weight_kg != null ? kgToLb(pet.target_weight_kg) : null;
   const weightDisplay = latestLb != null ? `${latestLb} lb` : '—';
@@ -3066,10 +3046,11 @@ export default function PetRecordScreen() {
                 </Text>
 
                 {/* Vaccinations */}
-                {editableVax.length > 0 && (
-                  <View style={styles.extractionSection}>
+                <View style={styles.extractionSection}>
                     <Text style={styles.extractionSectionTitle}>Vaccinations</Text>
-                    {editableVax.map((vax, i) => (
+                    {editableVax.length === 0 ? (
+                      <Text style={styles.emptyText}>None extracted from this visit — add if listed on the record.</Text>
+                    ) : editableVax.map((vax, i) => (
                       <View key={i} style={[styles.extractionItem, extractionReview.vaxDuplicates.has(i) && styles.extractionItemDuplicate]}>
                         {extractionReview.vaxDuplicates.has(i) && (
                           <View style={styles.duplicateBadge}>
@@ -3093,7 +3074,6 @@ export default function PetRecordScreen() {
                       </View>
                     ))}
                   </View>
-                )}
 
                 {/* Lab Panels */}
                 {editableLabs.length > 0 && (

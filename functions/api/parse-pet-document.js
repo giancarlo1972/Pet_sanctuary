@@ -25,7 +25,7 @@ Return JSON only, no markdown:
   "kind": "vaccination|lab|visit|invoice|insurance|other",
   "clinic": "string or null",
   "date": "YYYY-MM-DD or null",
-  "vaccinations": [{"brand": null, "name": "", "lot": null, "dose": null, "date": "YYYY-MM-DD or null", "next_due": "YYYY-MM-DD or null", "valid_until": "YYYY-MM-DD or null", "reactions": null, "clinic": null}],
+  "vaccinations": [{"brand": null, "name": "", "product": null, "lot": null, "dose": null, "date": "YYYY-MM-DD or null", "next_due": "YYYY-MM-DD or null", "valid_until": "YYYY-MM-DD or null", "reactions": null, "clinic": null}],
   "conditions": [{"name": "", "kind": "condition|allergy", "status": "active|resolved|monitoring", "onset_date": "YYYY-MM-DD or null", "resolved_date": "YYYY-MM-DD or null", "notes": null}],
   "medications": [{"name": "", "dose": null, "given_on": null}],
   "visits": [{"clinic": null, "date": "YYYY-MM-DD or null", "reason": null, "summary": null}],
@@ -36,7 +36,7 @@ Return JSON only, no markdown:
 }
 Rules:
 - labs[].value MUST be a string or a number. Qualitative PCR (e.g. "Detected", "Not detected") stays as that string; unit null. If value is Detected (case-insensitive) flag=abnormal; if Not detected flag=normal. Numeric labs keep the printed number and unit.
-- vaccinations: extract EVERY vaccine administered or mentioned anywhere, including visit notes and discharge text. Capture product/brand, date given, next_due / valid_until when printed.
+- vaccinations: list EVERY vaccine administered at this visit or mentioned anywhere, including visit notes and discharge text — product name, date given, lot, next due. Include FVRCP, FeLV, rabies, FVRCP combo, etc. even if only named in the notes. Empty array only if the document has no vaccine language at all.
 - weight: return the printed {value, unit} as-is (do not convert). Empty arrays if unreadable. Never invent dates.
 - conditions: one row per distinct issue. If a visit notes an existing problem is better or gone, set status=resolved (or monitoring), do not duplicate the name. Use onset_date/resolved_date when printed.
 - ai_note: 3–5 lines covering findings, any delta vs prior labs for the same analytes, and flags. Do not diagnose.
@@ -102,7 +102,8 @@ function normalizeLab(l) {
 function normalizeVax(v) {
   return {
     brand: v?.brand || v?.product || null,
-    name: v?.name || v?.vaccine || '',
+    name: v?.name || v?.vaccine || v?.product || '',
+    product: v?.product || v?.name || null,
     lot: v?.lot || v?.lot_number || null,
     dose: v?.dose || null,
     date: v?.date || v?.given_on || v?.administered_on || null,
@@ -353,6 +354,7 @@ export async function onRequestPost(context) {
       console.log('[parse-pet-document] OK', model, {
         documentId,
         vax: vaccinations.length,
+        vaxNames: vaccinations.map((v) => v.name || v.product || v.brand),
         visits: visits.length,
         labs: labs.length,
         conditions: conditions.length,

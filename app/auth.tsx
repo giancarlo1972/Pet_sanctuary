@@ -47,8 +47,9 @@ async function afterLogin(email: string) {
 }
 
 export default function AuthScreen() {
-  const { width } = useWindowDimensions();
-  const wide = Platform.OS === 'web' && width >= 900;
+  const dim = useWindowDimensions();
+  const browserW = Platform.OS === 'web' && typeof window !== 'undefined' ? window.innerWidth : dim.width;
+  const wide = browserW >= 768;
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');

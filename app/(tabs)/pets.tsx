@@ -19,6 +19,7 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import AppHeader from '@/components/AppHeader';
+import { Page } from '@/components/Page';
 import SignedImage from '@/components/SignedImage';
 
 const CARD_GAP = 12;
@@ -201,6 +202,7 @@ export default function PetsScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={Colors.background} />
       <AppHeader title="Pets" />
+      <Page scroll={false}>
       <View style={styles.filterBar}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterBarContent}>
           {FILTER_CHIPS.map((chip) => {
@@ -249,6 +251,7 @@ export default function PetsScreen() {
           }
         />
       )}
+      </Page>
     </SafeAreaView>
   );
 }

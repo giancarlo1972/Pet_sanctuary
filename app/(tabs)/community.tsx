@@ -30,6 +30,7 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import AppHeader from '@/components/AppHeader';
+import { Page } from '@/components/Page';
 import SignedImage from '@/components/SignedImage';
 import type { Story } from '@/types';
 
@@ -455,6 +456,7 @@ export default function CommunityScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <AppHeader title="Community" />
+      <Page scroll={false}>
       <View style={styles.segmentContainer}>
         {(['orgs', 'fosters', 'stories'] as Segment[]).map((seg) => (
           <TouchableOpacity
@@ -629,6 +631,7 @@ export default function CommunityScreen() {
       )}
       {banner && <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />}
       <ConfirmDialog config={confirmConfig} onClose={() => setConfirmConfig(null)} />
+      </Page>
     </SafeAreaView>
   );
 }

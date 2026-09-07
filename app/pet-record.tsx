@@ -56,6 +56,8 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
+import AppHeader from '@/components/AppHeader';
+import { Page } from '@/components/Page';
 
 type Tab = 'overview' | 'insurance' | 'medical';
 type MedicalHub = 'records' | 'labs' | 'history' | 'ai';
@@ -1251,15 +1253,8 @@ export default function PetRecordScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.col}>
-      <View style={[styles.header, { paddingTop: insets.top }]}>
-        <TouchableOpacity style={styles.headerBack} onPress={() => router.back()} activeOpacity={0.75}>
-          <ArrowLeft color={Colors.text} size={24} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>{pet.name || 'Pet Record'}</Text>
-        <View style={{ width: 40 }} />
-      </View>
-
+      <AppHeader title={pet.name || 'Pet Record'} showBack />
+      <Page scroll={false}>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 + insets.bottom }} showsVerticalScrollIndicator={false}>
         {banner && (
           <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />
@@ -1795,6 +1790,7 @@ export default function PetRecordScreen() {
         )}
 
       </ScrollView>
+      </Page>
 
       {/* === Vaccination Modal (full-featured) === */}
       <VetVaccinationModal
@@ -2253,7 +2249,6 @@ export default function PetRecordScreen() {
           </View>
         </Modal>
       )}
-      </View>
     </SafeAreaView>
   );
 }

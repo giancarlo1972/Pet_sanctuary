@@ -35,6 +35,7 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import AppHeader from '@/components/AppHeader';
+import { Page } from '@/components/Page';
 import SignedImage from '@/components/SignedImage';
 
 const FEATURED_WIDTH = 170;
@@ -323,7 +324,8 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={Colors.background} />
-      <AppHeader title="Home" />
+      <AppHeader title="Home" maxWidth={1080} />
+      <Page scroll={false} wideMax={1080}>
       {loginToast ? (
         <TouchableOpacity style={styles.loginToast} onPress={() => { setLoginToast(null); router.push('/(tabs)/profile'); }} activeOpacity={0.9}>
           <Text style={styles.loginToastTxt}>Signed in as {loginToast}. Admin console is under Me.</Text>
@@ -493,6 +495,7 @@ export default function HomeScreen() {
 
         </ScrollView>
       )}
+      </Page>
     </SafeAreaView>
   );
 }

@@ -6,6 +6,7 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { isPlatformAdmin } from '@/lib/admin-access';
+import { Page } from '@/components/Page';
 
 function redirectTo() {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -102,6 +103,7 @@ export default function AuthScreen() {
             <Text style={styles.brandFoot}>Report · Adopt · Foster · Donate</Text>
           </View>
         )}
+      <Page scroll={false} wideMax={720}>
       <ScrollView contentContainerStyle={[styles.inner, wide && styles.innerWide]} keyboardShouldPersistTaps="handled">
         {!wide && (
         <View style={styles.brandRow}>
@@ -148,6 +150,7 @@ export default function AuthScreen() {
           <Text style={styles.home}>Back to Home</Text>
         </TouchableOpacity>
       </ScrollView>
+      </Page>
       </View>
     </SafeAreaView>
   );

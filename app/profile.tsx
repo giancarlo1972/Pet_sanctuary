@@ -30,6 +30,7 @@ import { useAuth } from '@/lib/context/AuthContext';
 import { isPlatformAdmin } from '@/lib/admin-access';
 import { supabase } from '@/lib/supabase';
 import AppHeader from '@/components/AppHeader';
+import { Page } from '@/components/Page';
 import AuthForm from '@/components/AuthForm';
 import SignedImage from '@/components/SignedImage';
 
@@ -619,6 +620,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
             </TouchableOpacity>
           </View>
 
+          <Page scroll={false}>
           <ScrollView style={styles.drawerScroll} showsVerticalScrollIndicator={false} contentContainerStyle={styles.drawerContent}>
             {loadError && (
               <View style={styles.errorBox}><Text style={styles.errorText}>{loadError}</Text></View>
@@ -1157,6 +1159,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
               </TouchableOpacity>
             </View>
           </ScrollView>
+          </Page>
         </SafeAreaView>
       </Animated.View>
 

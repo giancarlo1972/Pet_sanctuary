@@ -6,6 +6,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import AppHeader from '@/components/AppHeader';
+import { Page } from '@/components/Page';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
@@ -143,7 +144,12 @@ export default function OrgAdminScreen() {
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
-  return <SafeAreaView style={s.wrap} edges={['top']}><AppHeader title="Manage organization" showBack />{children}</SafeAreaView>;
+  return (
+    <SafeAreaView style={s.wrap} edges={['top']}>
+      <AppHeader title="Manage organization" showBack />
+      <Page scroll={false}>{children}</Page>
+    </SafeAreaView>
+  );
 }
 
 const s = StyleSheet.create({

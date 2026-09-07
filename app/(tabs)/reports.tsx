@@ -8,6 +8,7 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import AppHeader from '@/components/AppHeader';
+import { Page } from '@/components/Page';
 import { SUPPORT_EMAIL } from '@/lib/contact';
 
 const TYPE_LABEL: Record<string, string> = {
@@ -101,6 +102,7 @@ export default function ReportsTabScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <AppHeader title="Reports" />
+      <Page scroll={false}>
       <View style={styles.segment}>
         <TouchableOpacity style={[styles.segBtn, tab === 'reports' && styles.segOn]} onPress={() => setTab('reports')}>
           <Text style={[styles.segText, tab === 'reports' && styles.segTextOn]}>Reports</Text>
@@ -161,6 +163,7 @@ export default function ReportsTabScreen() {
           </View>
         </ScrollView>
       )}
+      </Page>
     </SafeAreaView>
   );
 }

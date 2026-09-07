@@ -183,7 +183,7 @@ function Invoices() {
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: Colors.screen },
-  phone: { flex: 1, width: '100%', maxWidth: 430, alignSelf: 'center' },
+  phone: { flex: 1, width: '100%', width: '100%' },
   tabs: { flexDirection: 'row', marginHorizontal: 12, marginTop: 8, backgroundColor: Colors.surface, borderRadius: 999, padding: 4 },
   tab: { flex: 1, paddingVertical: 10, borderRadius: 999, alignItems: 'center' },
   tabOn: { backgroundColor: Colors.navy },

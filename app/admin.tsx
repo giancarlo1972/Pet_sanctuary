@@ -133,7 +133,7 @@ export default function AdminScreen() {
         <AppHeader title="Admin" showBack />
         <View style={styles.phone}>
           <Text style={styles.h1}>No admin access</Text>
-          <Text style={styles.body}>This console is for Rescue Army administrators and org staff. Your role is {role || 'member'}.</Text>
+          <Text style={styles.body}>This console is for Rescue Army platform administrators only. Org admins use Me → Manage organization. Your role is {role || 'member'}.</Text>
           <TouchableOpacity onPress={() => Linking.openURL(supportMailto('Admin access request'))}>
             <Text style={styles.link}>Request access · {SUPPORT_EMAIL}</Text>
           </TouchableOpacity>

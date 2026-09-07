@@ -27,7 +27,7 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { router, useFocusEffect } from 'expo-router';
 import { useSafeBack } from '@/hooks/useSafeBack';
 import { useAuth } from '@/lib/context/AuthContext';
-import { isPlatformAdmin } from '@/lib/admin-access';
+import { isPlatformAdmin, isOrgAdminRole } from '@/lib/admin-access';
 import { supabase } from '@/lib/supabase';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
@@ -602,13 +602,14 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
   const cityState = [profile?.address_city, profile?.address_state].map((p) => p?.trim()).filter(Boolean).join(', ');
   const isVerified = verifications.id_verified && verifications.phone_verified;
   const isOwner = isPlatformAdmin(profile?.role, profile?.email || email);
-  const isOrgAdmin = isOwner || profile?.role === 'admin' || profile?.role === 'shelter';
-  const ROLE_LABEL: Record<string, string> = {
-    admin: 'Administrator', platform_admin: 'Administrator',
-    shelter: 'Org admin', org_admin: 'Org admin',
-    first_responder: 'First responder', volunteer: 'Volunteer', member: 'Member',
-  };
-  const roleLabel = ROLE_LABEL[(profile?.role || 'member').toLowerCase()] || 'Member';
+  const isOrgAdmin = Boolean(manageOrg) || (isOrgAdminRole(profile?.role) && !isOwner);
+  const roleLabel = isOwner
+    ? 'Rescue Army admin'
+    : (manageOrg ? `Org admin · ${manageOrg.name}` : (
+      isOrgAdminRole(profile?.role) ? 'Org admin' : (
+        ({ first_responder: 'First responder', volunteer: 'Volunteer', member: 'Member' } as Record<string, string>)[(profile?.role || 'member').toLowerCase()] || 'Member'
+      )
+    ));
 
 
   const trainingPill = verifications.responder_training === 'passed'
@@ -643,7 +644,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                   {isVerified && <ShieldCheck color={Colors.teal} size={16} />}
                 </View>
                 <Text style={styles.userSubtitle}>
-                  {isOwner ? 'Administrator' : isVerified ? 'Verified rescuer' : 'Rescue Army member'}{cityState ? ` · ${cityState}` : ''}
+                  {isOwner ? 'Rescue Army admin' : isOrgAdmin && manageOrg ? `Org admin · ${manageOrg.name}` : isVerified ? 'Verified rescuer' : 'Rescue Army member'}{cityState ? ` · ${cityState}` : ''}
                 </Text>
               </View>
             </View>

@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, Switch,
+  View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { ChevronLeft, PawPrint } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
@@ -18,12 +17,6 @@ const SPECIES_OPTIONS = ['Dog', 'Cat', 'Rabbit', 'Bird', 'Other'];
 
 export default function AddPetScreen() {
   const { user } = useAuth();
-  const [orgStaff, setOrgStaff] = useState(false);
-  useEffect(() => {
-    if (!user) return;
-    supabase.from('organization_members').select('id').eq('user_id', user.id).limit(1)
-      .then(({ data }) => setOrgStaff(Boolean(data && data.length)));
-  }, [user]);
   const [name, setName] = useState('');
   const [species, setSpecies] = useState('Dog');
   const [breed, setBreed] = useState('');
@@ -31,17 +24,17 @@ export default function AddPetScreen() {
   const [gender, setGender] = useState('');
   const [description, setDescription] = useState('');
   const [location, setLocation] = useState('');
-  const [isPublic, setIsPublic] = useState(false);
-    const [availability, setAvailability] = useState('available');
   const [relationship, setRelationship] = useState<'owner' | 'foster' | 'sponsor'>('owner');
   const [ai, setAi] = useState<any>(null);
   const [photoFile, setPhotoFile] = useState<any>(null);
+  const [photoPath, setPhotoPath] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
 
 
   const pickPhoto = () => {
+    if (!user) { setBanner({ message: 'Please sign in to add a pet.', kind: 'error' }); return; }
     if (typeof document === 'undefined') { setBanner({ message: 'Photo AI is available on the website.', kind: 'info' }); return; }
     const input = document.createElement('input');
     input.type = 'file';
@@ -52,7 +45,12 @@ export default function AddPetScreen() {
       setAnalyzing(true); setBanner(null);
       try {
         const prepared = await prepareImageFile(file);
-        setPhotoFile(new File([prepared.blob], 'pet.jpg', { type: 'image/jpeg' }));
+        const blob = prepared.blob;
+        const pendingPath = `${user.id}/pending-${Date.now()}.jpg`;
+        const { error: upErr } = await supabase.storage.from('pet-photos').upload(pendingPath, blob, { contentType: 'image/jpeg', upsert: true });
+        if (upErr) throw upErr;
+        setPhotoPath(pendingPath);
+        setPhotoFile(new File([blob], 'pet.jpg', { type: 'image/jpeg' }));
         const res = await fetch('/api/analyze-pet-photo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: prepared.dataUrl }) });
         const json = await res.json();
         if (!json.analyzed) throw new Error(json.error || 'AI could not read the photo.');
@@ -87,10 +85,20 @@ export default function AddPetScreen() {
         status: 'private',
         listing_type: 'private',
         owner_id: user.id,
+        main_photo_url: photoPath,
         ai_traits: ai ? { ...ai, confirmed: true } : null,
       }).select('id').single();
       if (error) throw error;
-      if (photoFile) {
+      if (photoPath) {
+        const dest = `${data.id}/${Date.now()}.jpg`;
+        const moved = await supabase.storage.from('pet-photos').move(photoPath, dest);
+        const stored = moved.error ? photoPath : dest;
+        if (moved.error) console.warn('[add-pet] move photo', moved.error.message);
+        await supabase.from('pets').update({ main_photo_url: stored }).eq('id', data.id);
+        await supabase.from('pet_photos').insert({
+          pet_id: data.id, photo_url: stored, is_profile: true, sort_order: 0, uploaded_by: user.id,
+        });
+      } else if (photoFile) {
         const path = `${data.id}/${Date.now()}.jpg`;
         const { error: upErr } = await supabase.storage.from('pet-photos').upload(path, photoFile, { contentType: photoFile.type || 'image/jpeg', upsert: true });
         if (upErr) throw upErr;
@@ -169,23 +177,6 @@ export default function AddPetScreen() {
 
           <Text style={styles.sectionLabel}>Location</Text>
           <TextInput style={styles.input} value={location} onChangeText={setLocation} placeholder="City or area" placeholderTextColor={Colors.textTertiary} />
-
-          {orgStaff ? (
-            <>
-              <Text style={styles.sectionLabel}>Availability</Text>
-              <View style={styles.availRow}>
-                {['available', 'foster', 'both'].map((a) => (
-                  <TouchableOpacity key={a} style={[styles.availPill, availability === a && styles.availPillActive]} onPress={() => setAvailability(a)} activeOpacity={0.75}>
-                    <Text style={[styles.availPillText, availability === a && styles.availPillTextActive]}>{a === 'available' ? 'Adoption' : a === 'foster' ? 'Foster' : 'Both'}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <View style={styles.switchRow}>
-                <Text style={styles.switchLabel}>Visible to public</Text>
-                <Switch value={isPublic} onValueChange={setIsPublic} trackColor={{ true: Colors.coral, false: Colors.surfaceAlt }} />
-              </View>
-            </>
-          ) : null}
 
           <TouchableOpacity style={[styles.submitBtn, loading && styles.btnDisabled]} onPress={handleSubmit} disabled={loading} activeOpacity={0.85}>
             {loading ? <ActivityIndicator color={Colors.white} size="small" /> : <Text style={styles.submitText}>Add Pet</Text>}

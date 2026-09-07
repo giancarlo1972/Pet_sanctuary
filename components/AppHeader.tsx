@@ -19,12 +19,17 @@ export default function AppHeader({ title, showBack = false, rightAction, maxWid
   const router = useRouter();
   const { user } = useAuth();
 
+  const goBack = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/(tabs)/profile');
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={[styles.inner, { maxWidth }]}>
       <View style={styles.header}>
         {showBack ? (
-          <TouchableOpacity style={styles.sideBtn} onPress={() => router.back()} activeOpacity={0.75}>
+          <TouchableOpacity style={styles.sideBtn} onPress={goBack} activeOpacity={0.75}>
             <ChevronLeft color={Colors.text} size={22} />
           </TouchableOpacity>
         ) : (

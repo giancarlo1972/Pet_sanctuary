@@ -33,7 +33,7 @@ async function afterLogin(email: string) {
     const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle();
     role = profile?.role || '';
   }
-  const label = isPlatformAdmin(role, loginEmail) ? 'Administrator' : 'Member';
+  const label = isPlatformAdmin(role, loginEmail) ? 'Rescue Army admin' : 'Member';
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
     try { sessionStorage.setItem('ra_login_toast', label); } catch {}
     window.location.assign('/');

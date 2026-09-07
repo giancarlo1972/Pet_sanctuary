@@ -80,7 +80,7 @@ export default function OrgAdminScreen() {
   if (authLoading || loading) return <Shell><ActivityIndicator color={Colors.teal} style={{ marginTop: 40 }} /></Shell>;
   if (!user || !org) return (
     <Shell><View style={s.col}><Text style={s.h}>No organization to manage</Text>
-      <Text style={s.body}>You're not the admin of any organization. Ask a Rescue Army administrator to assign you.</Text>
+      <Text style={s.body}>You're not the admin of any organization. Platform administrators use Me → Open admin console. Org admins are assigned per organization.</Text>
       <TouchableOpacity onPress={() => router.back()}><Text style={s.link}>Back</Text></TouchableOpacity></View></Shell>
   );
 

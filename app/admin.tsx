@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Linking } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Linking, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import AppHeader from '@/components/AppHeader';
@@ -22,6 +22,8 @@ type QueueItem = {
 export default function AdminScreen() {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
+  const { width } = useWindowDimensions();
+  const wide = width >= 900;
   const [role, setRole] = useState<string | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [orgs, setOrgs] = useState<{ id: string; name: string; status: string | null; ein: string | null }[]>([]);
@@ -181,8 +183,10 @@ export default function AdminScreen() {
 
           <Section title="Organizations · All entities">
             {allOrgs.length === 0 ? <Empty /> : null}
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
             {allOrgs.map((o) => (
-              <View key={o.id} style={styles.entity}>
+              <View key={o.id} style={{ width: wide ? '48.5%' : '100%' }}>
+              <View style={styles.entity}>
                 <View style={[styles.entityAv, { backgroundColor: Colors.navy }]}>
                   <Text style={styles.entityAvTxt}>{(o.name || '?').charAt(0).toUpperCase()}</Text>
                 </View>
@@ -194,7 +198,9 @@ export default function AdminScreen() {
                   <Text style={styles.reassign}>{busyId === o.id ? '…' : 'Assign admin'}</Text>
                 </TouchableOpacity>
               </View>
+              </View>
             ))}
+            </View>
             <Text style={styles.noteTxt}>Each entity gets one Org admin who manages its own members. Platform admins can reassign, suspend, or step in.</Text>
           </Section>
           <Section title="Org verifications">
@@ -274,7 +280,7 @@ const styles = StyleSheet.create({
   entityAvTxt: { color: Colors.white, fontFamily: Fonts.bold },
   reassign: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy },
   scroll: { paddingBottom: 48 },
-  col: { width: '100%', maxWidth: 560, alignSelf: 'center', padding: 16, gap: 18 },
+  col: { width: '100%', maxWidth: 880, alignSelf: 'center', padding: 24, gap: 18 },
   hero: { backgroundColor: Colors.navy, borderRadius: 18, padding: 18 },
   heroTitle: { fontFamily: Fonts.extrabold, fontSize: 18, color: Colors.white },
   heroSub: { fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 2 },

@@ -200,17 +200,23 @@ export default function MedicalDashboard(props: {
         ) : null}
       </View>
 
+      {props.weightPts.length >= 1 ? (
       <View style={styles.card}>
         <Text style={styles.kicker}>WEIGHT + BCS</Text>
-        <AreaChart
-          points={props.weightPts.map((p) => ({ ...p, out: props.targetLb != null && p.v > props.targetLb * 1.08 }))}
-          secondary={props.bcsPts}
-          height={160}
-          target={props.targetLb}
-          unit="lb"
-        />
+        {props.weightPts.length >= 2 ? (
+          <AreaChart
+            points={props.weightPts.map((p) => ({ ...p, out: props.targetLb != null && p.v > props.targetLb * 1.08 }))}
+            secondary={props.bcsPts.length >= 2 ? props.bcsPts : undefined}
+            height={160}
+            target={props.targetLb}
+            unit="lb"
+          />
+        ) : (
+          <Text style={styles.body}>{props.weightPts[0].v} lb · {props.weightPts[0].at || '—'}</Text>
+        )}
         <Foot n={props.weightPts.length} id="weight" />
       </View>
+      ) : null}
 
       {([
         ['Temperature', 'temp_f', '°F'] as const,
@@ -218,10 +224,13 @@ export default function MedicalDashboard(props: {
         ['Resp rate', 'rr', '/min'] as const,
       ]).map(([label, key, unit]) => {
         const pts = vitalsPts(key);
+        if (!pts.length) return null;
         return (
           <View key={label} style={styles.card}>
             <Text style={styles.kicker}>{label.toUpperCase()}</Text>
-            <AreaChart points={pts} height={120} unit={unit} />
+            {pts.length >= 2
+              ? <AreaChart points={pts} height={120} unit={unit} />
+              : <Text style={styles.body}>{label} {pts[0].v}{unit} · {pts[0].at || '—'}</Text>}
             <Foot n={pts.length} id={key} />
           </View>
         );
@@ -244,7 +253,7 @@ export default function MedicalDashboard(props: {
                 </Text>
               </View>
               <RefBand value={typeof it.value === 'number' ? it.value : parseFloat(it.value)} low={it.low} high={it.high} flag={it.flag} />
-              {it.nums.length > 0 ? <MiniSpark values={it.nums} color={it.abnormal ? Colors.coral : '#2E9E96'} height={40} /> : null}
+              {it.nums.length >= 2 ? <MiniSpark values={it.nums} color={it.abnormal ? Colors.coral : '#2E9E96'} height={40} /> : null}
               <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                 <Text style={styles.foot}>First to last · {it.n} measurements</Text>
                 <Text style={styles.link}>View all →</Text>

@@ -131,7 +131,8 @@ export function parseLabTables(text) {
 
 export function parsePatientHeader(text) {
   const head = text.slice(0, 12000);
-  const dob = toIso((head.match(/(?:date of birth|DOB)\s*[:.]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i) || [])[1]);
+  const dobLine = (head.split(/\r?\n/).find((l) => /date of birth|\bDOB\b/i.test(l)) || '');
+  const dob = toIso((dobLine.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/) || [])[1]);
   const microchip = (head.match(/microchip\s*[:.#]?\s*([0-9]{9,15})/i) || [])[1] || null;
   const species = (head.match(/species\s*[:.]?\s*(cat|dog|feline|canine)/i) || [])[1] || null;
   const sexLine = (head.match(/sex\s*[:.]?\s*([^\n]{0,40})/i) || [])[1] || '';
@@ -230,8 +231,8 @@ export function parseExam(text, date, clinic) {
     const status = /abnormal|enlarged|inflamed/i.test(m[1]) ? 'abnormal' : 'normal';
     return { name, status, note: m[0].slice(0, 180) };
   });
-  const has = vitals.bcs || vitals.temp_f || vitals.hr || /physical exam|PE:|BCS/i.test(slice);
-  if (!has) return null;
+  const has = vitals.bcs || vitals.temp_f || vitals.hr || vitals.rr || /physical exam|PE:|BCS|TPR/i.test(slice);
+  if (!has && !date) return null;
   return { visit_date: date || null, clinic: clinic || null, vitals, systems };
 }
 

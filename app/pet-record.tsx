@@ -456,13 +456,23 @@ function relativeAgo(iso?: string | null) {
   return `${Math.round(h / 24)} d ago`;
 }
 
+function catalogBreed(raw?: string | null): string {
+  if (!raw) return '';
+  return raw
+    .replace(/domestic\s+shorthair/ig, 'American Shorthair')
+    .replace(/\bDSH\b/g, 'American Shorthair')
+    .replace(/domestic\s+longhair/ig, 'American Longhair')
+    .replace(/\bDLH\b/g, 'American Longhair')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function ageFromDob(dob?: string | null, ageText?: string | null) {
-  if (dob) {
-    const d = new Date(dob);
-    if (!Number.isNaN(d.getTime())) {
-      const y = (Date.now() - d.getTime()) / (365.25 * 864e5);
-      return `${Math.round(y * 10) / 10} y`;
-    }
+  const p = parseLocalParts(dob || null);
+  if (p) {
+    const born = new Date(p.y, p.m - 1, p.d).getTime();
+    const y = (Date.now() - born) / (365.25 * 864e5);
+    return `${Math.round(y * 10) / 10} y`;
   }
   return ageText || null;
 }
@@ -1567,7 +1577,7 @@ export default function PetRecordScreen() {
     if (!extractionReview || !petId || !user) return;
     setApplyingExtraction(true);
     const sourceDocId = extractionReview.documentId;
-    let applied = { vaccinations: 0, weights: 0, labs: 0, visits: 0 };
+    let applied = { vaccinations: 0, weights: 0, labs: 0, visits: 0, exams: 0 };
     const errors: string[] = [];
     const run = async (label: string, fn: () => any) => {
       try {
@@ -1727,13 +1737,17 @@ export default function PetRecordScreen() {
         const currentMeasured = pet?.weight_measured_on || '';
         if (!currentMeasured || (newest.measured_on || '') > currentMeasured) {
           const ident: any = extractionReview.data?.identity || {};
-          await run('Pet weight', () => supabase.from('pets').update({
+          const petPatch: any = {
             weight_kg: kg,
             weight_measured_on: newest.measured_on,
-            ...(ident.bcs ? { body_condition_score: ident.bcs } : {}),
-            ...(ident.bcs >= 8 && !pet?.target_weight_kg ? { target_weight_kg: lbToKg(15) } : {}),
-            ...(ident.date_of_birth ? { date_of_birth: parseAnyDate(ident.date_of_birth) } : {}),
-          }).eq('id', petId));
+          };
+          if (ident.bcs) petPatch.body_condition_score = ident.bcs;
+          if (ident.bcs >= 8 && !pet?.target_weight_kg) petPatch.target_weight_kg = lbToKg(15);
+          // never overwrite an owner-entered DOB
+          if (!pet?.date_of_birth && ident.date_of_birth) {
+            petPatch.date_of_birth = parseAnyDate(ident.date_of_birth);
+          }
+          await run('Pet weight', () => supabase.from('pets').update(petPatch).eq('id', petId));
         }
       }
 
@@ -1795,9 +1809,13 @@ export default function PetRecordScreen() {
         const { error, data } = await supabase.from('pet_exams').insert(payload).select('id').maybeSingle();
         if (error) {
           console.log('[apply] exam fail', visitDate, error.message);
-          errors.push(`Exam ${visitDate || ''}: ${error.message}`);
+          const slim = { pet_id: petId, visit_date: visitDate, clinic: ex.clinic || null, vitals: ex.vitals || {}, systems: ex.systems || [] };
+          const retry = await supabase.from('pet_exams').insert(slim).select('id').maybeSingle();
+          if (retry.error) errors.push(`Exam ${visitDate || ''}: ${retry.error.message}`);
+          else applied.exams = (applied.exams || 0) + 1;
         } else {
           console.log('[apply] exam ok', visitDate, data?.id);
+          applied.exams = (applied.exams || 0) + 1;
         }
         const v = ex.vitals || {};
         if (visitDate && (v.temp_f || v.hr || v.rr || v.bcs || v.weight_lb)) {
@@ -1965,8 +1983,7 @@ export default function PetRecordScreen() {
     );
   }
 
-  const breedDisplay = [pet.breed_primary, pet.breed_secondary].filter(Boolean).join(' / ')
-    || pet.breed || '—';
+  const breedDisplay = catalogBreed([pet.breed_primary, pet.breed_secondary].filter(Boolean).join(' / ') || pet.breed || '') || '—';
   const colorDisplay = [pet.primary_color, pet.secondary_color].filter(Boolean).join(' / ') || '—';
   const latestWeightRow = weightEntries.reduce((best, w) => {
     if (!w.measured_on) return best;
@@ -2018,6 +2035,7 @@ export default function PetRecordScreen() {
     });
   })();
   const vaxCount = vaxGroups.filter((g) => g.current?.administered_on).length;
+  const currentVax = vaxGroups.map((g) => g.current).filter((v) => v?.administered_on) as Vaccination[];
   const pendingDocs = documents.filter((d) => {
     const st = d.ai_status;
     const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
@@ -2029,14 +2047,14 @@ export default function PetRecordScreen() {
     return (ai.vaccinations?.length || 0) + (ai.labs?.length || 0) + (ai.visits?.length || 0) + (ai.conditions?.length || 0) + (ai.weight?.value ? 1 : 0);
   };
   const nowMs = Date.now();
-  const vaxDues = confirmedVax.map((v) => v.next_due_on).filter(Boolean).map((d) => {
+  const vaxDues = currentVax.map((v) => v.next_due_on).filter(Boolean).map((d) => {
     const p = parseLocalParts(String(d));
     return p ? new Date(p.y, p.m - 1, p.d).getTime() : NaN;
   }).filter((t) => !Number.isNaN(t));
   const vaxTone: 'ok' | 'due' | 'over' | 'unknown' = vaxCount > 0
     ? (vaxDues.some((t) => t < nowMs) ? 'over' : vaxDues.some((t) => t - nowMs < 30 * 864e5) ? 'due' : 'ok')
     : pendingDocs.length > 0 ? 'due' : 'unknown';
-  const thruIso = confirmedVax.map((v) => v.next_due_on || v.administered_on).filter(Boolean).sort().pop();
+  const thruIso = currentVax.map((v) => v.next_due_on).filter(Boolean).sort()[0];
   const thruLabel = thruIso ? formatDate(String(thruIso)) : null;
   const vaxSub = vaxTone === 'over' ? 'Overdue'
     : vaxCount === 0 ? (pendingDocs.length > 0 ? 'Review docs' : 'No record')
@@ -2088,10 +2106,7 @@ export default function PetRecordScreen() {
   const priorOwners = relationships.filter((r) => r.relationship === 'owner' && r.ended_on);
   const withYouLabel = (() => {
     if (!ownerSince) return '—';
-    if (pet.date_of_birth && priorOwners.length === 0) {
-      const weeks = (new Date(ownerSince).getTime() - new Date(pet.date_of_birth).getTime()) / (7 * 864e5);
-      if (weeks >= 0 && weeks <= 6) return `First owner · since ${Math.max(1, Math.round(weeks))} weeks old`;
-    }
+    if (priorOwners.length === 0) return `First owner · since ${formatDate(ownerSince)}`;
     return formatDate(ownerSince);
   })();
   const speciesLabel = (() => {
@@ -2101,9 +2116,9 @@ export default function PetRecordScreen() {
     return titleCase(pet.species) || '—';
   })();
   const sexSymbol = /female|spay/i.test(pet.gender || '') ? '♀' : /male|neuter/i.test(pet.gender || '') ? '♂' : '';
-  const sexLine = [sexSymbol, titleCase(pet.gender), pet.spayed_neutered ? ( /female/i.test(pet.gender || '') ? 'Spayed' : 'Neutered') : null].filter(Boolean).join(' · ').replace(/^♀ · /, '♀ ').replace(/^♂ · /, '♂ ');
+  const sexAlter = pet.spayed_neutered ? (/female|spay/i.test(pet.gender || '') || sexSymbol === '♀' ? 'Spayed' : 'Neutered') : '';
   const dobLine = pet.date_of_birth
-    ? `${new Date(pet.date_of_birth).toLocaleString('en-US', { month: 'short', year: 'numeric' })} · ${ageFromDob(pet.date_of_birth, pet.age_text)}`
+    ? `${formatDate(pet.date_of_birth)} · ${ageFromDob(pet.date_of_birth, pet.age_text)}`
     : (pet.age_text || 'Add date of birth');
 
   const TABS: { key: Tab; label: string }[] = [
@@ -2437,10 +2452,10 @@ export default function PetRecordScreen() {
                 </View>
                 <View style={styles.detailTile}>
                   <Text style={styles.detailK}>Sex</Text>
-                  <Text style={styles.detailV}>
-                    {sexSymbol === '♀' ? <Text style={{ color: Colors.coral }}>♀ </Text> : sexSymbol === '♂' ? '♂ ' : ''}
-                    {sexLine.replace(/^[♀♂]\s*/, '') || '—'}
-                  </Text>
+                  {sexSymbol ? (
+                    <Text style={{ fontSize: 28, lineHeight: 32, fontFamily: Fonts.extrabold, color: sexSymbol === '♀' ? Colors.coral : Colors.navy }}>{sexSymbol}</Text>
+                  ) : <Text style={styles.detailV}>—</Text>}
+                  {sexAlter ? <Text style={styles.detailV}>{sexAlter}</Text> : null}
                 </View>
                 <View style={styles.detailTile}>
                   <Text style={styles.detailK}>Date of birth</Text>

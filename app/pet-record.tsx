@@ -194,6 +194,8 @@ interface PetDocument {
   taken_on: string | null;
   clinic: string | null;
   notes: string | null;
+  ai_summary?: any;
+  ai_status?: string | null;
 }
 
 interface ExtractedVaccination {
@@ -530,7 +532,7 @@ export default function PetRecordScreen() {
         .eq('pet_id', petId)
         .order('sort_order', { ascending: true }),
       supabase.from('pet_documents')
-        .select('id, pet_id, kind, file_path, title, taken_on, clinic, notes')
+        .select('id, pet_id, kind, file_path, title, taken_on, clinic, notes, ai_summary, ai_status')
         .eq('pet_id', petId)
         .order('created_at', { ascending: false }),
       supabase.from('pet_breeds').select('id, species, name, sort_order').order('species').order('sort_order'),
@@ -964,7 +966,12 @@ export default function PetRecordScreen() {
     }).select().single();
     if (insErr) { console.error('[pet-record] doc insert:', insErr); showBanner(insErr.message || 'Could not save document.'); setSavingDoc(false); return; }
     setSavingDoc(false);
-    setDocModalVisible(false);
+    if (!docForm.title.trim()) {
+      setDocModalVisible(false);
+      showBanner('Untitled upload — confirm the title and details in Documents.');
+    } else {
+      setDocModalVisible(false);
+    }
     load();
 
     // Trigger AI extraction for vet record types
@@ -1425,8 +1432,8 @@ export default function PetRecordScreen() {
 
         {tab === 'insurance' && (
           <View style={styles.tabContent}>
-            <View style={[styles.infoCard, { backgroundColor: Colors.navy, borderColor: Colors.navy }]}>
-              <Text style={styles.healthKicker}>PET INSURANCE</Text>
+            <View style={[styles.infoCard, { backgroundColor: Colors.navy, borderColor: Colors.navy, padding: 16, paddingTop: 16 }]}>
+              <Text style={[styles.healthKicker, { marginTop: 0 }]}>PET INSURANCE</Text>
               <Text style={{ fontFamily: Fonts.extrabold, fontSize: 17, color: Colors.white, marginTop: 8 }}>No policy on file</Text>
               <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4, lineHeight: 18 }}>
                 Connect a carrier, upload a declarations PDF, or forward the policy email. Claims stay with the insurer — Rescue Army does not store card or login data.
@@ -1450,14 +1457,28 @@ export default function PetRecordScreen() {
         {tab === 'medical' && (
           <View style={styles.tabContent}>
             <View style={styles.healthHero}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Text style={styles.healthKicker}>{(pet.name || 'PET').toUpperCase()} · HEALTH SUMMARY</Text>
                 <Text style={styles.healthStable}>{activeConditions.length ? 'MONITOR' : 'STABLE'}</Text>
               </View>
               <View style={styles.healthStats}>
-                <View style={styles.healthStat}><Text style={styles.healthN}>{historyEvents.length}</Text><Text style={styles.healthL}>History</Text></View>
-                <View style={styles.healthStat}><Text style={styles.healthN}>{activeConditions.length}</Text><Text style={styles.healthL}>Conditions</Text></View>
-                <View style={styles.healthStat}><Text style={styles.healthN}>{weightDisplay}</Text><Text style={styles.healthL}>Weight</Text></View>
+                <View style={styles.healthStat}>
+                  <Text style={styles.healthN}>{historyEvents.length}</Text>
+                  <Text style={styles.healthL}>Visits</Text>
+                </View>
+                <View style={styles.healthStat}>
+                  <Text style={styles.healthN}>{activeConditions.length}</Text>
+                  <Text style={styles.healthL}>Conditions</Text>
+                </View>
+                <View style={styles.healthStat}>
+                  <Text style={styles.healthN}>{weightDisplay}</Text>
+                  <Text style={styles.healthL}>{pet.target_weight_kg != null ? 'Weight / target' : 'Weight'}</Text>
+                  {pet.target_weight_kg && pet.weight_kg ? (
+                    <View style={styles.weightBarTrack}>
+                      <View style={[styles.weightBarFill, { width: `${Math.min(100, Math.round((pet.weight_kg / pet.target_weight_kg) * 100))}%` }]} />
+                    </View>
+                  ) : null}
+                </View>
               </View>
             </View>
             {vaccinations.some((v) => v.confirmed === false) ? (
@@ -1700,17 +1721,26 @@ export default function PetRecordScreen() {
             {documents.length === 0 ? (
               <Text style={styles.emptyText}>No documents uploaded.</Text>
             ) : (
-              documents.map((doc) => (
+              documents.map((doc) => {
+                const ai = doc.ai_summary && typeof doc.ai_summary === 'object' ? doc.ai_summary : {};
+                const title = doc.title || ai.title || ai.document_title || null;
+                const date = doc.taken_on || ai.date || ai.taken_on || null;
+                const clinic = doc.clinic || ai.clinic || ai.clinic_name || null;
+                const kindLabel = DOCUMENT_KINDS.find((d) => d.key === doc.kind)?.label || titleCase(doc.kind);
+                const untitled = !title;
+                return (
                 <View key={doc.id} style={styles.docCard}>
-                  <TouchableOpacity style={styles.docMain} onPress={() => openDocUrl(doc)} activeOpacity={0.85}>
+                  <TouchableOpacity style={styles.docMain} onPress={() => untitled && canEdit ? openAddDoc() : openDocUrl(doc)} activeOpacity={0.85}>
                     <View style={styles.docIcon}>
                       <FileText color={Colors.navy} size={18} />
                     </View>
                     <View style={styles.docInfo}>
-                      <Text style={styles.docTitle}>{doc.title || DOCUMENT_KINDS.find((d) => d.key === doc.kind)?.label || titleCase(doc.kind)}</Text>
-                      {doc.taken_on ? <Text style={styles.docDate}>{formatDate(doc.taken_on)}</Text> : null}
-                      {doc.clinic ? <Text style={styles.docClinic}>{doc.clinic}</Text> : null}
-                      {doc.notes ? <Text style={styles.docNotes}>{doc.notes}</Text> : null}
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <Text style={styles.docTitle}>{title || 'Untitled — confirm'}</Text>
+                        <View style={styles.docTypePill}><Text style={styles.docTypePillTxt}>{kindLabel}</Text></View>
+                      </View>
+                      {date ? <Text style={styles.docDate}>{formatDate(String(date))}</Text> : null}
+                      {clinic ? <Text style={styles.docClinic}>{String(clinic)}</Text> : null}
                     </View>
                   </TouchableOpacity>
                   {canEdit && (
@@ -1719,7 +1749,8 @@ export default function PetRecordScreen() {
                     </TouchableOpacity>
                   )}
                 </View>
-              ))
+                );
+              })
             )}
 
             {/* Medical Records */}
@@ -2354,6 +2385,17 @@ const styles = StyleSheet.create({
   aiTitle: { fontFamily: Fonts.extrabold, color: Colors.critical, fontSize: FontSizes.md },
 
   tabContent: { paddingTop: 12, paddingHorizontal: 0 },
+  healthHero: { backgroundColor: Colors.navy, borderRadius: 18, padding: 16, gap: 14, marginBottom: 8 },
+  healthKicker: { fontFamily: Fonts.extrabold, fontSize: 11, color: '#B9BCE0', letterSpacing: 0.8 },
+  healthStable: { fontFamily: Fonts.extrabold, fontSize: 11, color: Colors.teal, backgroundColor: 'rgba(255,255,255,0.14)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, overflow: 'hidden' },
+  healthStats: { flexDirection: 'row', gap: 8 },
+  healthStat: { flex: 1, backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 8, alignItems: 'center' },
+  healthN: { fontFamily: Fonts.extrabold, fontSize: 18, color: Colors.white },
+  healthL: { fontFamily: Fonts.semibold, fontSize: 10, color: '#D3EFEC', marginTop: 2, textTransform: 'uppercase', textAlign: 'center' },
+  weightBarTrack: { height: 6, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 3, width: '100%', marginTop: 8, overflow: 'hidden' },
+  weightBarFill: { height: 6, backgroundColor: Colors.teal, borderRadius: 3 },
+  docTypePill: { backgroundColor: Colors.surface, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
+  docTypePillTxt: { fontFamily: Fonts.bold, fontSize: 10, color: Colors.navy },
 
   infoCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, overflow: 'hidden' },
   infoRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: Colors.border },

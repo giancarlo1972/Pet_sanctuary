@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, Switch,
 } from 'react-native';
@@ -11,11 +11,19 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import { InlineBanner } from '@/components/InlineBanner';
 import { prepareImageFile } from '@/lib/prepare-image';
+import AppHeader from '@/components/AppHeader';
+import { Page } from '@/components/Page';
 
 const SPECIES_OPTIONS = ['Dog', 'Cat', 'Rabbit', 'Bird', 'Other'];
 
 export default function AddPetScreen() {
   const { user } = useAuth();
+  const [orgStaff, setOrgStaff] = useState(false);
+  useEffect(() => {
+    if (!user) return;
+    supabase.from('organization_members').select('id').eq('user_id', user.id).limit(1)
+      .then(({ data }) => setOrgStaff(Boolean(data && data.length)));
+  }, [user]);
   const [name, setName] = useState('');
   const [species, setSpecies] = useState('Dog');
   const [breed, setBreed] = useState('');
@@ -23,7 +31,7 @@ export default function AddPetScreen() {
   const [gender, setGender] = useState('');
   const [description, setDescription] = useState('');
   const [location, setLocation] = useState('');
-  const [isPublic, setIsPublic] = useState(true);
+  const [isPublic, setIsPublic] = useState(false);
     const [availability, setAvailability] = useState('available');
   const [relationship, setRelationship] = useState<'owner' | 'foster' | 'sponsor'>('owner');
   const [ai, setAi] = useState<any>(null);
@@ -102,15 +110,9 @@ export default function AddPetScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.topBar}>
-        <TouchableOpacity style={styles.topBtn} onPress={() => router.back()} activeOpacity={0.75}>
-          <ChevronLeft color={Colors.text} size={22} />
-        </TouchableOpacity>
-        <Text style={styles.topTitle}>Add a Pet</Text>
-        <View style={styles.topBtn} />
-      </View>
+      <AppHeader title="Add a Pet" showBack />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        <Page>
           <Text style={styles.sectionLabel}>Relationship</Text>
           <View style={styles.speciesRow}>
             {([['owner','My pet'],['foster','Foster pet'],['sponsor','Sponsored pet']] as const).map(([k,l]) => (
@@ -164,24 +166,27 @@ export default function AddPetScreen() {
           <Text style={styles.sectionLabel}>Location</Text>
           <TextInput style={styles.input} value={location} onChangeText={setLocation} placeholder="City or area" placeholderTextColor={Colors.textTertiary} />
 
-          <Text style={styles.sectionLabel}>Availability</Text>
-          <View style={styles.availRow}>
-            {['available', 'foster', 'both'].map((a) => (
-              <TouchableOpacity key={a} style={[styles.availPill, availability === a && styles.availPillActive]} onPress={() => setAvailability(a)} activeOpacity={0.75}>
-                <Text style={[styles.availPillText, availability === a && styles.availPillTextActive]}>{a === 'available' ? 'Adoption' : a === 'foster' ? 'Foster' : 'Both'}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>Visible to public</Text>
-            <Switch value={isPublic} onValueChange={setIsPublic} trackColor={{ true: Colors.coral, false: Colors.surfaceAlt }} />
-          </View>
+          {orgStaff ? (
+            <>
+              <Text style={styles.sectionLabel}>Availability</Text>
+              <View style={styles.availRow}>
+                {['available', 'foster', 'both'].map((a) => (
+                  <TouchableOpacity key={a} style={[styles.availPill, availability === a && styles.availPillActive]} onPress={() => setAvailability(a)} activeOpacity={0.75}>
+                    <Text style={[styles.availPillText, availability === a && styles.availPillTextActive]}>{a === 'available' ? 'Adoption' : a === 'foster' ? 'Foster' : 'Both'}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={styles.switchRow}>
+                <Text style={styles.switchLabel}>Visible to public</Text>
+                <Switch value={isPublic} onValueChange={setIsPublic} trackColor={{ true: Colors.coral, false: Colors.surfaceAlt }} />
+              </View>
+            </>
+          ) : null}
 
           <TouchableOpacity style={[styles.submitBtn, loading && styles.btnDisabled]} onPress={handleSubmit} disabled={loading} activeOpacity={0.85}>
             {loading ? <ActivityIndicator color={Colors.white} size="small" /> : <Text style={styles.submitText}>Add Pet</Text>}
           </TouchableOpacity>
-        </ScrollView>
+        </Page>
       </KeyboardAvoidingView>
       {banner && <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />}
     </SafeAreaView>

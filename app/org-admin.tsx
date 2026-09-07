@@ -148,7 +148,7 @@ function Shell({ children }: { children: React.ReactNode }) {
 
 const s = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: Colors.screen },
-  col: { width: '100%', maxWidth: 880, alignSelf: 'center', padding: 24, gap: 14 },
+  col: { width: '100%', maxWidth: 720, alignSelf: 'center', padding: 24, gap: 14 },
   hero: { backgroundColor: Colors.teal, borderRadius: 18, padding: 18 },
   heroTitle: { fontFamily: Fonts.extrabold, fontSize: 18, color: Colors.white },
   heroSub: { fontFamily: Fonts.regular, fontSize: 12, color: '#D3EFEC', marginTop: 2 },

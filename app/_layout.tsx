@@ -18,6 +18,7 @@ export default function RootLayout() {
           <Stack.Screen name="invoices" />
           <Stack.Screen name="nearby-clinics" />
           <Stack.Screen name="auth" />
+          <Stack.Screen name="org-admin" />
         </Stack>
         <StatusBar style="auto" />
       </>

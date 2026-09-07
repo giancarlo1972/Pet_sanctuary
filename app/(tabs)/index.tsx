@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   StatusBar,
 } from 'react-native';
+import { Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
@@ -111,6 +112,13 @@ interface HomeStory {
 
 export default function HomeScreen() {
   const { user, session } = useAuth();
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof sessionStorage !== 'undefined') {
+      const t = sessionStorage.getItem('ra_login_toast');
+      if (t) { sessionStorage.removeItem('ra_login_toast'); setLoginToast(t); }
+    }
+  }, []);
+  const [loginToast, setLoginToast] = useState<string | null>(null);
   const [featured, setFeatured] = useState<Pet[]>([]);
   const [liveAlerts, setLiveAlerts] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
@@ -311,6 +319,12 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={Colors.background} />
       <AppHeader title="Home" />
+      {loginToast ? (
+        <TouchableOpacity style={styles.loginToast} onPress={() => { setLoginToast(null); router.push('/(tabs)/profile'); }} activeOpacity={0.9}>
+          <Text style={styles.loginToastTxt}>Signed in as {loginToast}. Admin console is under Me.</Text>
+          <Text style={styles.loginToastLink}>Open Me →</Text>
+        </TouchableOpacity>
+      ) : null}
 
       {loading ? (
         <View style={styles.loadingContainer}>
@@ -488,6 +502,9 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  loginToast: { marginHorizontal: 16, marginTop: 8, backgroundColor: Colors.navy, borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  loginToastTxt: { flex: 1, color: Colors.white, fontFamily: Fonts.medium, fontSize: FontSizes.sm },
+  loginToastLink: { color: '#FBD3D0', fontFamily: Fonts.bold, fontSize: FontSizes.sm },
   container: { flex: 1, backgroundColor: Colors.screen },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   scrollContent: { paddingHorizontal: 20, paddingBottom: 100 },

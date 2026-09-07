@@ -216,7 +216,7 @@ const styles = StyleSheet.create({
   segTextOn: { color: Colors.white },
   newBtn: { backgroundColor: Colors.coral, borderRadius: 16, paddingVertical: 14, alignItems: 'center', marginBottom: 14 },
   newBtnText: { color: Colors.white, fontFamily: Fonts.bold, fontSize: FontSizes.md },
-  scroll: { paddingHorizontal: 16, paddingBottom: 100 },
+  scroll: { paddingHorizontal: 16, paddingBottom: 100, maxWidth: 720, width: '100%', alignSelf: 'center' },
   card: { flexDirection: 'row', backgroundColor: Colors.white, borderRadius: 16, marginBottom: 12, overflow: 'hidden', borderWidth: 1, borderColor: Colors.border },
   bar: { width: 5 },
   cardBody: { flex: 1, padding: 14 },

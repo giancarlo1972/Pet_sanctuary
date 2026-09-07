@@ -39,8 +39,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut({ scope: 'local' });
+    await supabase.auth.signOut({ scope: 'global' });
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      try {
+        Object.keys(localStorage).forEach((k) => {
+          if (k.startsWith('sb-') && k.includes('auth-token')) localStorage.removeItem(k);
+        });
+      } catch {}
       window.location.assign('/');
     }
   }, []);

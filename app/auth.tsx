@@ -1,44 +1,169 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Image, Platform, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { ChevronLeft, PawPrint } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
-import AuthForm from '@/components/AuthForm';
+import { supabase } from '@/lib/supabase';
+import { isPlatformAdmin } from '@/lib/admin-access';
+
+function redirectTo() {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    return `${window.location.origin}/admin`;
+  }
+  return 'https://rescue-army.com/admin';
+}
+
+function friendly(raw: string) {
+  const m = (raw || '').toLowerCase();
+  if (m.includes('rate limit')) return 'Too many emails sent. Wait 30 minutes, then Sign in. Do not Sign up again.';
+  if (m.includes('not confirmed')) return 'Email not confirmed. In Supabase Authentication → Users, open this email and Auto Confirm.';
+  if (m.includes('invalid login')) return 'Wrong email or password. If this is a new Rescue Army mailbox, create it first under Authentication → Users (Auto Confirm).';
+  if (m.includes('already') || m.includes('registered')) return 'That email already has an account. Use Sign in.';
+  return raw || 'Sign in failed.';
+}
+
+async function afterLogin(email: string) {
+  const { data: sess } = await supabase.auth.getUser();
+  const user = sess.user;
+  if (!user) return;
+  const loginEmail = (user.email || email || '').toLowerCase();
+  const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle();
+  const { count } = await supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'admin');
+  const firstAdmin = (count || 0) === 0;
+  if (firstAdmin || isPlatformAdmin(profile?.role, loginEmail)) {
+    await supabase.from('profiles').upsert({
+      id: user.id,
+      email: loginEmail,
+      full_name: user.user_metadata?.full_name || user.user_metadata?.name || null,
+      role: 'admin',
+    }, { onConflict: 'id' });
+  }
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    window.location.assign('/admin');
+    return;
+  }
+  router.replace('/admin');
+}
 
 export default function AuthScreen() {
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submitEmail = async () => {
+    const em = email.trim();
+    if (!em || !password) { setError('Enter email and password.'); return; }
+    setLoading(true); setError(null);
+    try {
+      if (mode === 'signin') {
+        const { error: e } = await supabase.auth.signInWithPassword({ email: em, password });
+        if (e) throw e;
+      } else {
+        const { error: e } = await supabase.auth.signUp({ email: em, password });
+        if (e) {
+          const msg = (e.message || '').toLowerCase();
+          if (msg.includes('already') || msg.includes('registered')) {
+            const { error: s } = await supabase.auth.signInWithPassword({ email: em, password });
+            if (s) throw s;
+          } else throw e;
+        }
+      }
+      await afterLogin(em);
+    } catch (err: any) {
+      setError(friendly(err.message));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const oauth = async (provider: 'google' | 'twitter') => {
+    setLoading(true); setError(null);
+    try {
+      const { error: e } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: { redirectTo: redirectTo() },
+      });
+      if (e) throw e;
+    } catch (err: any) {
+      setError(friendly(err.message));
+      setLoading(false);
+    }
+  };
+
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.topBar}>
-        <TouchableOpacity style={styles.topBtn} onPress={() => router.back()} activeOpacity={0.75}>
-          <ChevronLeft color={Colors.text} size={22} />
-        </TouchableOpacity>
-        <Text style={styles.topTitle}>Sign In</Text>
-        <View style={styles.topBtn} />
-      </View>
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        <View style={styles.hero}>
-          <View style={styles.heroIcon}>
-            <PawPrint color={Colors.coral} size={36} />
+    <SafeAreaView style={styles.wrap}>
+      <ScrollView contentContainerStyle={styles.inner} keyboardShouldPersistTaps="handled">
+        <View style={styles.brandRow}>
+          <Image source={require('../assets/icon.png')} style={styles.logo} />
+          <View>
+            <Text style={styles.brandKicker}>Rescue Army</Text>
+            <Text style={styles.h1}>Sign in</Text>
           </View>
-          <Text style={styles.heroTitle}>Welcome back</Text>
-          <Text style={styles.heroSubtitle}>Sign in to save pets, track reports, and message organizations.</Text>
         </View>
-        <AuthForm />
+        <Text style={styles.lead}>
+          The first person to sign in becomes <Text style={styles.leadEm}>Administrator</Text> and can approve orgs, IDs, and reports.
+        </Text>
+
+        {error ? <Text style={styles.err}>{error}</Text> : null}
+
+        <TouchableOpacity style={styles.oauth} onPress={() => oauth('google')} disabled={loading} activeOpacity={0.85}>
+          <Text style={styles.oauthTxt}>Continue with Google</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.oauth} onPress={() => oauth('twitter')} disabled={loading} activeOpacity={0.85}>
+          <Text style={styles.oauthTxt}>Continue with X</Text>
+        </TouchableOpacity>
+
+        <View style={styles.rule} />
+
+        <TextInput style={styles.input} value={email} onChangeText={setEmail} placeholder="Email" placeholderTextColor={Colors.textTertiary} autoCapitalize="none" keyboardType="email-address" />
+        <TextInput style={styles.input} value={password} onChangeText={setPassword} placeholder="Password" placeholderTextColor={Colors.textTertiary} secureTextEntry onSubmitEditing={submitEmail} />
+
+        <TouchableOpacity style={[styles.primary, loading && { opacity: 0.6 }]} onPress={submitEmail} disabled={loading} activeOpacity={0.85}>
+          {loading ? <ActivityIndicator color={Colors.white} /> : (
+            <Text style={styles.primaryTxt}>{mode === 'signin' ? 'Sign in with email' : 'Sign up with email'}</Text>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={() => { setMode(mode === 'signin' ? 'signup' : 'signin'); setError(null); }} activeOpacity={0.7}>
+          <Text style={styles.switch}>
+            {mode === 'signin' ? 'Need an account? ' : 'Already have an account? '}
+            <Text style={styles.switchEm}>{mode === 'signin' ? 'Sign up' : 'Sign in'}</Text>
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={() => router.replace('/(tabs)')} activeOpacity={0.7}>
+          <Text style={styles.home}>Back to Home</Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.screen },
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  topBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
-  topTitle: { flex: 1, fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.text, textAlign: 'center' },
-  scrollContent: { paddingHorizontal: 20, paddingVertical: 24, paddingBottom: 60 },
-  hero: { alignItems: 'center', marginBottom: 28 },
-  heroIcon: { width: 72, height: 72, borderRadius: 36, backgroundColor: Colors.coralBg, justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
-  heroTitle: { fontSize: FontSizes['2xl'], fontFamily: Fonts.extrabold, color: Colors.text, marginBottom: 6 },
-  heroSubtitle: { fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.textSecondary, textAlign: 'center', lineHeight: 22 },
+  wrap: { flex: 1, backgroundColor: Colors.white },
+  inner: { paddingHorizontal: 24, paddingTop: 36, paddingBottom: 48, maxWidth: 480, width: '100%', alignSelf: 'center' },
+  brandRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  logo: { width: 48, height: 48, borderRadius: 14 },
+  brandKicker: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.navy },
+  h1: { fontSize: 28, fontFamily: Fonts.extrabold, color: Colors.navy },
+  lead: { fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.textSecondary, lineHeight: 22, marginBottom: 20 },
+  leadEm: { fontFamily: Fonts.bold, color: Colors.navy },
+  err: { color: Colors.critical, fontFamily: Fonts.medium, fontSize: FontSizes.sm, marginBottom: 12 },
+  oauth: {
+    borderWidth: 1.5, borderColor: Colors.navy, borderRadius: 16, paddingVertical: 16, alignItems: 'center', marginBottom: 10,
+  },
+  oauthTxt: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.navy },
+  rule: { height: 1, backgroundColor: Colors.border, marginVertical: 16 },
+  input: {
+    borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 14,
+    fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.text, backgroundColor: Colors.white, marginBottom: 10,
+  },
+  primary: { backgroundColor: Colors.coral, borderRadius: 16, paddingVertical: 16, alignItems: 'center', marginTop: 4 },
+  primaryTxt: { color: Colors.white, fontFamily: Fonts.bold, fontSize: FontSizes.md },
+  switch: { textAlign: 'center', marginTop: 16, color: Colors.coral, fontFamily: Fonts.semibold, fontSize: FontSizes.md },
+  switchEm: { fontFamily: Fonts.bold, color: Colors.coral },
+  home: { textAlign: 'center', marginTop: 18, color: Colors.textSecondary, fontFamily: Fonts.semibold, fontSize: FontSizes.md },
 });

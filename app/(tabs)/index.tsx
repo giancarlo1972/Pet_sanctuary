@@ -362,16 +362,43 @@ export default function HomeScreen() {
             <ChevronRight color="#FBD3D0" size={20} />
           </TouchableOpacity>
 
+          <TouchableOpacity style={styles.mapBanner} onPress={() => router.push('/nearby-clinics')} activeOpacity={0.9}>
+            <View style={styles.mapBannerIcon}>
+              <MapPin color={Colors.white} size={22} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.mapBannerKicker}>NEARBY MAP</Text>
+              <Text style={styles.mapBannerTitle}>Open clinics, shelters & 24h ER</Text>
+              <Text style={styles.mapBannerSub}>Live hours · Uber/Lyft to ER — we don’t pay</Text>
+            </View>
+            <ChevronRight color="#C8CCE0" size={22} />
+          </TouchableOpacity>
+
           <View style={styles.nearRow}>
             <TouchableOpacity style={styles.nearPill} onPress={() => router.push('/nearby-clinics?kind=clinic')} activeOpacity={0.85}>
               <Text style={styles.clinicsKicker}>CLINICS · LIVE</Text>
-              <Text style={styles.clinicsTitle}>{clinicLive.open} open · {clinicLive.closing_soon} closing soon · {clinicLive.er_24h} 24h ER</Text>
-              <Text style={styles.clinicsSub}>Bond Vet, Small Door, ER. Uber/Lyft — we don’t pay.</Text>
+              <Text style={styles.clinicsTitle}>{clinicLive.open} open · {clinicLive.closing_soon} closing soon</Text>
+              <Text style={styles.clinicsCta}>Open map  →</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.nearPill} onPress={() => router.push('/nearby-clinics?kind=shelter')} activeOpacity={0.85}>
               <Text style={styles.clinicsKicker}>SHELTERS · LIVE</Text>
               <Text style={styles.clinicsTitle}>{shelterLive.open} open · {shelterLive.closing_soon} closing soon</Text>
-              <Text style={styles.clinicsSub}>Rescues and humane societies near you.</Text>
+              <Text style={styles.clinicsCta}>Open map  →</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.shortcutRow}>
+            <TouchableOpacity style={styles.shortcut} onPress={() => router.push('/pet-care')} activeOpacity={0.85}>
+              <Text style={styles.shortcutTxt}>Pet record</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.shortcut} onPress={() => router.push('/invoices')} activeOpacity={0.85}>
+              <Text style={styles.shortcutTxt}>Invoices</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.shortcut} onPress={() => router.push('/admin')} activeOpacity={0.85}>
+              <Text style={styles.shortcutTxt}>Admin</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.shortcut} onPress={() => router.push('/updates')} activeOpacity={0.85}>
+              <Text style={styles.shortcutTxt}>Updates</Text>
             </TouchableOpacity>
           </View>
 
@@ -498,6 +525,31 @@ const styles = StyleSheet.create({
   emergencySub: {
     fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: '#FBD3D0', marginTop: 2,
   },
+
+
+  mapBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: Colors.navy, borderRadius: 16, padding: 16, marginBottom: 12,
+  },
+  mapBannerIcon: {
+    width: 44, height: 44, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  mapBannerKicker: { fontSize: 10, fontFamily: Fonts.extrabold, color: Colors.coral, letterSpacing: 1 },
+  mapBannerTitle: { fontSize: FontSizes.lg, fontFamily: Fonts.bold, color: Colors.white, marginTop: 2 },
+  mapBannerSub: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: '#C8CCE0', marginTop: 2 },
+  nearRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
+  nearPill: {
+    flex: 1, backgroundColor: Colors.white, borderRadius: 14, padding: 14,
+    borderWidth: 1.5, borderColor: Colors.navy,
+  },
+  clinicsCta: { marginTop: 8, fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.coral },
+  shortcutRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
+  shortcut: {
+    backgroundColor: Colors.white, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 10,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  shortcutTxt: { fontFamily: Fonts.bold, fontSize: FontSizes.sm, color: Colors.navy },
 
   clinicsPill: {
     backgroundColor: Colors.white, borderRadius: 14, padding: 14, marginBottom: 20,

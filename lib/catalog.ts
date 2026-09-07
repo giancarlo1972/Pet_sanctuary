@@ -60,3 +60,17 @@ export function vaccineType(name: string | null | undefined): string {
   }
   return name || 'Other';
 }
+
+export function durationYearsFromProduct(name: string | null | undefined, row?: CatalogRow | null): number {
+  if (row?.duration_years != null && Number(row.duration_years) > 0) return Number(row.duration_years);
+  const q = norm(name || '');
+  if (/\b3\s*(yr|year)/.test(q)) return 3;
+  if (/\b1\s*(yr|year)/.test(q)) return 1;
+  return 1;
+}
+
+export function addYearsLocal(iso: string | null | undefined, years: number): string | null {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m || !years) return null;
+  return `${Number(m[1]) + years}-${m[2]}-${m[3]}`;
+}

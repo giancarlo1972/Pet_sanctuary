@@ -14,6 +14,7 @@ import { useSignedUrl } from '@/hooks/useSignedUrls';
 import { SearchablePicker } from '@/components/SearchablePicker';
 import { DateField } from '@/components/DateField';
 import type { CatalogRow } from '@/lib/catalog';
+import { matchCatalog, vaccineType, durationYearsFromProduct, addYearsLocal } from '@/lib/catalog';
 
 export interface Vaccination {
   id: string;
@@ -82,11 +83,7 @@ function vaccinationStatus(nextDue: string | null): 'overdue' | 'due-soon' | 'ok
 }
 
 function autoCalcNextDue(administeredOn: string, durationYears: number): string {
-  if (!administeredOn || durationYears <= 0) return '';
-  const d = new Date(administeredOn);
-  if (Number.isNaN(d.getTime())) return '';
-  d.setFullYear(d.getFullYear() + durationYears);
-  return d.toISOString().slice(0, 10);
+  return addYearsLocal(administeredOn, durationYears) || '';
 }
 
 interface VaxFormState {
@@ -140,6 +137,7 @@ export function VetVaccinationModal({
   const [confirmConfig, setConfirmConfig] = useState<ConfirmConfig | null>(null);
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
   const [pickedIds, setPickedIds] = useState<string[]>([]);
+  const [itemMeta, setItemMeta] = useState<Record<string, { lot: string; site: string }>>({});
 
   useEffect(() => {
     if (visible) {
@@ -168,6 +166,7 @@ export function VetVaccinationModal({
       } else {
         setForm(emptyForm);
         setPickedIds([]);
+        setItemMeta({});
       }
       setBanner(null);
       void supabase.from('vaccine_products').select('*').order('name').then(({ data }) => {
@@ -175,6 +174,26 @@ export function VetVaccinationModal({
       });
     }
   }, [visible, editing]);
+
+  useEffect(() => {
+    if (!visible || !catalog.length) return;
+    const seed = editing?.vaccine || form.vaccine;
+    if (!seed) return;
+    const m = matchCatalog(seed, catalog);
+    if (!m.row) return;
+    const years = durationYearsFromProduct(m.row.name, m.row);
+    setPickedIds((ids) => (ids.includes(m.row!.id) ? ids : editing ? [m.row!.id] : ids.length ? ids : [m.row!.id]));
+    setForm((p) => ({
+      ...p,
+      vaccine: m.row!.name,
+      manufacturer: m.row!.manufacturer || p.manufacturer,
+      duration_years: years,
+      vaccine_type: vaccineType(m.row!.name),
+      next_due_on: p.next_due_locked && p.next_due_on
+        ? p.next_due_on
+        : autoCalcNextDue(p.administered_on || editing?.administered_on || '', years),
+    }));
+  }, [visible, catalog, editing?.id]);
 
   const pickCertificate = async () => {
     if (Platform.OS === 'web') {
@@ -229,61 +248,70 @@ export function VetVaccinationModal({
       certificateUrl = filePath;
     }
 
-    const names = pickedIds.length
+    const products = (pickedIds.length
       ? catalog.filter((c) => pickedIds.includes(c.id))
-      : [{ name: form.vaccine.trim(), manufacturer: form.manufacturer, duration_years: form.duration_years, id: '' } as CatalogRow];
+      : form.vaccine.trim()
+        ? [{ name: form.vaccine.trim(), manufacturer: form.manufacturer, duration_years: form.duration_years, id: '' } as CatalogRow]
+        : []);
+    if (!products.length) { setBanner({ message: 'Pick at least one vaccine from the list.', kind: 'error' }); setSaving(false); return; }
+    if (!form.administered_on && !editing) { setBanner({ message: 'Date given is required.', kind: 'error' }); setSaving(false); return; }
 
     if (editing) {
+      const prod = products[0];
+      const years = durationYearsFromProduct(prod.name, prod);
       const payload = {
         pet_id: petId,
-        vaccine: names[0]?.name || form.vaccine.trim(),
-        vaccine_type: form.vaccine_type || null,
-        duration_years: names[0]?.duration_years ?? form.duration_years ?? null,
+        vaccine: prod.name,
+        vaccine_type: vaccineType(prod.name),
+        duration_years: years,
         administered_on: form.administered_on || null,
-        next_due_on: form.next_due_on || null,
+        next_due_on: form.next_due_locked ? (form.next_due_on || null) : autoCalcNextDue(form.administered_on, years) || null,
         vet_clinic: form.vet_clinic.trim() || null,
         clinic_id: form.clinic_id,
         vet_name: form.vet_name.trim() || null,
         vet_license: form.vet_license.trim() || null,
-        lot_number: form.lot_number.trim() || null,
+        lot_number: itemMeta[prod.id]?.lot || form.lot_number.trim() || null,
         lot_expires_on: form.lot_expires_on || null,
-        manufacturer: names[0]?.manufacturer || form.manufacturer.trim() || null,
-        injection_site: form.injection_site.trim() || null,
+        manufacturer: prod.manufacturer || form.manufacturer.trim() || null,
+        injection_site: itemMeta[prod.id]?.site || form.injection_site.trim() || null,
         tag_number: form.tag_number.trim() || null,
         is_booster: form.is_booster,
         notes: form.notes.trim() || null,
         document_url: certificateUrl,
         recorded_by: userId,
+        superseded: false,
       };
       const { error } = await supabase.from('pet_vaccinations').update(payload).eq('id', editing.id);
       if (error) { console.error('[vax-modal] update:', error); setBanner({ message: error.message || 'Could not update vaccination.', kind: 'error' }); setSaving(false); return; }
     } else {
-      for (const prod of names) {
+      for (const prod of products) {
         const vname = prod.name;
         if (!vname) continue;
-        await supabase.from('pet_vaccinations').update({ superseded: true }).eq('pet_id', petId).eq('vaccine', vname).eq('superseded', false);
-        const duration = Number(prod.duration_years ?? form.duration_years) || 1;
-        const nextDue = form.next_due_locked ? form.next_due_on : autoCalcNextDue(form.administered_on, duration);
+        const years = durationYearsFromProduct(vname, prod);
+        const nextDue = autoCalcNextDue(form.administered_on, years);
+        const type = vaccineType(vname);
+        await supabase.from('pet_vaccinations').update({ superseded: true }).eq('pet_id', petId).eq('vaccine_type', type).eq('superseded', false);
         const { error } = await supabase.from('pet_vaccinations').insert({
           pet_id: petId,
           vaccine: vname,
-          vaccine_type: form.vaccine_type || null,
-          duration_years: duration,
+          vaccine_type: type,
+          duration_years: years,
           administered_on: form.administered_on || null,
           next_due_on: nextDue || null,
           vet_clinic: form.vet_clinic.trim() || null,
           clinic_id: form.clinic_id,
           vet_name: form.vet_name.trim() || null,
           vet_license: form.vet_license.trim() || null,
-          lot_number: form.lot_number.trim() || null,
+          lot_number: itemMeta[prod.id]?.lot || form.lot_number.trim() || null,
           lot_expires_on: form.lot_expires_on || null,
           manufacturer: prod.manufacturer || form.manufacturer.trim() || null,
-          injection_site: form.injection_site.trim() || null,
+          injection_site: itemMeta[prod.id]?.site || form.injection_site.trim() || null,
           tag_number: form.tag_number.trim() || null,
           is_booster: form.is_booster,
           notes: form.notes.trim() || null,
           document_url: certificateUrl,
           recorded_by: userId,
+          superseded: false,
         });
         if (error) { console.error('[vax-modal] insert:', error); setBanner({ message: error.message || 'Could not add vaccination.', kind: 'error' }); setSaving(false); return; }
       }
@@ -301,37 +329,57 @@ export function VetVaccinationModal({
         <ScrollView style={styles.scroll}>
           <View style={styles.card}>
             <View style={styles.header}>
-              <Text style={styles.title}>{editing ? 'Edit Vaccination' : 'Add Vaccination'}</Text>
+              <Text style={styles.title}>{editing ? 'Edit Vaccination' : 'Add visit vaccines'}</Text>
               <TouchableOpacity onPress={onClose}><Text style={styles.closeText}>Cancel</Text></TouchableOpacity>
             </View>
 
             {banner && <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />}
 
-            <Text style={styles.label}>Vaccine *</Text>
+            <DateField label="Visit date" value={form.administered_on} onChange={(v) => {
+              setForm((p) => ({ ...p, administered_on: v, next_due_on: p.next_due_locked ? p.next_due_on : autoCalcNextDue(v, p.duration_years) }));
+            }} />
+
+            <Text style={styles.label}>Clinic</Text>
+            <TouchableOpacity style={styles.dropdownBtn} onPress={() => setShowClinicPicker(true)} activeOpacity={0.85}>
+              <Text style={form.vet_clinic ? styles.dropdownText : styles.dropdownPlaceholder}>{form.vet_clinic || 'Search clinics...'}</Text>
+              <ChevronDown color={Colors.textTertiary} size={18} />
+            </TouchableOpacity>
+
+            <Text style={styles.label}>{editing ? 'Vaccine *' : 'Vaccines given this visit *'}</Text>
             <SearchablePicker
               items={catalog}
               multi={!editing}
               values={pickedIds}
-              value={catalog.find((c) => c.name === form.vaccine)?.id || null}
-              placeholder="Search Purevax, FVRCP, DHPP…"
+              value={matchCatalog(form.vaccine, catalog).row?.id || catalog.find((c) => c.name === form.vaccine)?.id || null}
+              placeholder="FVRCP 1 year, Purevax Rabies 3 year…"
               onChange={(_id, item) => {
                 if (!item) return;
+                const years = durationYearsFromProduct(item.name, item);
+                setPickedIds([item.id]);
                 setForm((p) => ({
                   ...p,
                   vaccine: item.name,
                   manufacturer: item.manufacturer || p.manufacturer,
-                  duration_years: item.duration_years != null ? Number(item.duration_years) : p.duration_years,
-                  next_due_on: p.next_due_locked ? p.next_due_on : autoCalcNextDue(p.administered_on, Number(item.duration_years) || p.duration_years),
+                  duration_years: years,
+                  vaccine_type: vaccineType(item.name),
+                  next_due_on: p.next_due_locked ? p.next_due_on : autoCalcNextDue(p.administered_on, years),
                 }));
               }}
               onChangeMulti={(ids, items) => {
                 setPickedIds(ids);
+                setItemMeta((prev) => {
+                  const next = { ...prev };
+                  ids.forEach((id) => { if (!next[id]) next[id] = { lot: '', site: '' }; });
+                  return next;
+                });
                 if (items[0]) {
+                  const years = durationYearsFromProduct(items[0].name, items[0]);
                   setForm((p) => ({
                     ...p,
                     vaccine: items.map((i) => i.name).join(' + '),
                     manufacturer: items[0].manufacturer || p.manufacturer,
-                    duration_years: items[0].duration_years != null ? Number(items[0].duration_years) : p.duration_years,
+                    duration_years: years,
+                    vaccine_type: vaccineType(items[0].name),
                   }));
                 }
               }}
@@ -341,6 +389,26 @@ export function VetVaccinationModal({
               }}
             />
 
+            {!editing && pickedIds.map((id) => {
+              const prod = catalog.find((c) => c.id === id);
+              if (!prod) return null;
+              const years = durationYearsFromProduct(prod.name, prod);
+              const due = autoCalcNextDue(form.administered_on, years);
+              const meta = itemMeta[id] || { lot: '', site: '' };
+              return (
+                <View key={id} style={{ borderWidth: 1, borderColor: Colors.border, borderRadius: 12, padding: 12, gap: 8 }}>
+                  <Text style={{ fontFamily: Fonts.bold, color: Colors.navy }}>{prod.name}</Text>
+                  <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: Colors.textSecondary }}>
+                    {years} year · next due {due || '—'}
+                  </Text>
+                  <TextInput style={styles.input} value={meta.lot} onChangeText={(v) => setItemMeta((p) => ({ ...p, [id]: { ...meta, lot: v } }))} placeholder="Lot #" placeholderTextColor={Colors.textTertiary} />
+                  <TextInput style={styles.input} value={meta.site} onChangeText={(v) => setItemMeta((p) => ({ ...p, [id]: { ...meta, site: v } }))} placeholder="Site (e.g. SC right hip)" placeholderTextColor={Colors.textTertiary} />
+                </View>
+              );
+            })}
+
+            {editing ? (
+              <>
             <Text style={styles.label}>Vaccine type</Text>
             <View style={styles.pillRow}>
               {VACCINE_TYPES.map((t) => (
@@ -350,39 +418,21 @@ export function VetVaccinationModal({
               ))}
             </View>
 
-            <Text style={styles.label}>Formulation type</Text>
-            <View style={styles.pillRow}>
-              {VACCINE_FORMULATION_TYPES.map((t) => (
-                <TouchableOpacity key={t} style={[styles.pill, form.formulation_type === t && styles.pillActive]} onPress={() => setForm((p) => ({ ...p, formulation_type: t }))} activeOpacity={0.85}>
-                  <Text style={[styles.pillText, form.formulation_type === t && styles.pillTextActive]}>{t === 'MLV' ? 'MLV' : t.charAt(0).toUpperCase() + t.slice(1)}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={styles.label}>Duration</Text>
+            <Text style={styles.label}>Duration (from product)</Text>
             <View style={styles.pillRow}>
               {DURATION_OPTIONS.map((d) => (
                 <TouchableOpacity key={d.label} style={[styles.pill, form.duration_years === d.years && styles.pillActive]} onPress={() => {
                   const nextDue = autoCalcNextDue(form.administered_on, d.years);
-                  setForm((p) => ({ ...p, duration_years: d.years, next_due_on: p.next_due_locked ? p.next_due_on : nextDue }));
+                  setForm((p) => ({ ...p, duration_years: d.years, next_due_on: nextDue, next_due_locked: false }));
                 }} activeOpacity={0.85}>
                   <Text style={[styles.pillText, form.duration_years === d.years && styles.pillTextActive]}>{d.label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
 
-            <DateField label="Date given" value={form.administered_on} onChange={(v) => {
-              const nextDue = form.next_due_locked ? form.next_due_on : autoCalcNextDue(v, form.duration_years);
-              setForm((p) => ({ ...p, administered_on: v, next_due_on: nextDue }));
-            }} />
-
             <DateField label="Next due" value={form.next_due_on} onChange={(v) => setForm((p) => ({ ...p, next_due_on: v, next_due_locked: true }))} />
-
-            <Text style={styles.label}>Clinic</Text>
-            <TouchableOpacity style={styles.dropdownBtn} onPress={() => setShowClinicPicker(true)} activeOpacity={0.85}>
-              <Text style={form.vet_clinic ? styles.dropdownText : styles.dropdownPlaceholder}>{form.vet_clinic || 'Search clinics...'}</Text>
-              <ChevronDown color={Colors.textTertiary} size={18} />
-            </TouchableOpacity>
+              </>
+            ) : null}
 
             <Text style={styles.label}>Vet name</Text>
             <TextInput style={styles.input} value={form.vet_name} onChangeText={(v) => setForm((p) => ({ ...p, vet_name: v }))} placeholder="Dr. Smith" placeholderTextColor={Colors.textTertiary} />
@@ -390,6 +440,8 @@ export function VetVaccinationModal({
             <Text style={styles.label}>Vet license #</Text>
             <TextInput style={styles.input} value={form.vet_license} onChangeText={(v) => setForm((p) => ({ ...p, vet_license: v }))} placeholder="License number" placeholderTextColor={Colors.textTertiary} />
 
+            {editing ? (
+              <>
             <Text style={styles.label}>Lot number</Text>
             <TextInput style={styles.input} value={form.lot_number} onChangeText={(v) => setForm((p) => ({ ...p, lot_number: v }))} placeholder="Lot #" placeholderTextColor={Colors.textTertiary} />
 
@@ -400,6 +452,8 @@ export function VetVaccinationModal({
 
             <Text style={styles.label}>Injection site</Text>
             <TextInput style={styles.input} value={form.injection_site} onChangeText={(v) => setForm((p) => ({ ...p, injection_site: v }))} placeholder="e.g. Right shoulder, Left flank" placeholderTextColor={Colors.textTertiary} />
+              </>
+            ) : null}
 
             <Text style={styles.label}>Tag number</Text>
             <TextInput style={styles.input} value={form.tag_number} onChangeText={(v) => setForm((p) => ({ ...p, tag_number: v }))} placeholder="Rabies tag #" placeholderTextColor={Colors.textTertiary} />

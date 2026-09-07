@@ -65,7 +65,7 @@ import { WeightLineChart, LabSparkline } from '@/components/PetCharts';
 import { extractPdfText } from '@/lib/pdf-text';
 import { SearchablePicker } from '@/components/SearchablePicker';
 import { DateField } from '@/components/DateField';
-import { matchCatalog, vaccineType, type CatalogRow } from '@/lib/catalog';
+import { matchCatalog, vaccineType, durationYearsFromProduct, addYearsLocal, type CatalogRow } from '@/lib/catalog';
 
 function blobTypeFromName(path: string) {
   if (/\.pdf$/i.test(path)) return 'application/pdf';
@@ -1306,7 +1306,17 @@ export default function PetRecordScreen() {
   const openConfirmFromParse = (documentId: string, parsed: any) => {
     console.log('[parse-pet-document] RAW', JSON.stringify(parsed));
     console.log('[parse-pet-document] vaccinations[0]', parsed.vaccinations?.[0]);
-    const vax = (parsed.vaccinations || []).map((v: any) => {
+    const rawVax = [
+      ...(parsed.vaccinations || []),
+      ...((parsed.visits || []).flatMap((vis: any) =>
+        (vis.vaccinations || vis.vaccines || []).map((x: any) => ({
+          ...x,
+          date: x.given || x.administered_on || vis.date,
+          clinic: x.clinic || vis.clinic,
+        }))
+      )),
+    ];
+    const vax = rawVax.map((v: any) => {
       const dates = mapVaxRow(v);
       return {
         vaccine: v.name || v.vaccine || v.product || v.brand || '',
@@ -1469,13 +1479,12 @@ export default function PetRecordScreen() {
     if (!extractionReview || !petId || !user) return;
     setApplyingExtraction(true);
     const sourceDocId = extractionReview.documentId;
-    let appliedCount = 0;
+    let applied = { vaccinations: 0, weights: 0, labs: 0, visits: 0 };
     const errors: string[] = [];
     const run = async (label: string, fn: () => any) => {
       try {
         const res = await fn();
         if (res?.error) { errors.push(`${label}: ${res.error.message}`); return null; }
-        appliedCount++;
         return res;
       } catch (e: any) {
         errors.push(`${label}: ${e?.message || e}`);
@@ -1494,11 +1503,17 @@ export default function PetRecordScreen() {
 
       // 1. vaccinations — doses only; reminders update next_due on that type
       const seenDose = new Set<string>();
+      const existingVaxKeys = new Set(
+        vaccinations.filter((e) => e.administered_on).map((e) => `${vaccineType(e.vaccine)}|${e.administered_on}`),
+      );
       for (let i = 0; i < editableVax.length; i++) {
         if (extractionReview.vaxDuplicates.has(i)) continue;
         const v = editableVax[i];
         if (!v.vaccine) continue;
-        const type = vaccineType(v.vaccine);
+        const matched = matchCatalog(v.vaccine, vaxCatalog);
+        const productName = matched.row?.name || v.vaccine;
+        const type = vaccineType(productName);
+        const years = durationYearsFromProduct(productName, matched.row);
         if (!v.administered_on && v.next_due_on) {
           const current = vaccinations
             .filter((e) => vaccineType(e.vaccine) === type && e.administered_on)
@@ -1507,22 +1522,22 @@ export default function PetRecordScreen() {
             console.log('[apply] reminder → next_due', type, v.next_due_on, 'on', current.id);
             const res = await supabase.from('pet_vaccinations').update({ next_due_on: v.next_due_on }).eq('id', current.id);
             if (res.error) errors.push(`Reminder ${type}: ${res.error.message}`);
-            else appliedCount++;
           }
           continue;
         }
         if (!v.administered_on) continue;
         const key = `${type}|${v.administered_on}`;
-        if (seenDose.has(key)) continue;
+        if (seenDose.has(key) || existingVaxKeys.has(key)) continue;
         seenDose.add(key);
-        if (vaccinations.some((e) => vaccineType(e.vaccine) === type && e.administered_on === v.administered_on)) continue;
+        const nextDue = addYearsLocal(v.administered_on, years) || v.next_due_on || null;
         const payload = {
           pet_id: petId,
-          vaccine: v.vaccine,
+          vaccine: productName,
           vaccine_type: type,
+          duration_years: years,
           administered_on: v.administered_on,
-          next_due_on: v.next_due_on || null,
-          manufacturer: v.manufacturer || null,
+          next_due_on: nextDue,
+          manufacturer: matched.row?.manufacturer || v.manufacturer || null,
           lot_number: v.lot_number || null,
           vet_name: v.vet_name || null,
           vet_clinic: v.clinic_name || null,
@@ -1532,8 +1547,9 @@ export default function PetRecordScreen() {
         console.log('[apply] vax payload', payload);
         const res = await supabase.from('pet_vaccinations').insert(payload).select('id').maybeSingle();
         console.log('[apply] vax result', res.error || res.data);
-        if (res.error) { errors.push(`Vaccination "${v.vaccine}": ${res.error.message}`); continue; }
-        appliedCount++;
+        if (res.error) { errors.push(`Vaccination "${productName}": ${res.error.message}`); continue; }
+        applied.vaccinations++;
+        existingVaxKeys.add(key);
         const older = vaccinations.filter((e) => vaccineType(e.vaccine) === type && String(e.administered_on || '') < String(v.administered_on));
         if (older.length) {
           await supabase.from('pet_vaccinations').update({ superseded: true }).in('id', older.map((e) => e.id));
@@ -1572,23 +1588,27 @@ export default function PetRecordScreen() {
           const lRes = await supabase.from('lab_results').insert(labPayload).select('id').maybeSingle();
           console.log('[apply] lab result', lRes.error || lRes.data);
           if (lRes.error) errors.push(`Lab "${result.analyte}": ${lRes.error.message}`);
-          else appliedCount++;
+          else applied.labs++;
         }
       }
 
       // 3. weights — insert every dated row; pets.weight only if newest
       const weightRows = editableWeights.length ? editableWeights : (editableWeight.value != null ? [editableWeight] : []);
       const newest = weightRows.filter((w) => w.value != null && w.measured_on).sort((a, b) => String(b.measured_on).localeCompare(String(a.measured_on)))[0];
+      const existingWeightDates = new Set(weightEntries.map((w) => w.measured_on).filter(Boolean));
+      const seenWeight = new Set<string>();
       for (const w of weightRows) {
         if (w.value == null) continue;
         const unit = (w.unit || 'lb').toLowerCase();
         const lb = unit === 'kg' ? w.value * 2.20462 : w.value;
         const measured = w.measured_on || new Date().toISOString().slice(0, 10);
+        if (seenWeight.has(measured) || existingWeightDates.has(measured)) continue;
+        seenWeight.add(measured);
         const payload = { pet_id: petId, weight_lb: lb, measured_on: measured, source: 'ai_extracted' };
         console.log('[apply] weight payload', payload);
         const res = await supabase.from('weight_entries').insert(payload);
         if (res.error) errors.push(`Weight ${measured}: ${res.error.message}`);
-        else appliedCount++;
+        else applied.weights++;
       }
       if (newest && newest.value != null) {
         const unit = (newest.unit || 'lb').toLowerCase();
@@ -1620,7 +1640,7 @@ export default function PetRecordScreen() {
         const vRes = await supabase.from('medical_records').insert(visitPayload).select('id').maybeSingle();
         console.log('[apply] visit result', vRes.error || vRes.data);
         if (vRes.error) errors.push(`Visit "${visit.title || 'Visit'}": ${vRes.error.message}`);
-        else appliedCount++;
+        else applied.visits++;
         await run(`Visit event "${visit.title || 'Visit'}"`, () => supabase.from('pet_care_events').insert({
           pet_id: petId,
           event_type: 'visit',
@@ -1672,10 +1692,12 @@ export default function PetRecordScreen() {
         reviewed_at: new Date().toISOString(),
       }).eq('id', extractionReview.extractionId);
 
+      console.log('[apply] counts', applied);
+      const summary = `Applied vaccinations: ${applied.vaccinations}, weights: ${applied.weights}, labs: ${applied.labs}, visits: ${applied.visits}`;
       if (errors.length > 0) {
-        showBanner(`Applied ${appliedCount} items. Some items had errors: ${errors.slice(0, 2).join('; ')}`, 'info');
+        showBanner(`${summary}. Some items had errors: ${errors.slice(0, 2).join('; ')}`, 'info');
       } else {
-        showBanner(`Applied ${appliedCount} item${appliedCount !== 1 ? 's' : ''} from the document.`, 'success');
+        showBanner(summary, 'success');
       }
       setExtractionReview(null);
       load();

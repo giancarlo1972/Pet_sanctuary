@@ -22,7 +22,7 @@ type QueueItem = {
 };
 
 export default function AdminScreen() {
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, actingIsPlatform } = useAuth();
   const router = useRouter();
   const { width } = useWindowDimensions();
   const wide = width >= 900;
@@ -50,7 +50,7 @@ export default function AdminScreen() {
     const r = (profile?.role || '').toLowerCase().trim();
     const email = (user.email || profile?.email || '').toLowerCase();
     setRole(r || 'member');
-    if (!isPlatformAdmin(r, email)) { setLoading(false); return; }
+    if (!actingIsPlatform) { setLoading(false); return; }
 
     const { data: q } = await supabase
       .from('moderation_queue')
@@ -94,7 +94,7 @@ export default function AdminScreen() {
       if (s.key === 'maintenance_message') setMaintenance(typeof s.value === 'string' ? s.value.replace(/^"|"$/g, '') : '');
     });
     setLoading(false);
-  }, [user]);
+  }, [user, actingIsPlatform]);
 
   useEffect(() => { if (!authLoading) load(); }, [authLoading, load]);
 
@@ -152,7 +152,7 @@ export default function AdminScreen() {
     );
   }
 
-  if (!isPlatformAdmin(role, user?.email)) {
+  if (!actingIsPlatform) {
     return (
       <SafeAreaView style={styles.wrap} edges={['top']}>
         <AppHeader title="Admin" showBack />
@@ -177,7 +177,7 @@ export default function AdminScreen() {
     await supabase.from('organization_members').update({ role: 'staff' }).eq('organization_id', orgId).eq('role', 'admin');
     const { error: up } = await supabase.from('organization_members').upsert({ organization_id: orgId, user_id: ppl.id, role: 'admin' });
     if (up) setError(up.message);
-    else await supabase.from('audit_log').insert({ actor_id: user.id, action: 'org.admin_assigned', organization_id: orgId, subject_id: ppl.id });
+    else await supabase.from('audit_log').insert({ actor_id: user.id, action: 'org.admin_assigned', organization_id: orgId, subject_id: ppl.id, acting_as: 'platform_admin' });
     setBusyId(null); load();
   };
 

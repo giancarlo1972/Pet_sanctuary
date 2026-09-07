@@ -20,7 +20,7 @@ type Member = { user_id: string; role: string; profiles?: { full_name: string | 
 type IdRow = { user_id: string; id_status: string | null; id_document_path: string | null; profiles?: { full_name: string | null; email: string | null } | null };
 
 export default function ManageScreen() {
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, actingIsPlatform, actingIsOrgAdmin, actingAs } = useAuth();
   const router = useRouter();
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -52,7 +52,7 @@ export default function ManageScreen() {
     if (pErr) fail(pErr, 'Could not load profile.');
     const r = (profile?.role || '').toLowerCase();
     setRole(r);
-    const platform = isPlatformAdmin(r, user.email || profile?.email);
+    const platform = actingIsPlatform;
 
     const { data: owned } = await supabase.from('pets').select('id, name, main_photo_url, species').eq('owner_id', user.id).limit(40);
     const { data: rels } = await supabase.from('pet_relationships').select('pet_id').eq('user_id', user.id).is('ended_on', null);
@@ -123,11 +123,12 @@ export default function ManageScreen() {
       });
     }
     setLoading(false);
-  }, [user]);
+  }, [user, actingIsPlatform]);
 
   useEffect(() => { if (!authLoading) load(); }, [authLoading, load]);
 
-  const platform = isPlatformAdmin(role, user?.email);
+  const platform = actingIsPlatform;
+  const showOrg = Boolean(org) && actingIsOrgAdmin && actingAs?.role !== 'member' && actingAs?.role !== 'pet_admin';
 
   const addOrgAdmin = async () => {
     const email = invite.trim().toLowerCase();
@@ -199,9 +200,9 @@ export default function ManageScreen() {
         ))}
         <TouchableOpacity style={styles.ghost} onPress={() => router.push('/add-pet')}><Text style={styles.ghostTxt}>Add a pet</Text></TouchableOpacity>
 
-        {org ? (
+        {showOrg ? (
           <>
-            <Text style={styles.kicker}>My Organization · {org.name}</Text>
+            <Text style={styles.kicker}>My Organization · {org?.name}</Text>
             <Text style={styles.sub}>Pets</Text>
             {orgPets.length === 0 ? <Text style={styles.meta}>No org pets listed.</Text> : null}
             {orgPets.map((p) => (

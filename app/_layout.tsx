@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { Platform } from 'react-native';
 import { useFrameworkReady } from '@/hooks/useFrameworkReady';
 import { AuthProvider } from '@/lib/context/AuthContext';
+import ActingAsBanner from '@/components/ActingAsBanner';
 
 function stripExpoRouterKey() {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return;
@@ -28,6 +29,7 @@ export default function RootLayout() {
   return (
     <AuthProvider>
       <>
+        <ActingAsBanner />
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="admin" />

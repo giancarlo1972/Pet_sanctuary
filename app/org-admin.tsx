@@ -18,7 +18,7 @@ const ROLES = ['admin', 'staff', 'volunteer', 'foster_coordinator'];
 const roleLabel = (r: string) => ({ admin: 'Admin', staff: 'Staff', volunteer: 'Volunteer', foster_coordinator: 'Foster coordinator' } as any)[r] ?? r;
 
 export default function OrgAdminScreen() {
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, actingAs, actingIsOrgAdmin } = useAuth();
   const router = useRouter();
   const [org, setOrg] = useState<{ id: string; name: string } | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
@@ -31,12 +31,20 @@ export default function OrgAdminScreen() {
 
   const load = useCallback(async () => {
     if (!user) { setLoading(false); return; }
+    if (!actingIsOrgAdmin || actingAs?.role === 'member' || actingAs?.role === 'pet_admin') {
+      setOrg(null); setLoading(false); return;
+    }
     setLoading(true); setError(null);
-    // which org am I admin of?
-    const { data: mine } = await supabase.from('organization_members')
-      .select('organization_id, role, organizations(id, name)').eq('user_id', user.id).eq('role', 'admin').maybeSingle();
-    if (!mine) { setOrg(null); setLoading(false); return; }
-    const o = (mine as any).organizations; setOrg({ id: o.id, name: o.name });
+    let o: { id: string; name: string } | null = null;
+    if (actingAs?.role === 'org_admin' && actingAs.orgId) {
+      o = { id: actingAs.orgId, name: actingAs.orgName || 'Organization' };
+    } else {
+      const { data: mine } = await supabase.from('organization_members')
+        .select('organization_id, role, organizations(id, name)').eq('user_id', user.id).eq('role', 'admin').maybeSingle();
+      if (mine) o = { id: (mine as any).organizations?.id, name: (mine as any).organizations?.name };
+    }
+    if (!o?.id) { setOrg(null); setLoading(false); return; }
+    setOrg(o);
     const [{ data: m }, { data: r }, { count }] = await Promise.all([
       supabase.from('organization_members').select('user_id, role, profiles(full_name, email)').eq('organization_id', o.id).order('role'),
       supabase.from('record_access_requests').select('id, scope, status, requester_id, pet_id, pets(name), profiles:requester_id(full_name)')
@@ -45,11 +53,11 @@ export default function OrgAdminScreen() {
     ]);
     setMembers((m as any) ?? []); setRequests((r as any) ?? []); setPetCount(count ?? 0);
     setLoading(false);
-  }, [user]);
+  }, [user, actingAs, actingIsOrgAdmin]);
   useEffect(() => { if (!authLoading) load(); }, [authLoading, load]);
 
   const log = (action: string, extra: object) =>
-    supabase.from('audit_log').insert({ actor_id: user!.id, action, organization_id: org!.id, ...extra });
+    supabase.from('audit_log').insert({ actor_id: user!.id, action, organization_id: org!.id, acting_as: actingAs?.role || null, ...extra });
 
   const cycleRole = async (m: Member) => {
     if (m.user_id === user!.id) return;

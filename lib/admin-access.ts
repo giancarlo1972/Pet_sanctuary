@@ -1,4 +1,5 @@
 /** profiles.role is only platform_admin | member. Org admin is membership. */
+import type { ActingAs, ActingRole } from '@/lib/acting-as';
 
 const PLATFORM_ROLES = new Set(['platform_admin', 'admin', 'application_admin', 'app_admin', 'devops', 'devops_admin', 'owner', 'superadmin', 'administrator']);
 
@@ -27,6 +28,29 @@ export function isPlatformAdmin(role?: string | null, email?: string | null) {
 /** @deprecated org admin is derived from organization_members, not profiles.role */
 export function isOrgAdminRole(_role?: string | null) {
   return false;
+}
+
+export function effectiveIsPlatformAdmin(
+  realRole?: string | null,
+  email?: string | null,
+  actingAs?: ActingAs | null,
+) {
+  if (actingAs && actingAs.role !== 'platform_admin') return false;
+  return isPlatformAdmin(realRole, email);
+}
+
+export function effectiveIsOrgAdmin(realOrgAdmin: boolean, actingAs?: ActingAs | null) {
+  if (!actingAs) return realOrgAdmin;
+  if (actingAs.role === 'member' || actingAs.role === 'pet_admin') return false;
+  if (actingAs.role === 'org_admin') return true;
+  return realOrgAdmin;
+}
+
+export function homeRole(realPlatform: boolean, realOrgAdmin: boolean, realPetAdmin: boolean): ActingRole {
+  if (realPlatform) return 'platform_admin';
+  if (realOrgAdmin) return 'org_admin';
+  if (realPetAdmin) return 'pet_admin';
+  return 'member';
 }
 
 export const SHARE_LEVELS = [

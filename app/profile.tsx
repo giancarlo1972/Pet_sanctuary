@@ -28,6 +28,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { useSafeBack } from '@/hooks/useSafeBack';
 import { useAuth } from '@/lib/context/AuthContext';
 import { isPlatformAdmin } from '@/lib/admin-access';
+import { actingLabel } from '@/lib/acting-as';
 import { supabase } from '@/lib/supabase';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
@@ -106,6 +107,8 @@ export default function ProfileScreen() {
 }
 
 function ProfileDrawer({ userId, email, signOut }: { userId: string; email: string; signOut: () => Promise<void> }) {
+  const { actingAs, setActingAs, heldRoles, actingIsPlatform, actingIsOrgAdmin } = useAuth();
+  const [roleSheet, setRoleSheet] = useState(false);
   const safeBack = useSafeBack('/(tabs)');
   const [profile, setProfile] = useState<Profile | null>(null);
   const [manageOrg, setManageOrg] = useState<{ id: string; name: string } | null>(null);
@@ -748,11 +751,14 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
   const initial = displayName.charAt(0).toUpperCase();
   const cityState = [profile?.address_city, profile?.address_state].map((p) => p?.trim()).filter(Boolean).join(', ');
   const isVerified = verifications.id_verified && verifications.phone_verified;
-  const isOwner = isPlatformAdmin(profile?.role, profile?.email || email);
-  const isOrgAdmin = Boolean(manageOrg);
-  const roleLabel = isOwner
-    ? 'Rescue Army admin'
-    : (manageOrg ? `Org admin · ${manageOrg.name}` : 'Member');
+  const isOwner = actingIsPlatform;
+  const isOrgAdmin = actingIsOrgAdmin && Boolean(manageOrg) && actingAs?.role !== 'member' && actingAs?.role !== 'pet_admin';
+  const roleLabel = actingLabel(
+    actingAs,
+    isPlatformAdmin(profile?.role, profile?.email || email)
+      ? 'Rescue Army admin'
+      : (manageOrg ? `Org admin · ${manageOrg.name}` : 'Member'),
+  );
 
 
   const trainingPill = verifications.responder_training === 'passed'
@@ -789,9 +795,13 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                 </View>
                 <Text style={styles.userSubtitle}>{cityState || displayEmail}</Text>
               </View>
-              <View style={[styles.roleChip, styles.roleChipOn, { paddingHorizontal: 10, paddingVertical: 6, maxWidth: 140 }]}>
-                <Text style={[styles.roleChipTxt, styles.roleChipTxtOn]} numberOfLines={1}>{roleLabel}</Text>
-              </View>
+              <TouchableOpacity
+                style={[styles.roleChip, styles.roleChipOn, { paddingHorizontal: 10, paddingVertical: 6, maxWidth: 160 }]}
+                onPress={() => setRoleSheet(true)}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.roleChipTxt, styles.roleChipTxtOn]} numberOfLines={1}>{roleLabel} ▾</Text>
+              </TouchableOpacity>
             </View>
 
             <View style={styles.helpCard}>
@@ -887,12 +897,14 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
               )}
             </View>
 
+            {actingAs?.role !== 'member' ? (
             <View style={styles.section}>
               <TouchableOpacity style={styles.adminCta} onPress={() => { router.push('/manage'); }} activeOpacity={0.85}>
                 <Shield color={Colors.white} size={18} />
                 <Text style={styles.adminCtaTxt}>Manage</Text>
               </TouchableOpacity>
             </View>
+            ) : null}
 
             {/* My Pets */}
             <View style={styles.section}>
@@ -1090,7 +1102,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
 
 
             {/* Moderation Queue (org-admin only) */}
-            {isOrgAdmin && (
+            {isOrgAdmin && actingAs?.role !== 'member' && (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Moderation Queue</Text>
                 {modItems.length === 0 ? (
@@ -1490,6 +1502,33 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                 </View>
               </>
             )}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={roleSheet} animationType="slide" transparent onRequestClose={() => setRoleSheet(false)}>
+        <View style={styles.reviewOverlay}>
+          <View style={styles.reviewCard}>
+            <View style={styles.reviewHeader}>
+              <Text style={styles.reviewTitle}>View as</Text>
+              <TouchableOpacity onPress={() => setRoleSheet(false)}><X color={Colors.text} size={22} /></TouchableOpacity>
+            </View>
+            {heldRoles.map((h) => (
+              <TouchableOpacity
+                key={h.key}
+                style={[styles.verifRow, actingAs?.role === h.role && actingAs?.orgId === h.orgId && { backgroundColor: Colors.surface }]}
+                onPress={async () => {
+                  await setActingAs({ role: h.role, orgId: h.orgId, orgName: h.orgName });
+                  setRoleSheet(false);
+                }}
+              >
+                <Text style={styles.verifLabel}>{h.label}</Text>
+                {(!actingAs && h.role === (isPlatformAdmin(profile?.role, profile?.email || email) ? 'platform_admin' : manageOrg ? 'org_admin' : 'member'))
+                  || (actingAs && actingAs.role === h.role && (!h.orgId || actingAs.orgId === h.orgId))
+                  ? <Text style={{ color: Colors.tealDark, fontFamily: Fonts.bold, fontSize: 12 }}>Current</Text>
+                  : null}
+              </TouchableOpacity>
+            ))}
           </View>
         </View>
       </Modal>

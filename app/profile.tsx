@@ -947,7 +947,10 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                       <View style={styles.petRelInfo}>
                         <Text style={styles.petRelName}>{p.pet_name}</Text>
                         <Text style={styles.petRelMeta}>{[p.species, p.breed].filter(Boolean).join(' · ') || 'Pet'}</Text>
-                        <Text style={styles.petRelRel}>{p.relationship.charAt(0).toUpperCase() + p.relationship.slice(1)} · Since {formatShortDate(p.started_on)}</Text>
+                        <Text style={styles.petRelMeta}>{[p.species, p.breed].filter(Boolean).join(' · ') || 'Pet'}</Text>
+                      </View>
+                      <View style={[styles.relPill, (p.relationship||'').includes('foster') && styles.relPillFoster, (p.relationship||'').includes('sponsor') && styles.relPillSponsor]}>
+                        <Text style={styles.relPillTxt}>{(p.relationship||'own').toLowerCase().includes('foster') ? 'I FOSTER' : (p.relationship||'').toLowerCase().includes('sponsor') ? 'I SPONSOR' : 'I OWN'}</Text>
                       </View>
                       <ChevronRight color={Colors.textTertiary} size={18} />
                     </TouchableOpacity>
@@ -1528,6 +1531,10 @@ const styles = StyleSheet.create({
   petRelInfo: { flex: 1 },
   petRelName: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.text },
   petRelMeta: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 1 },
+  relPill: { backgroundColor: Colors.tealBg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
+  relPillFoster: { backgroundColor: Colors.urgentBg },
+  relPillSponsor: { backgroundColor: '#FFF1E0' },
+  relPillTxt: { fontFamily: Fonts.bold, fontSize: 10, color: Colors.navy, letterSpacing: 0.4 },
   petRelRel: { fontSize: FontSizes.xs, fontFamily: Fonts.medium, color: Colors.textTertiary, marginTop: 2, textTransform: 'capitalize' },
   pastToggle: { paddingVertical: 10, alignItems: 'center' },
   pastToggleText: { fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.navy },

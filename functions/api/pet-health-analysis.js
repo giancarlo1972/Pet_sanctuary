@@ -36,11 +36,15 @@ const SYSTEM = `You are Rescue Army AI Health. You are NOT a veterinarian. You d
 Review the complete pet record (weights in lb only). Return a single JSON object, no markdown:
 {
   "verdict": "STABLE" | "MONITOR",
+  "timeline": [{"date": "YYYY-MM-DD or null", "title": "", "detail": ""}],
+  "trends": [{"analyte": "weight|FELV|creatinine|...", "points": [{"date": "", "value": 0}], "direction": "up|down|stable|flagged"}],
   "findings": [{"severity": "info|watch|urgent", "title": "", "body": ""}],
+  "conclusion": "3-6 sentences for the owner to share with their vet",
   "summary": "2 sentences",
   "disclaimer": "AI support only. A licensed veterinarian must confirm any diagnosis or treatment."
 }
-Use MONITOR if any finding is watch or urgent, otherwise STABLE. Cite specific values (lb, dates, lab flags). Flag data-quality issues (unit errors, implausible jumps).`;
+Input includes document ai_notes, full weight_entries (lb), lab_series per analyte, active/resolved conditions, vaccinations.
+Use MONITOR if any finding is watch or urgent, otherwise STABLE. Cite specific values (lb, dates, lab flags). Flag data-quality issues.`;
 
 export async function onRequestOptions() {
   return new Response(null, { headers: { ...headers, 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' } });
@@ -67,7 +71,7 @@ export async function onRequestPost(context) {
         method: 'POST',
         headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
         body: JSON.stringify({
-          model, max_tokens: 1800, system: SYSTEM,
+          model, max_tokens: 4000, system: SYSTEM,
           messages: [{ role: 'user', content: userContent }],
         }),
       });
@@ -93,7 +97,10 @@ export async function onRequestPost(context) {
         ok: true,
         labeled: 'AI — vet-first',
         verdict,
+        timeline: Array.isArray(parsed.timeline) ? parsed.timeline : [],
+        trends: Array.isArray(parsed.trends) ? parsed.trends : [],
         findings,
+        conclusion: parsed.conclusion || parsed.summary || '',
         summary: parsed.summary || '',
         disclaimer: parsed.disclaimer || 'AI support only. A licensed veterinarian must confirm any diagnosis or treatment.',
         ran_at: new Date().toISOString(),

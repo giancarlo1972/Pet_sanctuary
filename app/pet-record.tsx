@@ -42,6 +42,7 @@ import {
   FlaskConical,
   Building2,
   Download,
+  Bluetooth,
 } from 'lucide-react-native';
 import { InlineBanner } from '@/components/InlineBanner';
 import { prepareImageFile } from '@/lib/prepare-image';
@@ -110,6 +111,7 @@ interface Pet {
   body_condition_score: number | null;
   target_weight_kg: number | null;
   previous_names: string[] | null;
+  ai_traits?: any;
 }
 
 interface Relationship {
@@ -368,6 +370,16 @@ function lbToKg(lb: number): number {
   return Math.round((lb / LB_PER_KG) * 100) / 100;
 }
 
+function relativeAgo(iso?: string | null) {
+  if (!iso) return 'never';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(ms) || ms < 0) return 'just now';
+  const h = Math.round(ms / 3600000);
+  if (h < 1) return 'just now';
+  if (h < 48) return `${h} h ago`;
+  return `${Math.round(h / 24)} d ago`;
+}
+
 function ageFromDob(dob?: string | null, ageText?: string | null) {
   if (dob) {
     const d = new Date(dob);
@@ -389,12 +401,17 @@ export default function PetRecordScreen() {
   const [tab, setTab] = useState<Tab>('overview');
   const [medicalHub, setMedicalHub] = useState<MedicalHub>('records');
   const [aiFindings, setAiFindings] = useState<any>(null);
+  const [aiRuns, setAiRuns] = useState<any[]>([]);
   const [aiShared, setAiShared] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiLastRun, setAiLastRun] = useState<string | null>(null);
   const [weightEntries, setWeightEntries] = useState<{ weight_lb: number; measured_on: string | null; source?: string | null }[]>([]);
   const [labRows, setLabRows] = useState<any[]>([]);
   const [labSpark, setLabSpark] = useState<string | null>(null);
+  const [deviceReadings, setDeviceReadings] = useState<any[]>([]);
+  const [petDevices, setPetDevices] = useState<any[]>([]);
+  const [chipNumber, setChipNumber] = useState<string | null>(null);
+  const [chipDenied, setChipDenied] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -493,7 +510,7 @@ export default function PetRecordScreen() {
 
     const { data: petData, error: petErr } = await supabase
       .from('pets')
-      .select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, body_condition_score, target_weight_kg, previous_names')
+      .select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, body_condition_score, target_weight_kg, previous_names, ai_traits')
       .eq('id', petId)
       .maybeSingle();
 
@@ -621,22 +638,33 @@ export default function PetRecordScreen() {
     })));
     setBreeds((breedsRes.data as BreedOption[]) || []);
     setColors((colorsRes.data as ColorOption[]) || []);
-    const [wRes, labRes, devRes, aiRes] = await Promise.all([
-      supabase.from('weight_entries').select('weight_lb, measured_on, source, created_at').eq('pet_id', petId).order('measured_on', { ascending: false }).limit(10),
-      supabase.from('lab_results').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(40),
-      supabase.from('device_readings').select('metric, value, recorded_at').eq('pet_id', petId).order('recorded_at', { ascending: false }).limit(50),
-      supabase.from('ai_health_analyses').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+    const [wRes, labRes, devRes, aiRes, deviceRes, chipRes] = await Promise.all([
+      supabase.from('weight_entries').select('weight_lb, measured_on, source, created_at').eq('pet_id', petId).order('measured_on', { ascending: false }).limit(40),
+      supabase.from('lab_results').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(80),
+      supabase.from('device_readings').select('*').eq('pet_id', petId).order('recorded_at', { ascending: false }).limit(80),
+      supabase.from('ai_health_analyses').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(20),
+      supabase.from('pet_devices').select('*').eq('pet_id', petId),
+      supabase.from('pet_identifiers').select('microchip_number').eq('pet_id', petId).maybeSingle(),
     ]);
     setWeightEntries((wRes.data as any[]) || []);
     setLabRows((labRes.data as any[]) || []);
     setDeviceReadings((devRes.data as any[]) || []);
-    if (aiRes.data) {
-      const row = aiRes.data as any;
+    setPetDevices((deviceRes.data as any[]) || []);
+    if (chipRes.error) setChipDenied(true);
+    else setChipNumber(chipRes.data?.microchip_number || null);
+    const runs = (aiRes.data as any[]) || [];
+    setAiRuns(runs);
+    if (runs[0]) {
+      const row = runs[0];
       setAiFindings({
         id: row.id,
-        verdict: row.inputs?.verdict || row.findings?.[0]?.severity === 'urgent' ? 'MONITOR' : row.inputs?.verdict,
+        run_number: row.run_number,
+        verdict: row.verdict || row.inputs?.verdict,
         findings: row.findings,
-        summary: row.inputs?.vet_summary || row.summary,
+        timeline: row.timeline || row.inputs?.timeline,
+        trends: row.trends || row.inputs?.trends,
+        conclusion: row.conclusion || row.inputs?.conclusion || row.summary,
+        summary: row.summary,
         ran_at: row.created_at,
       });
       setAiLastRun(row.created_at);
@@ -1470,6 +1498,14 @@ export default function PetRecordScreen() {
   const healthVerdict = (aiFindings?.verdict === 'MONITOR' || aiFindings?.verdict === 'WATCH')
     ? 'MONITOR'
     : 'STABLE';
+  const felvFiv = labRows.filter((l) => /felv|fiv/i.test(String(l.analyte || l.name || '')));
+  const vaxCount = vaccinations.filter((v) => v.confirmed !== false).length;
+  const lastDeviceSync = deviceReadings[0]?.recorded_at || petDevices[0]?.created_at;
+  const stoolLog = deviceReadings.find((r) => /stool/i.test(String(r.metric || r.kind || '')));
+  const scaleW = deviceReadings.find((r) => /weight|scale/i.test(String(r.metric || r.kind || '')));
+  const weekAgo = Date.now() - 7 * 864e5;
+  const visits7 = deviceReadings.filter((r) => /visit|use/i.test(String(r.metric || r.kind || '')) && new Date(r.recorded_at).getTime() > weekAgo).length;
+  const ownerSince = currentRels.find((r) => r.relationship === 'owner')?.started_on;
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'overview', label: 'Overview' },
@@ -1493,7 +1529,14 @@ export default function PetRecordScreen() {
         weight_lb: latestLb,
         target_weight_lb: targetLb,
         weight_entries: weightEntries.slice(0, 10).map((w) => ({ weight_lb: w.weight_lb, measured_on: w.measured_on })),
-        conditions: tableConditions.map((c) => ({ name: c.name, kind: c.kind, severity: c.severity, is_active: c.is_active, diagnosed_on: c.diagnosed_on })),
+        document_ai_notes: documents.map((d) => {
+          const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary : {};
+          return { title: d.title, date: d.taken_on, clinic: d.clinic, ai_note: (ai as any).ai_note || null };
+        }),
+        conditions: tableConditions.map((c) => ({
+          name: c.name, kind: c.kind, status: c.status || (c.is_active === false ? 'resolved' : 'active'),
+          onset_date: c.onset_date || c.diagnosed_on, resolved_date: c.resolved_date || c.resolved_on,
+        })),
         vaccinations: vaccinations.map((v) => ({
           name: v.vaccine, brand: v.brand, date: v.administered_on, next_due: v.next_due_on, dose: v.dose,
         })),
@@ -1539,13 +1582,22 @@ export default function PetRecordScreen() {
       setAiFindings(json);
       setAiLastRun(json.ran_at || new Date().toISOString());
       setAiShared(false);
+      const nextNum = (aiRuns[0]?.run_number || aiRuns.length || 0) + 1;
       const { data: saved } = await supabase.from('ai_health_analyses').insert({
         pet_id: petId,
+        run_number: nextNum,
         findings: json.findings || [],
-        inputs: { verdict: json.verdict, vet_summary: json.summary },
+        timeline: json.timeline || [],
+        trends: json.trends || [],
+        conclusion: json.conclusion || json.summary,
+        verdict: json.verdict,
+        summary: json.summary,
+        inputs: { verdict: json.verdict, timeline: json.timeline, trends: json.trends, conclusion: json.conclusion },
         model: 'claude-haiku-4-5',
-      }).select('id').maybeSingle();
-      if (saved?.id) setAiFindings((cur: any) => ({ ...cur, id: saved.id }));
+      }).select('*').maybeSingle();
+      const packed = { ...json, id: saved?.id, run_number: nextNum, ran_at: json.ran_at || new Date().toISOString() };
+      setAiFindings(packed);
+      setAiRuns((prev) => [packed, ...prev]);
     } catch (e: any) {
       showBanner(e.message || 'AI Health failed.');
     }
@@ -1607,7 +1659,128 @@ export default function PetRecordScreen() {
         {/* OVERVIEW */}
         {tab === 'overview' && (
           <View style={styles.tabContent}>
-            {/* Photo gallery */}
+            <View style={styles.chipRow}>
+              {felvFiv.map((l, i) => {
+                const v = String(l.value ?? l.value_text ?? '').toLowerCase();
+                const neg = /not detected|negative|\bneg\b/.test(v);
+                const name = String(l.analyte || l.name || 'FELV/FIV').toUpperCase();
+                return (
+                  <View key={i} style={[styles.ovChip, neg && styles.ovChipTeal]}>
+                    <Text style={[styles.ovChipTxt, neg && styles.ovChipTealTxt]}>{name} {neg ? 'negative' : (l.value ?? l.value_text)}</Text>
+                  </View>
+                );
+              })}
+              {pet.spayed_neutered ? (
+                <View style={[styles.ovChip, styles.ovChipTeal]}><Text style={styles.ovChipTealTxt}>Spayed/Neutered</Text></View>
+              ) : null}
+              {pet.microchipped || chipNumber ? (
+                <View style={[styles.ovChip, styles.ovChipTeal]}><Text style={styles.ovChipTealTxt}>Microchipped</Text></View>
+              ) : null}
+              {vaxCount > 0 ? (
+                <TouchableOpacity style={[styles.ovChip, styles.ovChipTeal]} onPress={() => { setTab('medical'); setMedicalHub('records'); }} activeOpacity={0.85}>
+                  <Text style={styles.ovChipTealTxt}>Vaccinated · view history →</Text>
+                </TouchableOpacity>
+              ) : null}
+              {latestLb != null ? (
+                <View style={styles.ovChip}><Text style={styles.ovChipTxt}>{latestLb} lb</Text></View>
+              ) : null}
+            </View>
+
+            <View style={styles.ovCard}>
+              <View style={styles.ovCardHead}>
+                <Text style={styles.ovKicker}>CONNECTED DEVICES</Text>
+                {petDevices.length > 0 ? (
+                  <View style={[styles.ovChip, styles.ovChipTeal, { paddingVertical: 3 }]}>
+                    <Text style={styles.ovChipTealTxt}>{petDevices.length} active</Text>
+                  </View>
+                ) : null}
+              </View>
+              {petDevices.map((d) => (
+                <View key={d.id} style={styles.deviceRow}>
+                  <View style={styles.greenDot} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.docTitle}>{d.name || d.vendor || 'Device'}</Text>
+                    <Text style={styles.docClinic}>Stool & urination monitoring · last sync {relativeAgo(lastDeviceSync)}</Text>
+                  </View>
+                </View>
+              ))}
+              {petDevices.length > 0 ? (
+                <View style={styles.healthStats}>
+                  <View style={styles.healthStat}>
+                    <Text style={styles.ovStatN}>{stoolLog ? String(stoolLog.value ?? '—') : '—'}</Text>
+                    <Text style={styles.healthL}>Last stool log</Text>
+                  </View>
+                  <View style={styles.healthStat}>
+                    <Text style={styles.ovStatN}>{visits7 || '—'}</Text>
+                    <Text style={styles.healthL}>Visits 7-day avg</Text>
+                  </View>
+                  <View style={styles.healthStat}>
+                    <Text style={styles.ovStatN}>{scaleW ? `${scaleW.value} ${scaleW.unit || 'lb'}` : (latestLb != null ? `${latestLb} lb` : '—')}</Text>
+                    <Text style={styles.healthL}>Scale weight</Text>
+                  </View>
+                </View>
+              ) : null}
+              <TouchableOpacity style={styles.dashedConnect} onPress={() => showBanner('Connect a litter box, feeder, or GPS collar from Me → Devices.', 'info')} activeOpacity={0.85}>
+                <Bluetooth color={Colors.navy} size={16} />
+                <Text style={styles.dashedConnectTxt}>+ Connect a device (litter box, feeder, GPS collar)</Text>
+              </TouchableOpacity>
+              <Text style={styles.ovFoot}>Device readings feed AI Health so patterns (weight, litter-box visits) show up in the analysis.</Text>
+            </View>
+
+            <View style={styles.ovCard}>
+              <Text style={styles.ovKicker}>MICROCHIP</Text>
+              <Text style={styles.chipMono}>{chipNumber || (pet.microchipped ? '•••• request access' : 'No microchip on file')}</Text>
+              <Text style={styles.ovFoot}>Visible to the owner, verified org staff, and an active foster. Others must request access. Storing it here doesn’t register the chip — verify at the AAHA universal lookup after a move.</Text>
+              {!chipNumber && !canEdit ? (
+                <TouchableOpacity style={styles.requestBtn} onPress={async () => {
+                  await supabase.from('identifier_access_requests').insert({ pet_id: petId, user_id: user?.id, status: 'pending' });
+                  showBanner('Access requested.', 'success');
+                }} activeOpacity={0.85}>
+                  <Text style={styles.requestBtnTxt}>Request access</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            {activeConditions.length > 0 ? (
+              <View style={styles.ovCard}>
+                <View style={styles.ovCardHead}>
+                  <Text style={styles.ovKicker}>LATEST CONDITIONS</Text>
+                  <TouchableOpacity onPress={() => { setTab('medical'); setMedicalHub('records'); }}>
+                    <Text style={styles.linkTxt}>See all → Medical</Text>
+                  </TouchableOpacity>
+                </View>
+                {activeConditions.slice(0, 3).map((c) => (
+                  <Text key={c.id} style={styles.docTitle}>{c.name}{c.severity ? ` · ${c.severity}` : ''}</Text>
+                ))}
+              </View>
+            ) : null}
+
+            <View style={styles.infoCard}>
+              <InfoRow icon={<PawPrint color={Colors.navy} size={16} />} label="Species" value={titleCase(pet.species)} />
+              <InfoRow icon={<Home color={Colors.navy} size={16} />} label="Breed" value={breedDisplay} />
+              {pet.ai_traits ? <InfoRow icon={<PawPrint color={Colors.navy} size={16} />} label="AI breed" value="visual guess" /> : null}
+              <InfoRow icon={<Palette color={Colors.navy} size={16} />} label="Color" value={colorDisplay} />
+              <InfoRow icon={<Calendar color={Colors.navy} size={16} />} label="DOB / age" value={[pet.date_of_birth ? formatDate(pet.date_of_birth) : null, ageFromDob(pet.date_of_birth, pet.age_text)].filter(Boolean).join(' · ') || '—'} />
+              <InfoRow icon={<Shield color={Colors.navy} size={16} />} label="Sex" value={titleCase(pet.gender) || '—'} />
+              <InfoRow icon={<Users color={Colors.navy} size={16} />} label="Owner since" value={ownerSince ? formatDate(ownerSince) : '—'} />
+            </View>
+            {canEdit && (
+              <View style={styles.editActionsRow}>
+                <TouchableOpacity style={styles.editActionBtn} onPress={openBreedModal} activeOpacity={0.85}>
+                  <Pencil color={Colors.navy} size={14} />
+                  <Text style={styles.editActionText}>Edit Breed</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.editActionBtn} onPress={openColorModal} activeOpacity={0.85}>
+                  <Pencil color={Colors.navy} size={14} />
+                  <Text style={styles.editActionText}>Edit Color</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.editActionBtn} onPress={openWeight} activeOpacity={0.85}>
+                  <Scale color={Colors.navy} size={14} />
+                  <Text style={styles.editActionText}>Record Weight</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             <View style={styles.subHeader}>
               <View style={styles.subHeaderLeft}>
                 <ImageIcon color={Colors.navy} size={18} />
@@ -1639,52 +1812,27 @@ export default function PetRecordScreen() {
                         <X color={Colors.white} size={12} />
                       </TouchableOpacity>
                     )}
-                    {canEdit && !photo.is_profile && i > 0 && (
-                      <Text style={styles.photoHint}>Tap to set profile</Text>
-                    )}
                   </View>
                 ))}
               </View>
             )}
 
-            {/* Info card */}
-            <View style={styles.infoCard}>
-              <InfoRow icon={<PawPrint color={Colors.navy} size={16} />} label="Species" value={titleCase(pet.species)} />
-              <InfoRow icon={<Home color={Colors.navy} size={16} />} label="Breed" value={breedDisplay} />
-              {pet.is_mixed ? <InfoRow icon={<PawPrint color={Colors.navy} size={16} />} label="Mixed Breed" value="Yes" /> : null}
-              {pet.breed_notes ? <InfoRow icon={<PawPrint color={Colors.navy} size={16} />} label="Breed Notes" value={pet.breed_notes} /> : null}
-              <InfoRow icon={<Palette color={Colors.navy} size={16} />} label="Color" value={colorDisplay} />
-              {pet.color_notes ? <InfoRow icon={<Palette color={Colors.navy} size={16} />} label="Color Notes" value={pet.color_notes} /> : null}
-              <InfoRow icon={<Scale color={Colors.navy} size={16} />} label="Weight" value={weightDisplay} />
-              {pet.body_condition_score != null ? <InfoRow icon={<Scale color={Colors.navy} size={16} />} label="Body Condition" value={`${pet.body_condition_score}/9`} /> : null}
-              {pet.target_weight_kg != null ? <InfoRow icon={<Scale color={Colors.navy} size={16} />} label="Target Weight" value={weightUnit === 'lb' ? `${kgToLb(pet.target_weight_kg)} lb` : `${Math.round(pet.target_weight_kg * 100) / 100} kg`} /> : null}
-              {pet.weight_measured_on ? <InfoRow icon={<Calendar color={Colors.navy} size={16} />} label="Weighed On" value={formatDate(pet.weight_measured_on)} /> : null}
-              {pet.date_of_birth ? <InfoRow icon={<Calendar color={Colors.navy} size={16} />} label="Date of Birth" value={formatDate(pet.date_of_birth)} /> : null}
-              <InfoRow icon={<Calendar color={Colors.navy} size={16} />} label="Age" value={pet.age_text || '—'} />
-              <InfoRow icon={<Shield color={Colors.navy} size={16} />} label="Vaccinated" value={pet.vaccinated ? 'Yes' : 'No'} />
-              <InfoRow icon={<Shield color={Colors.navy} size={16} />} label="Spayed/Neutered" value={pet.spayed_neutered ? 'Yes' : 'No'} />
-              <InfoRow icon={<Shield color={Colors.navy} size={16} />} label="Microchipped" value={pet.microchipped ? 'Yes' : 'No'} />
-              {pet.location ? <InfoRow icon={<Home color={Colors.navy} size={16} />} label="Location" value={pet.location} /> : null}
-            </View>
-
-            {canEdit && (
-              <View style={styles.editActionsRow}>
-                <TouchableOpacity style={styles.editActionBtn} onPress={openBreedModal} activeOpacity={0.85}>
-                  <Pencil color={Colors.navy} size={14} />
-                  <Text style={styles.editActionText}>Edit Breed</Text>
+            <View style={styles.ovCard}>
+              <Text style={styles.ovKicker}>{(pet.name || 'PET').toUpperCase()}’S STORY</Text>
+              <Text style={styles.ovFoot}>Pull photos from Google or Apple Photos, then let AI draft a shareable story.</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+                <TouchableOpacity style={styles.editActionBtn} onPress={() => Linking.openURL('https://photos.google.com')} activeOpacity={0.85}>
+                  <Text style={styles.editActionText}>Google Photos</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.editActionBtn} onPress={openColorModal} activeOpacity={0.85}>
-                  <Pencil color={Colors.navy} size={14} />
-                  <Text style={styles.editActionText}>Edit Color</Text>
+                <TouchableOpacity style={styles.editActionBtn} onPress={() => Linking.openURL('https://www.icloud.com/photos')} activeOpacity={0.85}>
+                  <Text style={styles.editActionText}>Apple Photos</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.editActionBtn} onPress={openWeight} activeOpacity={0.85}>
-                  <Scale color={Colors.navy} size={14} />
-                  <Text style={styles.editActionText}>Record Weight</Text>
+                <TouchableOpacity style={[styles.editActionBtn, { backgroundColor: Colors.navy }]} onPress={() => router.push({ pathname: '/story-composer', params: { petId } })} activeOpacity={0.85}>
+                  <Text style={[styles.editActionText, { color: Colors.white }]}>Create story with AI</Text>
                 </TouchableOpacity>
               </View>
-            )}
+            </View>
 
-            {/* Diet section — prominent for foster/sitter */}
             <View style={styles.subHeader}>
               <View style={styles.subHeaderLeft}>
                 <Utensils color={Colors.navy} size={18} />
@@ -1709,22 +1857,7 @@ export default function PetRecordScreen() {
                 {diet.feeding_notes ? <DietRow label="Notes" value={diet.feeding_notes} /> : null}
               </View>
             ) : (
-              <Text style={styles.emptyText}>No diet information yet. This is essential for foster and sitter handoff.</Text>
-            )}
-
-            <Text style={styles.sectionLabel}>Current Relationship</Text>
-            {currentRels.length === 0 ? (
-              <Text style={styles.emptyText}>No active relationships.</Text>
-            ) : (
-              currentRels.map((r) => (
-                <View key={r.id} style={styles.relCard}>
-                  <View style={styles.relBadge}>
-                    <Text style={styles.relBadgeText}>{titleCase(r.relationship)}</Text>
-                  </View>
-                  <Text style={styles.relName}>{r.profile_name}</Text>
-                  <Text style={styles.relDate}>Since {formatDate(r.started_on)}</Text>
-                </View>
-              ))
+              <Text style={styles.emptyText}>No diet information yet.</Text>
             )}
           </View>
         )}
@@ -2054,6 +2187,7 @@ export default function PetRecordScreen() {
                         <View style={styles.docTypePill}><Text style={styles.docTypePillTxt}>{kindLabel}</Text></View>
                       </View>
                       {failLabel ? <Text style={styles.docClinic}>{failLabel}</Text> : null}
+                      {ai.ai_note ? <Text style={styles.docClinic}>{String(ai.ai_note)}</Text> : null}
                       {date ? <Text style={styles.docDate}>{formatDate(String(date))}</Text> : null}
                       {clinic ? <Text style={styles.docClinic}>{String(clinic)}</Text> : null}
                     </View>
@@ -2187,6 +2321,70 @@ export default function PetRecordScreen() {
                 <View style={styles.aiDisclaimer}>
                   <Text style={styles.aiDisclaimerTxt}>AI is not a veterinarian. Findings are for your vet — no diagnosis or treatment from Rescue Army.</Text>
                 </View>
+                {aiRuns.length > 0 ? (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                    {aiRuns.map((r) => (
+                      <TouchableOpacity key={r.id} style={[styles.ovChip, aiFindings?.id === r.id && styles.ovChipTeal]} onPress={() => {
+                        setAiFindings({
+                          id: r.id,
+                          run_number: r.run_number,
+                          verdict: r.verdict || r.inputs?.verdict,
+                          findings: r.findings,
+                          timeline: r.timeline || r.inputs?.timeline,
+                          trends: r.trends || r.inputs?.trends,
+                          conclusion: r.conclusion || r.inputs?.conclusion || r.summary,
+                          ran_at: r.created_at || r.ran_at,
+                        });
+                        setAiShared(Boolean(r.shared_with_vet_at));
+                      }}>
+                        <Text style={aiFindings?.id === r.id ? styles.ovChipTealTxt : styles.ovChipTxt}>
+                          Run {r.run_number || '?'} · {formatDate(r.created_at || r.ran_at)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                ) : null}
+                {weightEntries.length > 0 ? (
+                  <View style={styles.ovCard}>
+                    <Text style={styles.ovKicker}>WEIGHT (LB)</Text>
+                    <WeightLineChart points={weightEntries.slice().reverse()} targetLb={targetLb} height={140} />
+                  </View>
+                ) : null}
+                {(() => {
+                  const flagged = new Map<string, number[]>();
+                  for (const row of labRows) {
+                    const flag = String(row.flag || '').toLowerCase();
+                    if (flag !== 'high' && flag !== 'low' && flag !== 'abnormal') continue;
+                    const name = String(row.analyte || row.name || '').trim();
+                    if (!name) continue;
+                    const n = parseFloat(row.value ?? row.value_num ?? row.value_text);
+                    const arr = flagged.get(name) || [];
+                    if (!isNaN(n)) arr.push(n);
+                    flagged.set(name, arr);
+                  }
+                  for (const t of aiFindings?.trends || []) {
+                    if (!t.analyte || /weight/i.test(t.analyte)) continue;
+                    if (!flagged.has(t.analyte) && Array.isArray(t.points)) {
+                      flagged.set(t.analyte, t.points.map((p: any) => parseFloat(p.value)).filter((n: number) => !isNaN(n)));
+                    }
+                  }
+                  return [...flagged.entries()].map(([name, nums]) => nums.length > 1 ? (
+                    <View key={name} style={styles.ovCard}>
+                      <Text style={styles.docTitle}>{name}</Text>
+                      <LabSparkline values={nums} color={Colors.critical} />
+                    </View>
+                  ) : null);
+                })()}
+                {(aiFindings?.timeline || []).map((t: any, i: number) => (
+                  <View key={i} style={styles.timelineCard}>
+                    <View style={styles.timelineDot} />
+                    <View style={styles.timelineContent}>
+                      <Text style={styles.timelineType}>{t.title}</Text>
+                      <Text style={styles.timelineDate}>{t.date ? formatDate(t.date) : ''}</Text>
+                      {t.detail ? <Text style={styles.timelineSummary}>{t.detail}</Text> : null}
+                    </View>
+                  </View>
+                ))}
                 {(aiFindings?.findings || []).map((f: any, i: number) => {
                   const sev = String(f.severity || 'info').toLowerCase();
                   const dot = sev === 'urgent' ? Colors.critical : sev === 'watch' ? Colors.accent : Colors.teal;
@@ -2200,11 +2398,17 @@ export default function PetRecordScreen() {
                     </View>
                   );
                 })}
+                {aiFindings?.conclusion ? (
+                  <View style={[styles.ovCard, { backgroundColor: Colors.navy }]}>
+                    <Text style={[styles.ovKicker, { color: '#B9BCE0' }]}>CONCLUSION</Text>
+                    <Text style={{ fontFamily: Fonts.regular, fontSize: 13, color: Colors.white, lineHeight: 20, marginTop: 6 }}>{aiFindings.conclusion}</Text>
+                  </View>
+                ) : null}
                 <TouchableOpacity style={[styles.aiPrimaryBtn, aiBusy && styles.btnDisabled]} disabled={aiBusy} onPress={runAiHealth} activeOpacity={0.85}>
                   {aiBusy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.aiPrimaryTxt}>Run AI Health</Text>}
                 </TouchableOpacity>
                 <Text style={styles.aiLastRun}>
-                  {aiLastRun ? `Last run ${formatDate(aiLastRun)}` : 'Not run yet'}
+                  {aiFindings?.run_number ? `Run ${aiFindings.run_number} · ${formatDate(aiFindings.ran_at || aiLastRun)}` : (aiLastRun ? `Last run ${formatDate(aiLastRun)}` : 'Not run yet')}
                 </Text>
                 {aiFindings ? (
                   <TouchableOpacity
@@ -2776,6 +2980,24 @@ const styles = StyleSheet.create({
   aiLastRun: { fontFamily: Fonts.regular, fontSize: 12, color: Colors.textTertiary, textAlign: 'center' },
   aiShareBtn: { backgroundColor: Colors.navy, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
   aiShareTxt: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.white },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  ovChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border },
+  ovChipTeal: { backgroundColor: Colors.teal, borderColor: Colors.teal },
+  ovChipTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy },
+  ovChipTealTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.white },
+  ovCard: { backgroundColor: Colors.white, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: Colors.border, gap: 8 },
+  ovCardHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  ovKicker: { fontFamily: Fonts.extrabold, fontSize: 11, letterSpacing: 0.8, color: Colors.textTertiary },
+  ovFoot: { fontFamily: Fonts.regular, fontSize: 11.5, color: Colors.textSecondary, lineHeight: 17 },
+  ovStatN: { fontFamily: Fonts.extrabold, fontSize: 18, color: Colors.navy },
+  deviceRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  greenDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.teal },
+  dashedConnect: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderStyle: 'dashed', borderColor: Colors.borderInput, borderRadius: 12, padding: 12 },
+  dashedConnectTxt: { fontFamily: Fonts.semibold, fontSize: 12, color: Colors.navy, flex: 1 },
+  chipMono: { fontFamily: Fonts.extrabold, fontSize: 18, color: Colors.navy, letterSpacing: 1 },
+  requestBtn: { backgroundColor: Colors.navy, borderRadius: 12, paddingVertical: 10, alignItems: 'center', marginTop: 4 },
+  requestBtnTxt: { color: Colors.white, fontFamily: Fonts.bold, fontSize: 13 },
+  linkTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.tealDark },
   aiTitle: { fontFamily: Fonts.extrabold, color: Colors.critical, fontSize: FontSizes.md },
 
   tabContent: { paddingTop: 12, paddingHorizontal: 0 },

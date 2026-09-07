@@ -30,13 +30,15 @@ Return JSON only, no markdown:
   "medications": [{"name": "", "dose": null, "given_on": null}],
   "visits": [{"clinic": null, "date": "YYYY-MM-DD or null", "reason": null, "summary": null}],
   "labs": [{"analyte": "", "value": "", "unit": null, "flag": "normal|high|low|abnormal|unknown", "collected_on": null}],
-  "weight": {"value": null, "unit": "lb|kg", "measured_on": null}
+  "weight": {"value": null, "unit": "lb|kg", "measured_on": null},
+  "ai_note": "3-5 short lines: key findings, deltas vs prior values for the same analytes, flags. Plain text, no markdown."
 }
 Rules:
 - labs[].value MUST be a string or a number. Qualitative PCR (e.g. "Detected", "Not detected") stays as that string; unit null. If value is Detected (case-insensitive) flag=abnormal; if Not detected flag=normal. Numeric labs keep the printed number and unit.
 - vaccinations: extract EVERY vaccine administered or mentioned anywhere, including visit notes and discharge text. Capture product/brand, date given, next_due / valid_until when printed.
 - weight: return the printed {value, unit} as-is (do not convert). Empty arrays if unreadable. Never invent dates.
-- conditions: one row per distinct issue. If a visit notes an existing problem is better or gone, set status=resolved (or monitoring), do not duplicate the name. Use onset_date/resolved_date when printed.`;
+- conditions: one row per distinct issue. If a visit notes an existing problem is better or gone, set status=resolved (or monitoring), do not duplicate the name. Use onset_date/resolved_date when printed.
+- ai_note: 3–5 lines covering findings, any delta vs prior labs for the same analytes, and flags. Do not diagnose.`;
 
 const MODELS = ['claude-haiku-4-5', 'claude-3-5-haiku-latest', 'claude-3-5-sonnet-20241022'];
 const SYSTEM = 'Respond with a single JSON object only, no markdown, no commentary';
@@ -269,7 +271,26 @@ export async function onRequestPost(context) {
         content.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: raw } });
       }
     }
-    content.push({ type: 'text', text: PROMPT });
+    let prompt = PROMPT;
+    if (documentId && sb.url && sb.key) {
+      try {
+        const docRow = await fetch(`${sb.url}/rest/v1/pet_documents?id=eq.${documentId}&select=pet_id`, {
+          headers: { apikey: sb.key, Authorization: `Bearer ${sb.key}` },
+        }).then((r) => r.json());
+        const petId = docRow?.[0]?.pet_id;
+        if (petId) {
+          const labs = await fetch(`${sb.url}/rest/v1/lab_results?pet_id=eq.${petId}&select=name,analyte,value,unit,flag,collected_on,created_at&order=created_at.desc&limit=40`, {
+            headers: { apikey: sb.key, Authorization: `Bearer ${sb.key}` },
+          }).then((r) => r.json());
+          if (Array.isArray(labs) && labs.length) {
+            prompt += `\nPrior lab values for this pet (use for deltas in ai_note):\n${JSON.stringify(labs).slice(0, 6000)}`;
+          }
+        }
+      } catch (e) {
+        console.log('[parse-pet-document] prior labs skip', String(e));
+      }
+    }
+    content.push({ type: 'text', text: prompt });
 
     let lastErr = 'Claude did not respond.';
     for (const model of MODELS) {
@@ -324,6 +345,7 @@ export async function onRequestPost(context) {
         visits,
         labs,
         weight,
+        ai_note: parsed.ai_note || null,
       };
       console.log('[parse-pet-document] OK', model, {
         documentId,

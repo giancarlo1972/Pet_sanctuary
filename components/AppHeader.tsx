@@ -19,6 +19,7 @@ export default function AppHeader({ title, showBack = false, rightAction }: AppH
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      <View style={styles.inner}>
       <View style={styles.header}>
         {showBack ? (
           <TouchableOpacity style={styles.sideBtn} onPress={() => router.back()} activeOpacity={0.75}>
@@ -42,20 +43,20 @@ export default function AppHeader({ title, showBack = false, rightAction }: AppH
           </View>
         )}
       </View>
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { backgroundColor: Colors.white },
+  container: { backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  inner: { width: '100%', maxWidth: 880, alignSelf: 'center' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: 16,
     paddingVertical: 8,
     backgroundColor: Colors.white,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
     gap: 8,
   },
   sideBtn: {

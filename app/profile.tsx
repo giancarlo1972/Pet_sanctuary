@@ -49,6 +49,9 @@ type Profile = {
   role: string | null;
   address_city: string | null;
   address_state: string | null;
+  volunteer_active?: boolean | null;
+  responder_active?: boolean | null;
+  alert_radius_mi?: number | null;
 };
 
 type Verifications = {
@@ -225,6 +228,8 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
   const [pastPets, setPastPets] = useState<PetRel[]>([]);
   const [showPastPets, setShowPastPets] = useState(false);
   const [sharePet, setSharePet] = useState<{ id: string; name: string } | null>(null);
+  const [volCount, setVolCount] = useState(0);
+  const [respCount, setRespCount] = useState(0);
 
   // Due Soon reminders
   interface PetReminder { pet_id: string; pet_name: string; pet_photo: string | null; label: string; days_until_due: number; urgency: string; }
@@ -288,11 +293,20 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
     setLoading(true);
     setLoadError(null);
     try {
-      const { data: row, error } = await supabase
+      let { data: row, error } = await supabase
         .from('profiles')
-        .select('id, full_name, email, location, avatar_url, role, address_city, address_state')
+        .select('id, full_name, email, location, avatar_url, role, address_city, address_state, volunteer_active, responder_active, alert_radius_mi')
         .eq('id', userId)
         .maybeSingle();
+      if (error) {
+        const retry = await supabase
+          .from('profiles')
+          .select('id, full_name, email, location, avatar_url, role, address_city, address_state')
+          .eq('id', userId)
+          .maybeSingle();
+        row = retry.data as typeof row;
+        error = retry.error;
+      }
       if (error) { setLoadError('We could not load your profile.'); setLoading(false); return; }
       let profileRow = row;
       if (!row) {
@@ -301,7 +315,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
         const { data: inserted } = await supabase
           .from('profiles')
           .insert({ id: userId, email, full_name: metaName })
-          .select('id, full_name, email, location, avatar_url, role, address_city, address_state')
+          .select('id, full_name, email, location, avatar_url, role, address_city, address_state, volunteer_active, responder_active, alert_radius_mi')
           .maybeSingle();
         profileRow = inserted;
       }
@@ -319,6 +333,11 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
         setVerifications(verifRow as Verifications);
         if ((verifRow as any).phone) setPhoneNumber((verifRow as any).phone);
       }
+
+      const { data: vc } = await supabase.rpc('help_alerts_week_count', { kind: 'volunteer' });
+      const { data: rc } = await supabase.rpc('help_alerts_week_count', { kind: 'responder' });
+      if (typeof vc === 'number') setVolCount(vc);
+      if (typeof rc === 'number') setRespCount(rc);
 
       const { data: modData } = await supabase
         .from('moderation_queue')
@@ -773,6 +792,99 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
               <View style={[styles.roleChip, styles.roleChipOn, { paddingHorizontal: 10, paddingVertical: 6, maxWidth: 140 }]}>
                 <Text style={[styles.roleChipTxt, styles.roleChipTxtOn]} numberOfLines={1}>{roleLabel}</Text>
               </View>
+            </View>
+
+            <View style={styles.helpCard}>
+              <Text style={styles.helpKicker}>I CAN HELP</Text>
+              <View style={styles.helpRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.helpLabel}>Volunteer</Text>
+                  {profile?.volunteer_active ? (
+                    <Text style={styles.helpActive}>Active · {volCount} alerts this week</Text>
+                  ) : (
+                    <Text style={styles.helpHint}>Lost, stray, foster & support nearby</Text>
+                  )}
+                </View>
+                <Switch
+                  value={Boolean(profile?.volunteer_active)}
+                  onValueChange={async (v) => {
+                    const { error } = await supabase.from('profiles').update({ volunteer_active: v }).eq('id', userId);
+                    if (error) { setBanner({ kind: 'error', message: error.message || 'Could not update volunteer status.' }); return; }
+                    setProfile((p) => p ? { ...p, volunteer_active: v } : p);
+                  }}
+                  trackColor={{ false: Colors.borderInput, true: Colors.teal }}
+                  thumbColor={Colors.white}
+                />
+              </View>
+              {(() => {
+                const idOk = verifications.id_status === 'verified' || verifications.id_status === 'approved' || verifications.id_verified;
+                const phoneOk = verifications.phone_verified;
+                const trainOk = verifications.responder_training === 'passed';
+                const responderOk = idOk && phoneOk && trainOk;
+                const missing: { label: string }[] = [];
+                if (!idOk) missing.push({ label: 'Government ID' });
+                if (!phoneOk) missing.push({ label: 'Phone' });
+                if (!trainOk) missing.push({ label: 'Responder training' });
+                return (
+                  <View style={styles.helpRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.helpLabel, !responderOk && { color: Colors.textTertiary }]}>First responder</Text>
+                      {profile?.responder_active && responderOk ? (
+                        <Text style={styles.helpActive}>Active · {respCount} alerts this week</Text>
+                      ) : responderOk ? (
+                        <Text style={styles.helpHint}>Emergencies & cruelty reports nearby</Text>
+                      ) : (
+                        <TouchableOpacity onPress={() => setBanner({ kind: 'info', message: `Complete verification: ${missing.map((m) => m.label).join(', ')}.` })}>
+                          <Text style={styles.helpLock}>Complete verification → {missing.map((m) => m.label).join(', ')}</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                    <Switch
+                      value={Boolean(profile?.responder_active) && responderOk}
+                      disabled={!responderOk}
+                      onValueChange={async (v) => {
+                        const { error } = await supabase.from('profiles').update({ responder_active: v }).eq('id', userId);
+                        if (error) { setBanner({ kind: 'error', message: error.message || 'Could not update responder status.' }); return; }
+                        setProfile((p) => p ? { ...p, responder_active: v } : p);
+                      }}
+                      trackColor={{ false: Colors.borderInput, true: Colors.coral }}
+                      thumbColor={Colors.white}
+                    />
+                  </View>
+                );
+              })()}
+              <Text style={styles.helpRadiusLabel}>Alert radius · {profile?.alert_radius_mi || 5} mi</Text>
+              {Platform.OS === 'web' ? (
+                <input
+                  type="range"
+                  min={1}
+                  max={25}
+                  value={profile?.alert_radius_mi || 5}
+                  onChange={async (e: any) => {
+                    const n = Math.max(1, Math.min(25, parseInt(e.target.value, 10) || 5));
+                    setProfile((p) => p ? { ...p, alert_radius_mi: n } : p);
+                    const { error } = await supabase.from('profiles').update({ alert_radius_mi: n }).eq('id', userId);
+                    if (error) setBanner({ kind: 'error', message: error.message || 'Could not save radius.' });
+                  }}
+                  style={{ width: '100%', accentColor: Colors.navy }}
+                />
+              ) : (
+                <View style={styles.radiusPills}>
+                  {[1, 5, 10, 15, 25].map((n) => (
+                    <TouchableOpacity
+                      key={n}
+                      style={[styles.radiusPill, (profile?.alert_radius_mi || 5) === n && styles.radiusPillOn]}
+                      onPress={async () => {
+                        setProfile((p) => p ? { ...p, alert_radius_mi: n } : p);
+                        const { error } = await supabase.from('profiles').update({ alert_radius_mi: n }).eq('id', userId);
+                        if (error) setBanner({ kind: 'error', message: error.message || 'Could not save radius.' });
+                      }}
+                    >
+                      <Text style={[styles.radiusPillTxt, (profile?.alert_radius_mi || 5) === n && styles.radiusPillTxtOn]}>{n} mi</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
             </View>
 
             <View style={styles.section}>
@@ -1603,6 +1715,19 @@ const styles = StyleSheet.create({
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   userName: { fontSize: FontSizes.xl, fontFamily: Fonts.extrabold, color: Colors.text },
   userSubtitle: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 4 },
+  helpCard: { backgroundColor: Colors.white, borderRadius: 16, borderWidth: 1, borderColor: Colors.border, padding: 14, gap: 10, marginBottom: 20 },
+  helpKicker: { fontFamily: Fonts.extrabold, fontSize: 11, color: Colors.textTertiary, letterSpacing: 0.8 },
+  helpRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  helpLabel: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.navy },
+  helpHint: { fontFamily: Fonts.regular, fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
+  helpActive: { fontFamily: Fonts.semibold, fontSize: 12, color: Colors.tealDark, marginTop: 2 },
+  helpLock: { fontFamily: Fonts.semibold, fontSize: 12, color: Colors.coral, marginTop: 2 },
+  helpRadiusLabel: { fontFamily: Fonts.semibold, fontSize: 12, color: Colors.textSecondary, marginTop: 4 },
+  radiusPills: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  radiusPill: { borderWidth: 1, borderColor: Colors.border, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
+  radiusPillOn: { backgroundColor: Colors.navy, borderColor: Colors.navy },
+  radiusPillTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy },
+  radiusPillTxtOn: { color: Colors.white },
 
   // Sections
   section: { marginBottom: 24 },

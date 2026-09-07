@@ -10,6 +10,8 @@ import { supabase } from '@/lib/supabase';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 import { SUPPORT_EMAIL } from '@/lib/contact';
+import { useAuth } from '@/lib/context/AuthContext';
+import { loadHelpFlags, loadHelpAlerts } from '@/lib/help-alerts';
 
 const TYPE_LABEL: Record<string, string> = {
   lost: 'Lost pet', stray: 'Found stray', injured: 'Injured animal',
@@ -78,23 +80,35 @@ const CAMPAIGNS = [
 ];
 
 export default function ReportsTabScreen() {
+  const { user } = useAuth();
   const [tab, setTab] = useState<Tab>('reports');
   const [reports, setReports] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [radiusLabel, setRadiusLabel] = useState<string | null>(null);
 
   const loadReports = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from('reports')
-        .select('id, report_type, severity, status, pet_name, location_address, created_at, description')
-        .order('created_at', { ascending: false })
-        .limit(50);
-      if (!error && data) setReports(data);
+      const flags = user?.id ? await loadHelpFlags(user.id) : null;
+      if (flags?.volunteer_active || flags?.responder_active) setRadiusLabel(`${flags.alert_radius_mi} mi`);
+      else setRadiusLabel(null);
+      let lat: number | null = null;
+      let lng: number | null = null;
+      try {
+        if (typeof navigator !== 'undefined' && navigator.geolocation) {
+          const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 8000, maximumAge: 60000 });
+          });
+          lat = pos.coords.latitude;
+          lng = pos.coords.longitude;
+        }
+      } catch { /* no geo */ }
+      const data = await loadHelpAlerts({ lat, lng, flags, limit: 50 });
+      setReports(data || []);
     } catch { /* ignore */ }
     setLoading(false);
     setRefreshing(false);
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => { loadReports(); }, [loadReports]);
   useFocusEffect(useCallback(() => { loadReports(); }, [loadReports]));
@@ -123,6 +137,7 @@ export default function ReportsTabScreen() {
           <TouchableOpacity style={styles.newBtn} onPress={() => router.push('/lost-stray-report')} activeOpacity={0.85}>
             <Text style={styles.newBtnText}>+  New report</Text>
           </TouchableOpacity>
+          {radiusLabel ? <Text style={styles.noteText}>Showing alerts within {radiusLabel} based on your I can help settings.</Text> : null}
 
           {loading ? (
             <ActivityIndicator size="large" color={Colors.coral} style={{ marginTop: 40 }} />

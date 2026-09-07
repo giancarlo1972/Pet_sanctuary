@@ -151,7 +151,7 @@ export default function ManageScreen() {
 
   const decideId = async (userId: string, ok: boolean) => {
     const { error } = await supabase.from('user_verifications').update({
-      id_status: ok ? 'approved' : 'rejected',
+      id_status: ok ? 'verified' : 'rejected',
       id_verified: ok,
     }).eq('user_id', userId);
     if (error) fail(error, 'Could not update ID.');

@@ -34,6 +34,7 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
+import { loadHelpFlags, loadHelpAlerts, type HelpFlags } from '@/lib/help-alerts';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 import SignedImage from '@/components/SignedImage';
@@ -127,6 +128,8 @@ export default function HomeScreen() {
   }, []);
   const [featured, setFeatured] = useState<Pet[]>([]);
   const [liveAlerts, setLiveAlerts] = useState<Report[]>([]);
+  const [trending, setTrending] = useState<Report[]>([]);
+  const [helpFlags, setHelpFlags] = useState<HelpFlags | null>(null);
   const [loading, setLoading] = useState(true);
   const [nearbyAlert, setNearbyAlert] = useState<NearbyReport | null>(null);
   const [nearbyDismissed, setNearbyDismissed] = useState(false);
@@ -150,15 +153,24 @@ export default function HomeScreen() {
 
   const loadAlerts = useCallback(async () => {
     try {
-      const { data } = await supabase
-        .from('reports')
-        .select('id, report_type, severity, pet_name, location_address, created_at')
-        .eq('status', 'active')
-        .order('created_at', { ascending: false })
-        .limit(3);
-      setLiveAlerts(data || []);
+      let flags: HelpFlags | null = null;
+      if (user?.id) flags = await loadHelpFlags(user.id);
+      setHelpFlags(flags);
+      const loc = locationRef.current;
+      const rows = await loadHelpAlerts({ lat: loc?.lat, lng: loc?.lng, flags, limit: 12 });
+      const mapped = (rows || []).map((r: any) => ({
+        id: r.id,
+        report_type: r.report_type,
+        severity: r.severity,
+        pet_name: r.pet_name,
+        location_address: r.location_address,
+        created_at: r.created_at,
+      }));
+      setLiveAlerts(mapped.slice(0, 3));
+      const rank = (s: string | null) => (s === 'critical' ? 0 : s === 'urgent' ? 1 : 2);
+      setTrending([...mapped].sort((a, b) => rank(a.severity) - rank(b.severity) || String(b.created_at).localeCompare(String(a.created_at))).slice(0, 3));
     } catch { /* ignore */ }
-  }, []);
+  }, [user?.id]);
 
   const loadStories = useCallback(async () => {
     try {
@@ -243,7 +255,7 @@ export default function HomeScreen() {
       if (!loc) return;
       try {
         const { data, error } = await supabase.rpc('nearby_reports', {
-          p_lat: loc.lat, p_lng: loc.lng, p_radius_km: 3,
+          p_lat: loc.lat, p_lng: loc.lng, p_radius_km: Math.round((helpFlags?.alert_radius_mi || 5) * 1.609),
         });
         if (error) {
           pollFailuresRef.current += 1;
@@ -265,7 +277,7 @@ export default function HomeScreen() {
       poll();
     }, 60000);
     return () => clearInterval(interval);
-  }, [session]);
+  }, [session, helpFlags?.alert_radius_mi]);
 
   const renderFeaturedCard = (pet: Pet) => (
     <TouchableOpacity
@@ -412,13 +424,27 @@ export default function HomeScreen() {
           {liveAlerts.length > 0 && (
             <View style={styles.section}>
               <View style={styles.sectionHeaderRow}>
-                <Text style={styles.sectionTitle}>Live alerts</Text>
+                <Text style={styles.sectionTitle}>Live alerts{helpFlags?.volunteer_active || helpFlags?.responder_active ? ` · ${helpFlags.alert_radius_mi} mi` : ''}</Text>
                 <TouchableOpacity onPress={() => router.push('/(tabs)/reports')} activeOpacity={0.7}>
                   <Text style={styles.viewAllLink}>View all</Text>
                 </TouchableOpacity>
               </View>
               <View style={styles.alertList}>
                 {liveAlerts.slice(0, 3).map(renderAlertRow)}
+              </View>
+            </View>
+          )}
+
+          {trending.length > 0 && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.sectionTitle}>Trending</Text>
+                <TouchableOpacity onPress={() => router.push('/(tabs)/reports')} activeOpacity={0.7}>
+                  <Text style={styles.viewAllLink}>View all</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.alertList}>
+                {trending.map(renderAlertRow)}
               </View>
             </View>
           )}

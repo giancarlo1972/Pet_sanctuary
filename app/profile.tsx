@@ -1109,6 +1109,15 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
               )}
             </View>
 
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Rescue Army</Text>
+              <DrawerMenuItem icon={<MapPin color={Colors.coral} size={18} />} title="Nearby clinics & shelters" onPress={() => { closeDrawer(); router.push('/nearby-clinics'); }} />
+              <DrawerMenuItem icon={<PawPrint color={Colors.teal} size={18} />} title="Pet record (Gina)" onPress={() => { closeDrawer(); router.push('/pet-care'); }} />
+              <DrawerMenuItem icon={<FileText color={Colors.navy} size={18} />} title="Invoices" onPress={() => { closeDrawer(); router.push('/invoices'); }} />
+              <DrawerMenuItem icon={<Shield color={Colors.navy} size={18} />} title="Admin" onPress={() => { closeDrawer(); router.push('/admin'); }} />
+              <DrawerMenuItem icon={<Bell color={Colors.coral} size={18} />} title="Updates" onPress={() => { closeDrawer(); router.push('/updates'); }} />
+            </View>
+
             {/* Activity links */}
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>My Activity</Text>

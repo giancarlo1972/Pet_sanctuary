@@ -60,7 +60,7 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import AppHeader from '@/components/AppHeader';
-import { Page } from '@/components/Page';
+import { Page, CONTENT_MAX } from '@/components/Page';
 import { WeightLineChart, LabSparkline } from '@/components/PetCharts';
 
 function blobTypeFromName(path: string) {
@@ -429,6 +429,34 @@ function ageFromDob(dob?: string | null, ageText?: string | null) {
   return ageText || null;
 }
 
+function firstIso(...vals: any[]): string | null {
+  for (const v of vals) {
+    const s = v == null ? '' : String(v).trim();
+    const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+function mapVaxRow(v: any, clinic?: string | null) {
+  const given = firstIso(
+    v.administered_on, v.administered_date, v.given_on, v.given, v.date_given,
+    v.vaccination_date, v.dateAdministered, v.date_administered, v.date,
+  );
+  let due = firstIso(v.next_due, v.next_due_on, v.valid_until, v.expires_on, v.due_date, v.expires);
+  if (given && due && given > due) {
+    const swap = given;
+    return {
+      given: due,
+      due: swap,
+    };
+  }
+  if (!given && due) {
+    return { given: due, due: null };
+  }
+  return { given, due: due && due !== given ? due : null };
+}
+
 function StatusTile({
   icon: Icon,
   label,
@@ -576,6 +604,7 @@ export default function PetRecordScreen() {
   const [editableWeight, setEditableWeight] = useState<ExtractedWeight>({ value: null, unit: null, measured_on: null });
   const [editableProcedures, setEditableProcedures] = useState<ExtractedProcedure[]>([]);
   const [applyingExtraction, setApplyingExtraction] = useState(false);
+  const [confirmEdit, setConfirmEdit] = useState<Set<string>>(new Set());
 
   const [photoUploading, setPhotoUploading] = useState(false);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
@@ -1221,37 +1250,42 @@ export default function PetRecordScreen() {
   };
 
   const openConfirmFromParse = (documentId: string, parsed: any) => {
-    console.log('[parse-pet-document] vaccines', parsed.vaccinations);
-    const vax = (parsed.vaccinations || []).map((v: any) => ({
-      vaccine: v.name || v.vaccine || v.product || '',
-      brand: v.brand || null,
-      dose: v.dose || null,
-      administered_on: v.date || v.given_on || v.administered_on || null,
-      next_due_on: v.next_due || v.valid_until || v.expires_on || v.next_due_on || null,
-      duration_years: null,
-      manufacturer: v.brand || v.manufacturer || null,
-      lot_number: v.lot || v.lot_number || null,
-      lot_expires_on: null,
-      injection_site: null,
-      vaccine_type: null,
-      tag_number: null,
-      vet_name: null,
-      vet_license: null,
-      clinic_name: v.clinic || parsed.clinic || null,
-      reactions: v.reactions || null,
-    }));
+    console.log('[parse-pet-document] vaccinations[0]', parsed.vaccinations?.[0]);
+    const vax = (parsed.vaccinations || []).map((v: any) => {
+      const dates = mapVaxRow(v);
+      return {
+        vaccine: v.name || v.vaccine || v.product || v.brand || '',
+        brand: v.brand || v.product || null,
+        dose: v.dose || null,
+        administered_on: dates.given,
+        next_due_on: dates.due,
+        duration_years: null,
+        manufacturer: v.manufacturer || v.maker || v.company || v.mfr || v.brand || null,
+        lot_number: v.lot || v.lot_number || v.lotNumber || v.lot_no || v.serial || v.serial_number || null,
+        lot_expires_on: firstIso(v.lot_expires_on, v.lot_expiry, v.lot_expires),
+        injection_site: v.injection_site || v.site || null,
+        vaccine_type: v.vaccine_type || v.type || null,
+        tag_number: v.tag_number || v.tag || null,
+        vet_name: v.vet_name || v.vet || v.veterinarian || v.doctor || v.provider || v.clinician || null,
+        vet_license: v.vet_license || v.license || v.vet_license_no || null,
+        clinic_name: v.clinic || v.clinic_name || parsed.clinic || null,
+        reactions: v.reactions || null,
+      };
+    });
     const labs = (parsed.labs || []).map((l: any) => {
-      const printed = l.value == null ? '' : String(l.value);
-      const low = printed.trim().toLowerCase();
-      const qualitative = low === 'detected' || low === 'not detected' || low === 'not-detected' || low === 'undetected';
-      let flag = l.flag || null;
+      const printed = [l.value_text, l.result, l.value]
+        .map((x) => (x == null ? '' : String(x).trim()))
+        .find((s) => s && s.toLowerCase() !== 'unknown') || '';
+      const numericOnly = /^-?\d+(\.\d+)?$/.test(printed);
+      let flag = l.flag && String(l.flag).toLowerCase() !== 'unknown' ? l.flag : null;
+      const low = printed.toLowerCase();
       if (low === 'detected') flag = 'abnormal';
       else if (low === 'not detected' || low === 'not-detected' || low === 'undetected') flag = 'normal';
       return {
         analyte: l.analyte || l.name || '',
-        value_num: qualitative ? null : (typeof l.value === 'number' ? l.value : (parseFloat(printed) || null)),
+        value_num: numericOnly ? parseFloat(printed) : (typeof l.value === 'number' ? l.value : null),
         value_text: printed || null,
-        unit: qualitative ? null : (l.unit || null),
+        unit: l.unit && !printed.includes(String(l.unit)) ? l.unit : (numericOnly ? (l.unit || null) : null),
         ref_low: null,
         ref_high: null,
         flag,
@@ -1284,6 +1318,7 @@ export default function PetRecordScreen() {
     setEditableLabs(labs.length ? [{ panel_name: 'Labs', collected_on: parsed.date || null, clinic_name: parsed.clinic || null, vet_name: null, results: labs }] : []);
     setEditableWeight(wt);
     setEditableProcedures(visits);
+    setConfirmEdit(new Set());
     setExtractionReview({
       documentId,
       data: { vaccinations: vax, lab_panels: [], weight: wt, procedures: visits, identity: { microchip: null, date_of_birth: null, sex: null, breed: null, colors: null } },
@@ -3041,117 +3076,129 @@ export default function PetRecordScreen() {
 
       {/* === Extraction Review Modal === */}
       {extractionReview && (
-        <Modal visible={true} animationType="slide" transparent onRequestClose={() => setExtractionReview(null)}>
-          <View style={styles.modalOverlay}>
-            <ScrollView style={styles.modalScroll}>
-              <View style={styles.modalCard}>
-                <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>Review AI Extraction</Text>
-                  <TouchableOpacity onPress={() => setExtractionReview(null)}>
-                    <Text style={styles.modalCloseText}>Dismiss</Text>
-                  </TouchableOpacity>
-                </View>
-
+        <Modal visible animationType="slide" onRequestClose={() => setExtractionReview(null)}>
+          <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }}>
+            <View style={{ flex: 1, width: '100%', maxWidth: CONTENT_MAX, alignSelf: 'center' }}>
+              <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8 }}>
+                <Text style={styles.modalTitle}>Review extraction</Text>
                 <Text style={styles.extractionSummary}>
-                  AI found {editableVax.length} vaccination{editableVax.length !== 1 ? 's' : ''}, {extractionReview.visitsCount} visit{extractionReview.visitsCount !== 1 ? 's' : ''}, {extractionReview.labsCount} lab value{extractionReview.labsCount !== 1 ? 's' : ''}
-                  {editableWeight.value != null ? ' and a weight' : ''} — confirm to add them to the record.
+                  {editableVax.length} vaccination{editableVax.length !== 1 ? 's' : ''} · {extractionReview.visitsCount} visit{extractionReview.visitsCount !== 1 ? 's' : ''} · {extractionReview.labsCount} lab{extractionReview.labsCount !== 1 ? 's' : ''}
+                  {editableWeight.value != null ? ' · weight' : ''}
                 </Text>
-
-                {/* Vaccinations */}
-                <View style={styles.extractionSection}>
-                    <Text style={styles.extractionSectionTitle}>Vaccinations</Text>
-                    {editableVax.length === 0 ? (
-                      <Text style={styles.emptyText}>None extracted from this visit — add if listed on the record.</Text>
-                    ) : editableVax.map((vax, i) => (
-                      <View key={i} style={[styles.extractionItem, extractionReview.vaxDuplicates.has(i) && styles.extractionItemDuplicate]}>
-                        {extractionReview.vaxDuplicates.has(i) && (
-                          <View style={styles.duplicateBadge}>
-                            <Text style={styles.duplicateBadgeText}>Already recorded</Text>
+              </View>
+              <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24, gap: 12 }} showsVerticalScrollIndicator={false}>
+                {editableVax.map((vax, i) => {
+                  const editing = confirmEdit.has(`vax-${i}`);
+                  const rows: [string, string | null][] = [
+                    ['Given', vax.administered_on],
+                    ['Next due', vax.next_due_on],
+                    ['Manufacturer', vax.manufacturer],
+                    ['Lot', vax.lot_number],
+                    ['Vet', vax.vet_name],
+                    ['Clinic', vax.clinic_name],
+                    ['Dose', (vax as any).dose || null],
+                  ];
+                  return (
+                    <View key={`vax-${i}`} style={[styles.confirmCard, extractionReview.vaxDuplicates.has(i) && styles.extractionItemDuplicate]}>
+                      <View style={styles.ovCardHead}>
+                        <Text style={styles.docTitle}>{vax.vaccine || 'Vaccine'}</Text>
+                        <TouchableOpacity onPress={() => setConfirmEdit((s) => { const n = new Set(s); n.has(`vax-${i}`) ? n.delete(`vax-${i}`) : n.add(`vax-${i}`); return n; })}>
+                          <Text style={styles.linkTxt}>{editing ? 'Done' : 'Edit'}</Text>
+                        </TouchableOpacity>
+                      </View>
+                      {extractionReview.vaxDuplicates.has(i) ? <Text style={styles.duplicateBadgeText}>Already recorded</Text> : null}
+                      {editing ? (
+                        <>
+                          <TextInput style={styles.extractionInput} value={vax.vaccine || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, vaccine: val } : v))} placeholder="Vaccine" placeholderTextColor={Colors.textTertiary} />
+                          <View style={styles.extractionRow}>
+                            <TextInput style={styles.extractionInputHalf} value={vax.administered_on || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, administered_on: val } : v))} placeholder="Given" placeholderTextColor={Colors.textTertiary} />
+                            <TextInput style={styles.extractionInputHalf} value={vax.next_due_on || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, next_due_on: val } : v))} placeholder="Next due" placeholderTextColor={Colors.textTertiary} />
                           </View>
-                        )}
-                        <TextInput style={styles.extractionInput} value={vax.vaccine || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, vaccine: val } : v))} placeholder="Vaccine name" placeholderTextColor={Colors.textTertiary} />
-                        <View style={styles.extractionRow}>
-                          <TextInput style={styles.extractionInputHalf} value={vax.administered_on || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, administered_on: val } : v))} placeholder="Given (YYYY-MM-DD)" placeholderTextColor={Colors.textTertiary} />
-                          <TextInput style={styles.extractionInputHalf} value={vax.next_due_on || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, next_due_on: val } : v))} placeholder="Next due (YYYY-MM-DD)" placeholderTextColor={Colors.textTertiary} />
-                        </View>
-                        <TextInput style={styles.extractionInput} value={vax.manufacturer || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, manufacturer: val } : v))} placeholder="Manufacturer" placeholderTextColor={Colors.textTertiary} />
-                        <View style={styles.extractionRow}>
-                          <TextInput style={styles.extractionInputHalf} value={vax.lot_number || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, lot_number: val } : v))} placeholder="Lot number" placeholderTextColor={Colors.textTertiary} />
-                          <TextInput style={styles.extractionInputHalf} value={vax.clinic_name || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, clinic_name: val } : v))} placeholder="Clinic" placeholderTextColor={Colors.textTertiary} />
-                        </View>
-                        <View style={styles.extractionRow}>
-                          <TextInput style={styles.extractionInputHalf} value={vax.vet_name || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, vet_name: val } : v))} placeholder="Vet name" placeholderTextColor={Colors.textTertiary} />
-                          <TextInput style={styles.extractionInputHalf} value={vax.vet_license || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, vet_license: val } : v))} placeholder="Vet license" placeholderTextColor={Colors.textTertiary} />
-                        </View>
-                      </View>
-                    ))}
-                  </View>
-
-                {/* Lab Panels */}
-                {editableLabs.length > 0 && (
-                  <View style={styles.extractionSection}>
-                    <Text style={styles.extractionSectionTitle}>Lab Panels</Text>
-                    {editableLabs.map((panel, pi) => (
-                      <View key={pi} style={styles.extractionItem}>
-                        <TextInput style={styles.extractionInput} value={panel.panel_name || ''} onChangeText={(val) => setEditableLabs((prev) => prev.map((p, idx) => idx === pi ? { ...p, panel_name: val } : p))} placeholder="Panel name" placeholderTextColor={Colors.textTertiary} />
-                        <View style={styles.extractionRow}>
-                          <TextInput style={styles.extractionInputHalf} value={panel.collected_on || ''} onChangeText={(val) => setEditableLabs((prev) => prev.map((p, idx) => idx === pi ? { ...p, collected_on: val } : p))} placeholder="Collected (YYYY-MM-DD)" placeholderTextColor={Colors.textTertiary} />
-                          <TextInput style={styles.extractionInputHalf} value={panel.vet_name || ''} onChangeText={(val) => setEditableLabs((prev) => prev.map((p, idx) => idx === pi ? { ...p, vet_name: val } : p))} placeholder="Vet name" placeholderTextColor={Colors.textTertiary} />
-                        </View>
-                        {(panel.results || []).map((result, ri) => (
-                          <View key={ri} style={styles.extractionResultRow}>
-                            <TextInput style={styles.extractionInputSmall} value={result.analyte || ''} onChangeText={(val) => setEditableLabs((prev) => prev.map((p, idx) => idx === pi ? { ...p, results: p.results.map((r, ridx) => ridx === ri ? { ...r, analyte: val } : r) } : p))} placeholder="Analyte" placeholderTextColor={Colors.textTertiary} />
-                            <TextInput style={styles.extractionInputSmall} value={result.value_text || (result.value_num != null ? String(result.value_num) : '')} onChangeText={(val) => setEditableLabs((prev) => prev.map((p, idx) => idx === pi ? { ...p, results: p.results.map((r, ridx) => ridx === ri ? { ...r, value_text: val, value_num: null } : r) } : p))} placeholder="Value" placeholderTextColor={Colors.textTertiary} />
-                            <TextInput style={styles.extractionInputSmall} value={result.unit || ''} onChangeText={(val) => setEditableLabs((prev) => prev.map((p, idx) => idx === pi ? { ...p, results: p.results.map((r, ridx) => ridx === ri ? { ...r, unit: val } : r) } : p))} placeholder="Unit" placeholderTextColor={Colors.textTertiary} />
-                            <TextInput style={styles.extractionInputSmall} value={result.flag || ''} onChangeText={(val) => setEditableLabs((prev) => prev.map((p, idx) => idx === pi ? { ...p, results: p.results.map((r, ridx) => ridx === ri ? { ...r, flag: val } : r) } : p))} placeholder="Flag" placeholderTextColor={Colors.textTertiary} />
-                          </View>
-                        ))}
-                      </View>
-                    ))}
-                  </View>
-                )}
-
-                {/* Weight */}
-                {editableWeight.value != null && (
-                  <View style={styles.extractionSection}>
-                    <Text style={styles.extractionSectionTitle}>Weight</Text>
-                    <View style={styles.extractionItem}>
-                      <Text style={styles.extractionSummary}>
-                        {editableWeight.originalUnit === 'kg'
-                          ? `${editableWeight.value} lb (from ${editableWeight.originalValue} kg)`
-                          : `${editableWeight.value} lb`}
-                      </Text>
-                      <View style={styles.extractionRow}>
-                        <TextInput style={styles.extractionInputHalf} value={String(editableWeight.value || '')} onChangeText={(val) => setEditableWeight((prev) => ({ ...prev, value: parseFloat(val) || null }))} placeholder="Weight (lb)" placeholderTextColor={Colors.textTertiary} keyboardType="numeric" />
-                        <TextInput style={styles.extractionInputHalf} value={editableWeight.unit || 'lb'} onChangeText={(val) => setEditableWeight((prev) => ({ ...prev, unit: val }))} placeholder="Unit" placeholderTextColor={Colors.textTertiary} />
-                      </View>
-                      <TextInput style={styles.extractionInput} value={editableWeight.measured_on || ''} onChangeText={(val) => setEditableWeight((prev) => ({ ...prev, measured_on: val }))} placeholder="Measured on (YYYY-MM-DD)" placeholderTextColor={Colors.textTertiary} />
+                          <TextInput style={styles.extractionInput} value={vax.manufacturer || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, manufacturer: val } : v))} placeholder="Manufacturer" placeholderTextColor={Colors.textTertiary} />
+                          <TextInput style={styles.extractionInput} value={vax.lot_number || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, lot_number: val } : v))} placeholder="Lot" placeholderTextColor={Colors.textTertiary} />
+                          <TextInput style={styles.extractionInput} value={vax.vet_name || ''} onChangeText={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, vet_name: val } : v))} placeholder="Vet" placeholderTextColor={Colors.textTertiary} />
+                        </>
+                      ) : rows.filter(([, val]) => val).map(([label, val]) => (
+                        <Text key={label} style={styles.confirmLine}><Text style={styles.confirmK}>{label}  </Text>{val}</Text>
+                      ))}
                     </View>
-                  </View>
-                )}
-
-                {editableProcedures.length > 0 && (
-                  <View style={styles.extractionSection}>
-                    <Text style={styles.extractionSectionTitle}>Visit</Text>
-                    {editableProcedures.map((proc, i) => (
-                      <View key={i} style={styles.extractionItem}>
-                        <View style={styles.extractionRow}>
-                          <TextInput style={styles.extractionInputHalf} value={proc.title || ''} onChangeText={(val) => setEditableProcedures((prev) => prev.map((p, idx) => idx === i ? { ...p, title: val } : p))} placeholder="Reason" placeholderTextColor={Colors.textTertiary} />
-                          <TextInput style={styles.extractionInputHalf} value={proc.occurred_on || ''} onChangeText={(val) => setEditableProcedures((prev) => prev.map((p, idx) => idx === i ? { ...p, occurred_on: val } : p))} placeholder="Date (YYYY-MM-DD)" placeholderTextColor={Colors.textTertiary} />
-                        </View>
-                        <Text style={styles.modalLabel}>Clinical summary</Text>
-                        <TextInput style={[styles.extractionInput, styles.modalInputMultiline]} value={proc.notes || ''} onChangeText={(val) => setEditableProcedures((prev) => prev.map((p, idx) => idx === i ? { ...p, notes: val } : p))} placeholder="Clinical summary" placeholderTextColor={Colors.textTertiary} multiline numberOfLines={3} />
+                  );
+                })}
+                {editableLabs.flatMap((panel, pi) => (panel.results || []).map((result, ri) => {
+                  const key = `lab-${pi}-${ri}`;
+                  const editing = confirmEdit.has(key);
+                  const shown = [result.value_text, result.value_num != null ? String(result.value_num) : '', result.unit].filter(Boolean).join(' ');
+                  return (
+                    <View key={key} style={styles.confirmCard}>
+                      <View style={styles.ovCardHead}>
+                        <Text style={styles.docTitle}>{result.analyte || 'Lab'}</Text>
+                        <TouchableOpacity onPress={() => setConfirmEdit((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; })}>
+                          <Text style={styles.linkTxt}>{editing ? 'Done' : 'Edit'}</Text>
+                        </TouchableOpacity>
                       </View>
-                    ))}
+                      {editing ? (
+                        <View style={styles.extractionRow}>
+                          <TextInput style={styles.extractionInputSmall} value={result.value_text || ''} onChangeText={(val) => setEditableLabs((prev) => prev.map((p, idx) => idx === pi ? { ...p, results: p.results.map((r, ridx) => ridx === ri ? { ...r, value_text: val } : r) } : p))} placeholder="Value" placeholderTextColor={Colors.textTertiary} />
+                          <TextInput style={styles.extractionInputSmall} value={result.unit || ''} onChangeText={(val) => setEditableLabs((prev) => prev.map((p, idx) => idx === pi ? { ...p, results: p.results.map((r, ridx) => ridx === ri ? { ...r, unit: val } : r) } : p))} placeholder="Unit" placeholderTextColor={Colors.textTertiary} />
+                        </View>
+                      ) : (
+                        <>
+                          {shown ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Result  </Text>{shown}</Text> : null}
+                          {result.flag ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Flag  </Text>{result.flag}</Text> : null}
+                          {panel.collected_on ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Collected  </Text>{panel.collected_on}</Text> : null}
+                        </>
+                      )}
+                    </View>
+                  );
+                }))}
+                {editableWeight.value != null ? (
+                  <View style={styles.confirmCard}>
+                    <Text style={styles.docTitle}>Weight</Text>
+                    <Text style={styles.confirmLine}>
+                      {editableWeight.originalUnit === 'kg'
+                        ? `${editableWeight.value} lb (from ${editableWeight.originalValue} kg)`
+                        : `${editableWeight.value} lb`}
+                      {editableWeight.measured_on ? ` · ${editableWeight.measured_on}` : ''}
+                    </Text>
                   </View>
-                )}
-
-                <TouchableOpacity style={[styles.modalSubmitBtn, applyingExtraction && styles.btnDisabled]} onPress={applyExtraction} disabled={applyingExtraction} activeOpacity={0.85}>
-                  {applyingExtraction ? <ActivityIndicator size="small" color={Colors.white} /> : <Text style={styles.modalSubmitText}>Confirm</Text>}
+                ) : null}
+                {editableProcedures.map((proc, i) => {
+                  const key = `visit-${i}`;
+                  const editing = confirmEdit.has(key);
+                  return (
+                    <View key={key} style={styles.confirmCard}>
+                      <View style={styles.ovCardHead}>
+                        <Text style={styles.docTitle}>{proc.title || 'Visit'}</Text>
+                        <TouchableOpacity onPress={() => setConfirmEdit((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; })}>
+                          <Text style={styles.linkTxt}>{editing ? 'Done' : 'Edit'}</Text>
+                        </TouchableOpacity>
+                      </View>
+                      {editing ? (
+                        <>
+                          <TextInput style={styles.extractionInput} value={proc.title || ''} onChangeText={(val) => setEditableProcedures((prev) => prev.map((p, idx) => idx === i ? { ...p, title: val } : p))} placeholder="Reason" placeholderTextColor={Colors.textTertiary} />
+                          <TextInput style={styles.extractionInput} value={proc.occurred_on || ''} onChangeText={(val) => setEditableProcedures((prev) => prev.map((p, idx) => idx === i ? { ...p, occurred_on: val } : p))} placeholder="Date" placeholderTextColor={Colors.textTertiary} />
+                          <TextInput style={[styles.extractionInput, styles.modalInputMultiline]} value={proc.notes || ''} onChangeText={(val) => setEditableProcedures((prev) => prev.map((p, idx) => idx === i ? { ...p, notes: val } : p))} placeholder="Clinical summary" placeholderTextColor={Colors.textTertiary} multiline />
+                        </>
+                      ) : (
+                        <>
+                          {proc.occurred_on ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Date  </Text>{proc.occurred_on}</Text> : null}
+                          {proc.notes ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Clinical summary  </Text>{proc.notes}</Text> : null}
+                        </>
+                      )}
+                    </View>
+                  );
+                })}
+              </ScrollView>
+              <View style={styles.confirmFooter}>
+                <TouchableOpacity style={[styles.coralConfirm, applyingExtraction && styles.btnDisabled]} onPress={applyExtraction} disabled={applyingExtraction} activeOpacity={0.85}>
+                  {applyingExtraction ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.coralConfirmTxt}>Confirm all</Text>}
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setExtractionReview(null)} style={{ paddingVertical: 12, alignItems: 'center' }}>
+                  <Text style={styles.modalCloseText}>Dismiss</Text>
                 </TouchableOpacity>
               </View>
-            </ScrollView>
-          </View>
+            </View>
+          </SafeAreaView>
         </Modal>
       )}
 
@@ -3496,4 +3543,10 @@ const styles = StyleSheet.create({
   extractingOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
   extractingCard: { backgroundColor: Colors.white, borderRadius: 20, padding: 32, alignItems: 'center', gap: 16 },
   extractingText: { fontSize: FontSizes.md, fontFamily: Fonts.semibold, color: Colors.text },
+  confirmCard: { backgroundColor: Colors.white, borderRadius: 16, padding: 14, borderWidth: 1, borderColor: Colors.border, gap: 6 },
+  confirmLine: { fontFamily: Fonts.medium, fontSize: 13, color: Colors.navy, lineHeight: 18 },
+  confirmK: { fontFamily: Fonts.extrabold, fontSize: 11, color: Colors.textTertiary, letterSpacing: 0.4 },
+  confirmFooter: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 8, borderTopWidth: 1, borderTopColor: Colors.border, backgroundColor: Colors.background, gap: 4 },
+  coralConfirm: { backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+  coralConfirmTxt: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.white },
 });

@@ -100,17 +100,27 @@ function normalizeLab(l) {
 }
 
 function normalizeVax(v) {
+  const given = v?.administered_on || v?.administered_date || v?.given_on || v?.given || v?.date_given || v?.date || null;
+  const due = v?.next_due || v?.next_due_on || v?.valid_until || v?.expires_on || v?.due_date || null;
+  let date = given;
+  let next_due = due;
+  if (date && next_due && String(date) > String(next_due)) {
+    const t = date; date = next_due; next_due = t;
+  }
+  if (!date && next_due) { date = next_due; next_due = null; }
   return {
     brand: v?.brand || v?.product || null,
     name: v?.name || v?.vaccine || v?.product || '',
     product: v?.product || v?.name || null,
-    lot: v?.lot || v?.lot_number || null,
+    manufacturer: v?.manufacturer || v?.maker || v?.company || v?.mfr || v?.brand || null,
+    lot: v?.lot || v?.lot_number || v?.lotNumber || v?.lot_no || v?.serial || null,
     dose: v?.dose || null,
-    date: v?.date || v?.given_on || v?.administered_on || null,
-    next_due: v?.next_due || v?.next_due_on || v?.valid_until || v?.expires_on || null,
-    valid_until: v?.valid_until || v?.expires_on || v?.next_due || null,
+    date,
+    next_due,
+    valid_until: v?.valid_until || v?.expires_on || next_due || null,
     reactions: v?.reactions || null,
-    clinic: v?.clinic || null,
+    clinic: v?.clinic || v?.clinic_name || null,
+    vet: v?.vet || v?.vet_name || v?.veterinarian || v?.doctor || v?.provider || null,
   };
 }
 
@@ -351,15 +361,7 @@ export async function onRequestPost(context) {
         ai_note: parsed.ai_note || null,
         owner_notes: Array.isArray(parsed.owner_notes) ? parsed.owner_notes.filter((n) => n && n.text) : [],
       };
-      console.log('[parse-pet-document] OK', model, {
-        documentId,
-        vax: vaccinations.length,
-        vaxNames: vaccinations.map((v) => v.name || v.product || v.brand),
-        visits: visits.length,
-        labs: labs.length,
-        conditions: conditions.length,
-        hasWeight: Boolean(weight?.value),
-      });
+      console.log('[parse-pet-document] vaccinations[0]', vaccinations[0]);
       if (documentId) {
         await updateDoc(env, documentId, {
           ai_status: 'ready',

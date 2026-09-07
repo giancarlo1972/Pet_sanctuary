@@ -1,4 +1,7 @@
 -- ON DUTY helpers. Geohash precision 5 only — never store lat/lng.
+-- Idempotent: add columns if an older help_requests stub already exists.
+
+ALTER TABLE user_verifications ADD COLUMN IF NOT EXISTS phone text;
 
 CREATE TABLE IF NOT EXISTS helper_status (
   user_id uuid PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
@@ -11,18 +14,41 @@ CREATE TABLE IF NOT EXISTS helper_status (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+ALTER TABLE helper_status ADD COLUMN IF NOT EXISTS on_duty boolean NOT NULL DEFAULT false;
+ALTER TABLE helper_status ADD COLUMN IF NOT EXISTS services text[] NOT NULL DEFAULT '{}';
+ALTER TABLE helper_status ADD COLUMN IF NOT EXISTS radius_mi integer NOT NULL DEFAULT 5;
+ALTER TABLE helper_status ADD COLUMN IF NOT EXISTS contact_prefs text[] NOT NULL DEFAULT ARRAY['inapp']::text[];
+ALTER TABLE helper_status ADD COLUMN IF NOT EXISTS geohash text;
+ALTER TABLE helper_status ADD COLUMN IF NOT EXISTS until_at timestamptz;
+ALTER TABLE helper_status ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+
 CREATE TABLE IF NOT EXISTS help_requests (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  requester_id uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  helper_id uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  requester_id uuid REFERENCES profiles(id) ON DELETE CASCADE,
+  helper_id uuid REFERENCES profiles(id) ON DELETE CASCADE,
   service text,
-  status text NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'accepted', 'declined', 'done')),
+  status text NOT NULL DEFAULT 'pending',
   requester_geohash text,
   note text,
   created_at timestamptz NOT NULL DEFAULT now(),
   decided_at timestamptz
 );
+
+ALTER TABLE help_requests ADD COLUMN IF NOT EXISTS requester_id uuid REFERENCES profiles(id) ON DELETE CASCADE;
+ALTER TABLE help_requests ADD COLUMN IF NOT EXISTS helper_id uuid REFERENCES profiles(id) ON DELETE CASCADE;
+ALTER TABLE help_requests ADD COLUMN IF NOT EXISTS service text;
+ALTER TABLE help_requests ADD COLUMN IF NOT EXISTS status text DEFAULT 'pending';
+ALTER TABLE help_requests ADD COLUMN IF NOT EXISTS requester_geohash text;
+ALTER TABLE help_requests ADD COLUMN IF NOT EXISTS note text;
+ALTER TABLE help_requests ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE help_requests ADD COLUMN IF NOT EXISTS decided_at timestamptz;
+
+DO $$ BEGIN
+  ALTER TABLE help_requests DROP CONSTRAINT IF EXISTS help_requests_status_check;
+  ALTER TABLE help_requests ADD CONSTRAINT help_requests_status_check
+    CHECK (status IN ('pending', 'accepted', 'declined', 'done'));
+EXCEPTION WHEN others THEN NULL;
+END $$;
 
 CREATE INDEX IF NOT EXISTS help_requests_helper_idx ON help_requests (helper_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS helper_status_duty_idx ON helper_status (on_duty, until_at) WHERE on_duty;
@@ -58,17 +84,6 @@ DROP TRIGGER IF EXISTS trg_helper_status_guard ON helper_status;
 CREATE TRIGGER trg_helper_status_guard
   BEFORE INSERT OR UPDATE ON helper_status
   FOR EACH ROW EXECUTE PROCEDURE public.helper_status_guard();
-
-CREATE OR REPLACE FUNCTION public.expire_helper_duty()
-RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-  IF NEW.until_at IS NOT NULL AND NEW.until_at < now() THEN
-    NEW.on_duty := false;
-    NEW.until_at := NULL;
-  END IF;
-  RETURN NEW;
-END;
-$$;
 
 ALTER TABLE helper_status ENABLE ROW LEVEL SECURITY;
 ALTER TABLE help_requests ENABLE ROW LEVEL SECURITY;
@@ -111,11 +126,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
     AND hs.geohash = ANY (p_hashes)
     AND hs.user_id <> auth.uid()
     AND coalesce(p.blocked, false) = false
-    AND auth.uid() IS NOT NULL
-    AND (
-      EXISTS (SELECT 1 FROM organization_members om WHERE om.user_id = auth.uid())
-      OR EXISTS (SELECT 1 FROM profiles me WHERE me.id = auth.uid())
-    );
+    AND auth.uid() IS NOT NULL;
 $$;
 GRANT EXECUTE ON FUNCTION public.helpers_on_duty_near(text[]) TO authenticated;
 

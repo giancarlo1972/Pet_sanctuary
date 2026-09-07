@@ -117,45 +117,61 @@ export default function MedicalDashboard(props: {
   const vitalsPts = (key: 'temp_f' | 'hr' | 'rr' | 'weight_lb' | 'bcs') =>
     props.vitals.filter((v) => v[key] != null).map((v) => ({ v: Number(v[key]), at: formatDate(v.recorded_at) }));
 
+  const [expand, setExpand] = useState<Record<string, boolean>>({});
+
   const wDelta = props.weightDelta;
   const bcsDelta = props.bcsDelta;
   const up = (d: number | null) => d != null && d > 0;
   const down = (d: number | null) => d != null && d < 0;
+  const Delta = ({ d }: { d: number | null }) => d == null ? null : (
+    <View style={[styles.delta, { backgroundColor: down(d) ? Colors.tealBg : up(d) ? Colors.coralBg : Colors.surface }]}>
+      <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: down(d) ? Colors.tealDark : up(d) ? Colors.coral : Colors.textTertiary }}>
+        {up(d) ? '↑' : down(d) ? '↓' : '•'} {Math.abs(Math.round(d * 10) / 10)}
+      </Text>
+    </View>
+  );
+  const Foot = ({ n, id }: { n: number; id: string }) => (
+    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+      <Text style={styles.foot}>First to last · {n} measurements</Text>
+      {n > 6 ? (
+        <TouchableOpacity onPress={() => setExpand((s) => ({ ...s, [id]: !s[id] }))}>
+          <Text style={styles.link}>{expand[id] ? 'Show less' : 'View all →'}</Text>
+        </TouchableOpacity>
+      ) : <Text style={styles.link}>View all →</Text>}
+    </View>
+  );
 
   return (
     <View style={{ gap: 16 }}>
-      <View style={styles.navy}>
-        <View style={{ flexDirection: 'row', gap: 14, alignItems: 'center' }}>
-          <HealthRing score={props.healthScore} />
-          <View style={{ flex: 1, gap: 6 }}>
-            <Text style={styles.navyKicker}>{props.petName.toUpperCase()} · HEALTH SCORE</Text>
-            <Text style={styles.navySub}>{props.verdict}</Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-              {(props.risks.slice(0, 3).length ? props.risks.slice(0, 3) : ['No flagged risks']).map((r) => (
-                <View key={r} style={styles.riskChip}><Text style={styles.riskTxt} numberOfLines={1}>{r}</Text></View>
-              ))}
-            </View>
+      <View style={styles.kpiRow}>
+        <View style={styles.kpiTile}>
+          <Text style={styles.kpiK}>Health score</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <HealthRing score={props.healthScore} light size={64} />
+            <Text style={styles.kpiHintDark}>{props.verdict}</Text>
           </View>
         </View>
-        <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
-          {[
-            { k: 'Weight', v: props.latestLb != null ? `${props.latestLb}` : '—', u: 'lb', d: wDelta, spark: props.weightPts.map((p) => p.v) },
-            { k: 'BCS', v: props.bcs != null ? String(props.bcs) : '—', u: '/9', d: bcsDelta, spark: props.bcsPts.map((p) => p.v) },
-          ].map((t) => (
-            <View key={t.k} style={styles.kpi}>
-              <Text style={styles.kpiK}>{t.k}</Text>
-              <Text style={styles.kpiV}>{t.v}<Text style={styles.kpiU}> {t.u}</Text></Text>
-              {t.d != null ? (
-                <View style={[styles.delta, { backgroundColor: down(t.d) ? Colors.tealBg : up(t.d) ? Colors.coralBg : Colors.surface }]}>
-                  <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: down(t.d) ? Colors.tealDark : up(t.d) ? Colors.coral : Colors.textTertiary }}>
-                    {up(t.d) ? '↑' : down(t.d) ? '↓' : '•'} {Math.abs(Math.round(t.d * 10) / 10)}
-                  </Text>
-                </View>
-              ) : null}
-              {props.targetLb != null && t.k === 'Weight' ? <Text style={styles.kpiHint}>target {props.targetLb} lb</Text> : null}
-              {t.spark.length > 1 ? <View style={{ opacity: 0.45 }}><MiniSpark values={t.spark} color="#fff" height={28} /></View> : null}
-            </View>
-          ))}
+        <View style={styles.kpiTile}>
+          <Text style={styles.kpiK}>Weight</Text>
+          <Text style={styles.kpiVDark}>{props.latestLb != null ? props.latestLb : '—'}<Text style={styles.kpiUDark}> lb</Text></Text>
+          <Delta d={wDelta} />
+          {props.targetLb != null ? <Text style={styles.kpiHintDark}>target {props.targetLb} lb</Text> : null}
+          {props.weightPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.35, width: 90 }}><MiniSpark values={props.weightPts.map((p) => p.v)} color={Colors.teal} height={28} /></View> : null}
+        </View>
+        <View style={styles.kpiTile}>
+          <Text style={styles.kpiK}>BCS</Text>
+          <Text style={styles.kpiVDark}>{props.bcs != null ? props.bcs : '—'}<Text style={styles.kpiUDark}> /9</Text></Text>
+          <Delta d={bcsDelta} />
+          {props.bcsPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.35, width: 90 }}><MiniSpark values={props.bcsPts.map((p) => p.v)} color={Colors.accent} height={28} /></View> : null}
+        </View>
+        <View style={styles.kpiTile}>
+          <Text style={styles.kpiK}>Main risk</Text>
+          <Text style={[styles.kpiVDark, { fontSize: 16 }]} numberOfLines={2}>{props.risks[0] || 'None flagged'}</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+            {props.risks.slice(1, 3).map((r) => (
+              <View key={r} style={styles.riskChipLight}><Text style={styles.riskTxtDark} numberOfLines={1}>{r}</Text></View>
+            ))}
+          </View>
         </View>
       </View>
 
@@ -185,27 +201,26 @@ export default function MedicalDashboard(props: {
       <View style={styles.card}>
         <Text style={styles.kicker}>WEIGHT + BCS</Text>
         <AreaChart
-          points={props.weightPts.map((p, i) => ({ ...p, out: props.targetLb != null && p.v > props.targetLb * 1.08 }))}
+          points={props.weightPts.map((p) => ({ ...p, out: props.targetLb != null && p.v > props.targetLb * 1.08 }))}
+          secondary={props.bcsPts}
           height={160}
           target={props.targetLb}
           unit="lb"
         />
-        <Text style={styles.foot}>First to last · {props.weightPts.length} measurements</Text>
+        <Foot n={props.weightPts.length} id="weight" />
       </View>
 
       {([
         ['Temperature', 'temp_f', '°F'] as const,
         ['Heart rate', 'hr', 'bpm'] as const,
         ['Resp rate', 'rr', '/min'] as const,
-        ['BCS', 'bcs', ''] as const,
       ]).map(([label, key, unit]) => {
         const pts = vitalsPts(key);
-        const extra = key === 'bcs' && !pts.length ? props.bcsPts : pts;
         return (
           <View key={label} style={styles.card}>
             <Text style={styles.kicker}>{label.toUpperCase()}</Text>
-            <AreaChart points={extra} height={120} unit={unit} />
-            <Text style={styles.foot}>First to last · {extra.length} measurements</Text>
+            <AreaChart points={pts} height={120} unit={unit} />
+            <Foot n={pts.length} id={key} />
           </View>
         );
       })}
@@ -226,8 +241,11 @@ export default function MedicalDashboard(props: {
                 </Text>
               </View>
               <RefBand value={typeof it.value === 'number' ? it.value : parseFloat(it.value)} low={it.low} high={it.high} flag={it.flag} />
-              {it.nums.length > 0 ? <MiniSpark values={it.nums} color={it.abnormal ? Colors.coral : Colors.teal} height={40} /> : null}
-              <Text style={styles.foot}>First to last · {it.n} measurements</Text>
+              {it.nums.length > 0 ? <MiniSpark values={it.nums} color={it.abnormal ? Colors.coral : '#2E9E96'} height={40} /> : null}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={styles.foot}>First to last · {it.n} measurements</Text>
+                <Text style={styles.link}>View all →</Text>
+              </View>
             </View>
           )) : null}
         </View>
@@ -293,6 +311,13 @@ export default function MedicalDashboard(props: {
 
 const styles = StyleSheet.create({
   navy: { backgroundColor: Colors.navy, borderRadius: 16, padding: 16, gap: 4 },
+  kpiRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  kpiTile: { width: '48%', backgroundColor: Colors.white, borderRadius: 16, padding: 14, borderWidth: 1, borderColor: Colors.border, minHeight: 118, overflow: 'hidden', gap: 4 },
+  kpiVDark: { fontFamily: Fonts.extrabold, fontSize: 26, color: Colors.navy },
+  kpiUDark: { fontFamily: Fonts.medium, fontSize: 13, color: Colors.textTertiary },
+  kpiHintDark: { fontFamily: Fonts.regular, fontSize: 11, color: Colors.textTertiary },
+  riskChipLight: { backgroundColor: Colors.standardBg, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
+  riskTxtDark: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.accentDark },
   navyKicker: { fontFamily: Fonts.extrabold, fontSize: 11, letterSpacing: 0.8, color: '#B9BCE0' },
   navySub: { fontFamily: Fonts.bold, fontSize: 16, color: Colors.white },
   riskChip: { backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, maxWidth: 160 },

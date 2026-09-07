@@ -1736,9 +1736,6 @@ export default function PetRecordScreen() {
               ))
             )}
           </View>
-        )}
-
-            </View>
             )}
             {medicalHub === 'labs' && (
               <VetLabResults petId={petId} userId={user!.id} clinics={clinics} canEdit={canEdit} />
@@ -1797,43 +1794,6 @@ export default function PetRecordScreen() {
           </View>
         )}
 
-        {false && (
-          <View style={styles.tabContent}>
-            <Text style={styles.sectionLabel}>Current</Text>
-            {currentRels.length === 0 ? (
-              <Text style={styles.emptyText}>No current relationships.</Text>
-            ) : (
-              currentRels.map((r) => (
-                <View key={r.id} style={styles.personCard}>
-                  <View style={styles.personAvatar}>
-                    <Text style={styles.personInitial}>{(r.profile_name || '?').charAt(0).toUpperCase()}</Text>
-                  </View>
-                  <View style={styles.personInfo}>
-                    <Text style={styles.personName}>{r.profile_name}</Text>
-                    <Text style={styles.personRole}>{titleCase(r.relationship)} · Since {formatDate(r.started_on)}</Text>
-                  </View>
-                </View>
-              ))
-            )}
-
-            {pastRels.length > 0 && (
-              <>
-                <Text style={styles.sectionLabel}>Past</Text>
-                {pastRels.map((r) => (
-                  <View key={r.id} style={[styles.personCard, styles.personCardPast]}>
-                    <View style={[styles.personAvatar, styles.personAvatarPast]}>
-                      <Text style={[styles.personInitial, styles.personInitialPast]}>{(r.profile_name || '?').charAt(0).toUpperCase()}</Text>
-                    </View>
-                    <View style={styles.personInfo}>
-                      <Text style={[styles.personName, styles.personNamePast]}>{r.profile_name}</Text>
-                      <Text style={styles.personRole}>{titleCase(r.relationship)} · {formatDate(r.started_on)} – {formatDate(r.ended_on)}</Text>
-                    </View>
-                  </View>
-                ))}
-              </>
-            )}
-          </View>
-        )}
       </ScrollView>
 
       {/* === Vaccination Modal (full-featured) === */}

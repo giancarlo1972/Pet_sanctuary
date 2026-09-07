@@ -503,6 +503,7 @@ export default function PetRecordScreen() {
       return;
     }
     setPet(petData);
+    setLoading(false);
 
     const isOwner = petData.owner_id === user.id;
     const { data: myRels } = await supabase
@@ -648,17 +649,16 @@ export default function PetRecordScreen() {
 
   useEffect(() => {
     if (!canEdit) return;
-    const pending = documents.filter((d) => {
-      const st = d.ai_status;
-      if (parsedAttempted.current.has(d.id)) return false;
-      if (!d.file_path && !(d as any).storage_path) return false;
-      if (st === 'confirmed' || st === 'missing_file') return false;
-      if (st === 'failed' && (d.ai_summary as any)?.reason === 'no_file') return false;
-      const ver = d.ai_summary && typeof d.ai_summary === 'object' ? (d.ai_summary as any).schemaVersion : 0;
-      if ((st === 'ready' || st === 'parsed') && ver >= 2) return false;
-      return true;
-    });
-    pending.slice(0, 4).forEach((d) => triggerExtraction(d.id, { path: d.file_path }, true));
+    for (const d of documents) {
+      const st = d.ai_status || 'pending';
+      if (parsedAttempted.current.has(d.id)) continue;
+      if (st === 'processing' || st === 'ready' || st === 'confirmed' || st === 'parsed' || st === 'missing_file') continue;
+      const ver = d.ai_summary && typeof d.ai_summary === 'object' ? Number((d.ai_summary as any).schemaVersion) || 0 : 0;
+      if (ver >= 2) continue;
+      if (st !== 'pending' && st !== 'failed') continue;
+      parsedAttempted.current.add(d.id);
+      void triggerExtraction(d.id, { path: d.file_path }, true);
+    }
   }, [documents, canEdit]);
 
   // === Vaccination handlers ===
@@ -1148,28 +1148,14 @@ export default function PetRecordScreen() {
     await supabase.from('pet_documents').update({ ai_status: 'processing' }).eq('id', documentId);
     setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'processing' } : d));
     try {
-      let imageBase64 = extra?.imageBase64 || null;
       let path = extra?.path;
-      if (!imageBase64) {
-        const { data: row } = await supabase.from('pet_documents').select('*').eq('id', documentId).maybeSingle();
-        path = path || row?.file_path || row?.storage_path;
-        if (path) {
-          const { data: signed, error: signErr } = await supabase.storage.from('pet-documents').createSignedUrl(path, 120);
-          console.log('[parse-pet-document] signed', documentId, signErr?.message || Boolean(signed?.signedUrl));
-          if (signed?.signedUrl) {
-            imageBase64 = await fileToDataUrl(signed.signedUrl).catch((e) => { console.log('[parse-pet-document] fileToDataUrl', e); return null; });
-          }
-        }
+      if (!path) {
+        const { data: row } = await supabase.from('pet_documents').select('file_path, storage_path').eq('id', documentId).maybeSingle();
+        path = row?.file_path || row?.storage_path;
       }
-      if (!imageBase64) {
-        console.log('[parse-pet-document] no_file locally', documentId, path);
-        await supabase.from('pet_documents').update({ ai_status: 'missing_file', ai_summary: { reason: 'no_file' } }).eq('id', documentId);
-        setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'missing_file', ai_summary: { reason: 'no_file' } } : d));
-        if (!silent) setExtracting(false);
-        return;
-      }
-      const payload = { document_id: documentId, imageBase64, mimeType: extra?.mimeType, path };
-      console.log('[parse-pet-document] POST /api/parse-pet-document', { documentId, hasImage: Boolean(imageBase64), path });
+      const payload: Record<string, unknown> = { document_id: documentId, path, mimeType: extra?.mimeType };
+      if (!silent && extra?.imageBase64) payload.imageBase64 = extra.imageBase64;
+      console.log('[parse-pet-document] POST /api/parse-pet-document', { documentId, silent, hasImage: Boolean(payload.imageBase64), path });
       const resp = await fetch('/api/parse-pet-document', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1177,25 +1163,21 @@ export default function PetRecordScreen() {
       });
       const result = await resp.json().catch(() => ({ parsed: false, error: 'bad json', reason: 'model_error' }));
       console.log('[parse-pet-document] response', resp.status, {
-        parsed: result.parsed,
-        reason: result.reason,
-        error: result.error,
-        vax: result.vaccinations?.length,
-        visits: result.visits?.length,
-        labs: result.labs?.length,
+        parsed: result.parsed, reason: result.reason, error: result.error,
+        vax: result.vaccinations?.length, visits: result.visits?.length, labs: result.labs?.length,
       });
       if (!resp.ok || !result.parsed) {
-        const reason = result.reason || (result.error === 'too_large' ? 'too_large' : 'model_error');
+        const reason = result.reason || (result.error === 'too_large' ? 'too_large' : result.error === 'no_file' || result.labeled?.includes('missing') ? 'no_file' : 'model_error');
         const status = reason === 'no_file' ? 'missing_file' : 'failed';
-        await supabase.from('pet_documents').update({ ai_status: status, ai_summary: { reason, error: result.error } }).eq('id', documentId);
-        setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: status, ai_summary: { reason, error: result.error } } : d));
-        if (!silent) setExtracting(false);
+        const summary = { reason, error: result.error, schemaVersion: 2 };
+        await supabase.from('pet_documents').update({ ai_status: status, ai_summary: summary }).eq('id', documentId);
+        setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: status, ai_summary: summary } : d));
         return;
       }
       const title = result.title || null;
       await supabase.from('pet_documents').update({
         ai_status: 'ready',
-        ai_summary: result,
+        ai_summary: { ...result, schemaVersion: 2 },
         title: title || undefined,
         clinic: result.clinic || undefined,
         taken_on: result.date || undefined,
@@ -1204,10 +1186,12 @@ export default function PetRecordScreen() {
       if (!silent) openConfirmFromParse(documentId, result);
     } catch (err: any) {
       console.error('[parse-pet-document] extraction error:', err);
-      await supabase.from('pet_documents').update({ ai_status: 'failed', ai_summary: { reason: 'model_error', error: String(err) } }).eq('id', documentId);
-      setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'failed', ai_summary: { reason: 'model_error' } } : d));
+      const summary = { reason: 'model_error', error: String(err), schemaVersion: 2 };
+      await supabase.from('pet_documents').update({ ai_status: 'failed', ai_summary: summary }).eq('id', documentId);
+      setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'failed', ai_summary: summary } : d));
+    } finally {
+      if (!silent) setExtracting(false);
     }
-    if (!silent) setExtracting(false);
   };
 
   const applyExtraction = async () => {
@@ -2074,11 +2058,15 @@ export default function PetRecordScreen() {
                       {clinic ? <Text style={styles.docClinic}>{String(clinic)}</Text> : null}
                     </View>
                   </TouchableOpacity>
-                  {canEdit && (status === 'failed' || status === 'missing_file') ? (
-                    <TouchableOpacity style={styles.docDeleteBtn} onPress={() => triggerExtraction(doc.id, { path: doc.file_path }, false)} activeOpacity={0.85}>
+                  {canEdit && status !== 'processing' ? (
+                    <TouchableOpacity style={styles.docDeleteBtn} onPress={() => {
+                      parsedAttempted.current.delete(doc.id);
+                      void triggerExtraction(doc.id, { path: doc.file_path }, false);
+                    }} activeOpacity={0.85}>
                       <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Retry</Text>
                     </TouchableOpacity>
-                  ) : canEdit ? (
+                  ) : null}
+                  {canEdit ? (
                     <TouchableOpacity style={styles.docDeleteBtn} onPress={() => deleteDoc(doc)} activeOpacity={0.85}>
                       <Trash2 color={Colors.critical} size={14} />
                     </TouchableOpacity>

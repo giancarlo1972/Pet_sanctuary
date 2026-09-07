@@ -26,6 +26,7 @@ export default function AddPetScreen() {
     const [availability, setAvailability] = useState('available');
   const [relationship, setRelationship] = useState<'owner' | 'foster' | 'sponsor'>('owner');
   const [ai, setAi] = useState<any>(null);
+  const [photoFile, setPhotoFile] = useState<any>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
@@ -50,6 +51,7 @@ export default function AddPetScreen() {
         const res = await fetch('/api/analyze-pet-photo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: dataUrl }) });
         const json = await res.json();
         if (!json.analyzed) throw new Error(json.error || 'AI could not read the photo.');
+        setPhotoFile(file);
         setAi(json);
         if (json.species) setSpecies(json.species);
         if (json.breed_guess) setBreed(json.breed_guess);
@@ -84,6 +86,11 @@ export default function AddPetScreen() {
         ai_traits: ai ? { ...ai, confirmed: true } : null,
       }).select('id').single();
       if (error) throw error;
+      if (photoFile) {
+        const path = `${user.id}/${data.id}.jpg`;
+        const { error: upErr } = await supabase.storage.from('pet-photos').upload(path, photoFile, { contentType: photoFile.type || 'image/jpeg', upsert: true });
+        if (!upErr) await supabase.from('pets').update({ main_photo_url: path }).eq('id', data.id);
+      }
       await supabase.from('pet_relationships').insert({
         pet_id: data.id,
         user_id: user.id,

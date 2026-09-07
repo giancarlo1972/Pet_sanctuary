@@ -33,6 +33,7 @@ import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 import AuthForm from '@/components/AuthForm';
 import SignedImage from '@/components/SignedImage';
+import { isUsablePhoto } from '@/lib/photos';
 
 const DEFAULT_SCREEN_WIDTH = 375;
 const DRAWER_WIDTH = DEFAULT_SCREEN_WIDTH * 0.86;
@@ -700,7 +701,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                       activeOpacity={0.85}
                     >
                       <View style={styles.petRelTop}>
-                      {p.pet_photo ? (
+                      {isUsablePhoto(p.pet_photo) ? (
                         <SignedImage path={p.pet_photo} style={styles.petRelPhoto} />
                       ) : (
                         <View style={[styles.petRelPhoto, styles.petRelPhotoFallback]}>
@@ -745,7 +746,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                       onPress={() => { router.push(`/pet-record?petId=${p.pet_id}`); }}
                       activeOpacity={0.85}
                     >
-                      {p.pet_photo ? (
+                      {isUsablePhoto(p.pet_photo) ? (
                         <SignedImage path={p.pet_photo} style={styles.petRelPhoto} />
                       ) : (
                         <View style={[styles.petRelPhoto, styles.petRelPhotoFallback]}>
@@ -1498,7 +1499,7 @@ const styles = StyleSheet.create({
   },
   reminderPetName: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.text, maxWidth: 80 },
   reminderSep: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textTertiary },
-  reminderLabel: { fontSize: FontSizes.sm, fontFamily: Fonts.semibold, maxWidth: 100 },
+  reminderLabel: { fontSize: FontSizes.sm, fontFamily: Fonts.semibold, width: '100%' },
   reminderDue: { fontSize: FontSizes.xs, fontFamily: Fonts.semibold },
   notFoundTitle: { fontSize: FontSizes['2xl'], fontFamily: Fonts.bold, color: Colors.text, marginBottom: 8 },
   notFoundSub: { fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.textSecondary, textAlign: 'center', marginBottom: 24, paddingHorizontal: 32, lineHeight: 22 },
@@ -1525,7 +1526,7 @@ const styles = StyleSheet.create({
   // My Pets
   petRelCard: { backgroundColor: Colors.white, borderRadius: 14, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: Colors.border, gap: 8 },
   petRelTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  reminderInRow: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, width: '100%' },
+  reminderInRow: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, width: '100%', alignSelf: 'stretch' },
   petRelCardPast: { opacity: 0.7 },
   petRelPhoto: { width: 48, height: 48, borderRadius: 24 },
   petRelPhotoFallback: { backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },

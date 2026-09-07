@@ -1,11 +1,20 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { isUsablePhoto } from '@/lib/photos';
 
-const BUCKET = 'pet-documents';
 const EXPIRY = 3600;
 
-function isAbsoluteUrl(value: string): boolean {
-  return /^https?:\/\//i.test(value) || /^blob:/i.test(value) || /^data:/i.test(value);
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+async function resolveStorageUrl(path: string): Promise<string | null> {
+  const photo = await supabase.storage.from('pet-photos').createSignedUrl(path, EXPIRY);
+  if (photo.data?.signedUrl) return photo.data.signedUrl;
+  const docs = await supabase.storage.from('pet-documents').createSignedUrl(path, EXPIRY);
+  if (docs.data?.signedUrl) return docs.data.signedUrl;
+  const pub = supabase.storage.from('pet-photos').getPublicUrl(path);
+  return pub.data?.publicUrl || null;
 }
 
 type UrlState = Record<string, { url: string | null; loading: boolean; error: string | null }>;
@@ -18,19 +27,21 @@ export function useSignedUrls(paths: string[]): Record<string, string | null> {
     const valid = paths.filter(Boolean);
     const known = new Set(Object.keys(urlMap));
     const needed = valid.filter((p) => !known.has(p));
-
     if (needed.length === 0) return;
 
     const passthrough: string[] = [];
+    const skip: string[] = [];
     const toFetch: string[] = [];
     for (const p of needed) {
-      if (isAbsoluteUrl(p)) passthrough.push(p);
+      if (!isUsablePhoto(p)) skip.push(p);
+      else if (isHttpUrl(p)) passthrough.push(p);
       else toFetch.push(p);
     }
 
     setUrlMap((prev) => {
       const next = { ...prev };
       for (const p of passthrough) next[p] = { url: p, loading: false, error: null };
+      for (const p of skip) next[p] = { url: null, loading: false, error: 'unusable' };
       for (const p of toFetch) next[p] = { url: null, loading: true, error: null };
       return next;
     });
@@ -38,25 +49,14 @@ export function useSignedUrls(paths: string[]): Record<string, string | null> {
     if (toFetch.length === 0) return;
 
     (async () => {
-      const { data, error } = await supabase.storage.from(BUCKET).createSignedUrls(toFetch, EXPIRY);
+      const resolved = await Promise.all(toFetch.map((p) => resolveStorageUrl(p)));
       if (cancelled) return;
       setUrlMap((prev) => {
         const next = { ...prev };
-        if (error || !data) {
-          console.error('[useSignedUrls] createSignedUrls failed:', error?.message);
-          for (const p of toFetch) next[p] = { url: null, loading: false, error: error?.message || 'Failed' };
-        } else {
-          for (let i = 0; i < toFetch.length; i++) {
-            const item = data[i];
-            const path = toFetch[i];
-            if (item?.signedUrl) {
-              next[path] = { url: item.signedUrl, loading: false, error: null };
-            } else {
-              console.error('[useSignedUrls] no signedUrl for path:', path);
-              next[path] = { url: null, loading: false, error: 'No URL returned' };
-            }
-          }
-        }
+        toFetch.forEach((path, i) => {
+          const url = resolved[i];
+          next[path] = { url, loading: false, error: url ? null : 'Failed' };
+        });
         return next;
       });
     })();
@@ -68,8 +68,7 @@ export function useSignedUrls(paths: string[]): Record<string, string | null> {
   const result: Record<string, string | null> = {};
   for (const p of paths) {
     if (!p) continue;
-    const s = urlMap[p];
-    result[p] = s?.url ?? null;
+    result[p] = urlMap[p]?.url ?? null;
   }
   return result;
 }
@@ -81,18 +80,14 @@ export function useSignedUrl(path: string | null | undefined): { url: string | n
 
   useEffect(() => {
     if (!path) { setState({ url: null, loading: false, error: null }); return; }
-    if (isAbsoluteUrl(path)) { setState({ url: path, loading: false, error: null }); return; }
+    if (!isUsablePhoto(path)) { setState({ url: null, loading: false, error: 'unusable' }); return; }
+    if (isHttpUrl(path)) { setState({ url: path, loading: false, error: null }); return; }
     let cancelled = false;
     setState({ url: null, loading: true, error: null });
     (async () => {
-      const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(path, EXPIRY);
+      const url = await resolveStorageUrl(path);
       if (cancelled) return;
-      if (error || !data?.signedUrl) {
-        console.error('[useSignedUrl] createSignedUrl failed for', path, ':', error?.message);
-        setState({ url: null, loading: false, error: error?.message || 'Failed' });
-      } else {
-        setState({ url: data.signedUrl, loading: false, error: null });
-      }
+      setState({ url, loading: false, error: url ? null : 'Failed' });
     })();
     return () => { cancelled = true; };
   }, [path]);

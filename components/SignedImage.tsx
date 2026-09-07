@@ -1,7 +1,8 @@
 import React from 'react';
-import { View, Text, Image, ActivityIndicator, StyleSheet, ImageStyle } from 'react-native';
-import { PawPrint, ImageOff } from 'lucide-react-native';
+import { View, Image, ActivityIndicator, StyleSheet, ImageStyle } from 'react-native';
+import { PawPrint } from 'lucide-react-native';
 import { useSignedUrl } from '@/hooks/useSignedUrls';
+import { isUsablePhoto } from '@/lib/photos';
 import { Colors } from '@/constants/Colors';
 
 interface SignedImageProps {
@@ -12,7 +13,16 @@ interface SignedImageProps {
 }
 
 export default function SignedImage({ path, style, resizeMode = 'cover', fallbackIconSize = 28 }: SignedImageProps) {
-  const { url, loading, error } = useSignedUrl(path);
+  const usable = isUsablePhoto(path);
+  const { url, loading } = useSignedUrl(usable ? path : null);
+
+  if (!usable || (!loading && !url)) {
+    return (
+      <View style={[style as any, styles.placeholder]}>
+        <PawPrint color={Colors.textTertiary} size={fallbackIconSize} />
+      </View>
+    );
+  }
 
   if (loading) {
     return (
@@ -22,16 +32,7 @@ export default function SignedImage({ path, style, resizeMode = 'cover', fallbac
     );
   }
 
-  if (error || !url) {
-    return (
-      <View style={[style as any, styles.placeholder]}>
-        <ImageOff color={Colors.error || '#EF4444'} size={fallbackIconSize} />
-        <Text style={styles.errorText}>Failed to load</Text>
-      </View>
-    );
-  }
-
-  return <Image source={{ uri: url }} style={style} resizeMode={resizeMode} />;
+  return <Image source={{ uri: url! }} style={style} resizeMode={resizeMode} />;
 }
 
 const styles = StyleSheet.create({
@@ -39,10 +40,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: Colors.surface,
-  },
-  errorText: {
-    fontSize: 11,
-    color: Colors.textSecondary,
-    marginTop: 4,
   },
 });

@@ -91,9 +91,13 @@ export default function AddPetScreen() {
       }).select('id').single();
       if (error) throw error;
       if (photoFile) {
-        const path = `${user.id}/${data.id}.jpg`;
+        const path = `${data.id}/${Date.now()}.jpg`;
         const { error: upErr } = await supabase.storage.from('pet-photos').upload(path, photoFile, { contentType: photoFile.type || 'image/jpeg', upsert: true });
-        if (!upErr) await supabase.from('pets').update({ main_photo_url: path }).eq('id', data.id);
+        if (upErr) throw upErr;
+        await supabase.from('pets').update({ main_photo_url: path }).eq('id', data.id);
+        await supabase.from('pet_photos').insert({
+          pet_id: data.id, photo_url: path, is_profile: true, sort_order: 0, uploaded_by: user.id,
+        });
       }
       await supabase.from('pet_relationships').insert({
         pet_id: data.id,

@@ -45,6 +45,7 @@ import {
 } from 'lucide-react-native';
 import { InlineBanner } from '@/components/InlineBanner';
 import { prepareImageFile } from '@/lib/prepare-image';
+import { isUsablePhoto } from '@/lib/photos';
 import { ConfirmDialog, type ConfirmConfig } from '@/components/ConfirmDialog';
 import { VetVaccinationModal, type Vaccination as FullVaccination, type VetClinic as ClinicInfo } from '@/components/VetVaccinationModal';
 import { VetLabResults } from '@/components/VetLabResults';
@@ -61,13 +62,6 @@ import { Page } from '@/components/Page';
 
 type Tab = 'overview' | 'insurance' | 'medical';
 type MedicalHub = 'records' | 'labs' | 'history' | 'ai';
-
-function isUsablePhoto(url?: string | null) {
-  if (!url) return false;
-  if (/^(file:|content:|blob:|ph:|assets-library:)/i.test(url)) return false;
-  if (url.includes('ImagePicker') || url.includes('/Containers/Data/') || url.includes('file://')) return false;
-  return true;
-}
 
 interface Pet {
   id: string;
@@ -532,7 +526,7 @@ export default function PetRecordScreen() {
         .eq('pet_id', petId)
         .order('sort_order', { ascending: true }),
       supabase.from('pet_documents')
-        .select('id, pet_id, kind, file_path, title, taken_on, clinic, notes, ai_summary, ai_status')
+        .select('*')
         .eq('pet_id', petId)
         .order('created_at', { ascending: false }),
       supabase.from('pet_breeds').select('id, species, name, sort_order').order('species').order('sort_order'),
@@ -568,7 +562,19 @@ export default function PetRecordScreen() {
         setPet((cur) => cur ? { ...cur, main_photo_url: good.photo_url } : cur);
       }
     }
-    setDocuments((docsRes.data as PetDocument[]) || []);
+    if (docsRes.error) console.error('[pet-record] documents', docsRes.error);
+    setDocuments(((docsRes.data as any[]) || []).map((d) => ({
+      id: d.id,
+      pet_id: d.pet_id,
+      kind: d.kind,
+      file_path: d.file_path || d.storage_path || '',
+      title: d.title,
+      taken_on: d.taken_on,
+      clinic: d.clinic,
+      notes: d.notes,
+      ai_summary: d.ai_summary || d.extracted || null,
+      ai_status: d.ai_status || null,
+    })));
     setBreeds((breedsRes.data as BreedOption[]) || []);
     setColors((colorsRes.data as ColorOption[]) || []);
     setLoading(false);

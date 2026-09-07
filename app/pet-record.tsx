@@ -521,9 +521,9 @@ function StatusTile({
       <View style={[styles.statusIcon, { backgroundColor: fg }]}>
         <Icon color={Colors.white} size={20} />
       </View>
-      <Text style={styles.statusLabel} numberOfLines={1}>{label}</Text>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, flexWrap: 'wrap' }}>
-        <Text style={[styles.statusSub, { color: fg }]} numberOfLines={1}>{sub}</Text>
+      <Text style={[styles.statusLabel, { fontSize: 11 }]} numberOfLines={2}>{label}</Text>
+      <View style={{ alignItems: 'center', justifyContent: 'center', gap: 2, width: '100%' }}>
+        <Text style={[styles.statusSub, { color: fg, fontSize: 11 }]} numberOfLines={2}>{sub}</Text>
         {extraLink ? (
           <TouchableOpacity onPress={extraOnPress} hitSlop={8}>
             <Text style={styles.statusExtra}>{extraLink}</Text>
@@ -833,7 +833,7 @@ export default function PetRecordScreen() {
     }
     const [wRes, labRes, devRes, aiRes, deviceRes, chipRes, examRes] = await Promise.all([
       supabase.from('weight_entries').select('weight_lb, measured_on, source, created_at').eq('pet_id', petId).order('measured_on', { ascending: false }).limit(40),
-      supabase.from('lab_results').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(80),
+      supabase.from('lab_results').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(400),
       supabase.from('device_readings').select('*').eq('pet_id', petId).order('recorded_at', { ascending: false }).limit(80),
       supabase.from('ai_health_analyses').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(20),
       supabase.from('pet_devices').select('*').eq('pet_id', petId),
@@ -841,7 +841,24 @@ export default function PetRecordScreen() {
       supabase.from('pet_exams').select('*').eq('pet_id', petId).order('visit_date', { ascending: false }).limit(20),
     ]);
     setWeightEntries((wRes.data as any[]) || []);
-    setLabRows((labRes.data as any[]) || []);
+    let labs = (labRes.data as any[]) || [];
+    if (!labs.length) {
+      const { data: panels } = await supabase.from('lab_panels').select('id, collected_on').eq('pet_id', petId);
+      if (panels?.length) {
+        const { data: rows } = await supabase.from('lab_results').select('*').in('panel_id', panels.map((p) => p.id));
+        labs = (rows || []).map((r: any) => ({
+          ...r,
+          pet_id: petId,
+          collected_on: r.collected_on || panels.find((p) => p.id === r.panel_id)?.collected_on,
+        }));
+      }
+    }
+    setLabRows(labs.map((r: any) => ({
+      ...r,
+      analyte: r.analyte || r.name,
+      value_text: r.value_text || r.value,
+      value_num: r.value_numeric ?? r.value_num,
+    })));
     setDeviceReadings((devRes.data as any[]) || []);
     setPetDevices((deviceRes.data as any[]) || []);
     if (!examRes.error) setPetExams((examRes.data as any[]) || []);
@@ -1594,59 +1611,79 @@ export default function PetRecordScreen() {
         }
       }
 
-      // 2. labs — live schema is lab_panels + lab_results.panel_id
-      for (const panel of editableLabs) {
-        const results = (panel.results || []).filter((r) => r.analyte);
-        if (!results.length) continue;
-        const panelPayload = {
+      // 2. labs — write pet_id on every row (monitors query by pet_id, not panel_id)
+      const rawDoc: any = documents.find((d) => d.id === sourceDocId)?.ai_summary || {};
+      const labFlat: { analyte: string; value_text: string | null; value_num: number | null; unit: string | null; flag: string | null; collected_on: string | null; ref_low?: any; ref_high?: any }[] = [];
+      const pushLab = (r: any, collected?: string | null) => {
+        const analyte = r.analyte || r.name;
+        if (!analyte) return;
+        const printed = r.value_text != null ? String(r.value_text) : (r.value != null ? String(r.value) : (r.value_num != null ? String(r.value_num) : ''));
+        const value_num = typeof r.value_num === 'number' ? r.value_num : (typeof r.value === 'number' ? r.value : parseFloat(printed));
+        labFlat.push({
+          analyte,
+          value_text: printed || null,
+          value_num: Number.isFinite(value_num) ? value_num : null,
+          unit: r.unit || null,
+          flag: r.flag && String(r.flag).toLowerCase() !== 'unknown' ? r.flag : null,
+          collected_on: r.collected_on || r.date || collected || rawDoc.date || null,
+          ref_low: r.ref_low,
+          ref_high: r.ref_high,
+        });
+      };
+      for (const panel of editableLabs) (panel.results || []).forEach((r) => pushLab(r, panel.collected_on));
+      (rawDoc.labs || []).forEach((r: any) => pushLab(r, rawDoc.date));
+      const seenLab = new Set<string>();
+      for (const row of labFlat) {
+        const key = `${row.analyte}|${row.collected_on}|${row.value_text}`;
+        if (seenLab.has(key)) continue;
+        seenLab.add(key);
+        const full: any = {
           pet_id: petId,
-          panel_name: panel.panel_name || 'Labs',
-          collected_on: panel.collected_on || null,
-          recorded_by: user.id,
+          name: row.analyte,
+          analyte: row.analyte,
+          value: row.value_text,
+          value_text: row.value_text,
+          value_numeric: row.value_num,
+          unit: row.unit,
+          flag: row.flag,
+          collected_on: row.collected_on,
+          ref_low: row.ref_low ?? null,
+          ref_high: row.ref_high ?? null,
+          source: 'ai',
         };
-        console.log('[apply] lab panel payload', panelPayload);
-        const pRes = await supabase.from('lab_panels').insert(panelPayload).select('id').maybeSingle();
-        console.log('[apply] lab panel result', pRes.error || pRes.data);
-        if (pRes.error || !pRes.data?.id) {
-          errors.push(`Lab panel: ${pRes.error?.message || 'no id'}`);
-          continue;
+        let res = await supabase.from('lab_results').insert(full).select('id').maybeSingle();
+        if (res.error) {
+          console.log('[apply] lab fail', row.analyte, res.error.message);
+          const slim = { pet_id: petId, name: row.analyte, value: row.value_text, unit: row.unit, flag: row.flag, collected_on: row.collected_on };
+          res = await supabase.from('lab_results').insert(slim).select('id').maybeSingle();
+          if (res.error) { console.log('[apply] lab slim fail', row.analyte, res.error.message); errors.push(`Lab "${row.analyte}": ${res.error.message}`); continue; }
         }
-        for (const result of results) {
-          const labPayload = {
-            panel_id: pRes.data.id,
-            analyte: result.analyte,
-            value_text: result.value_text || (result.value_num != null ? String(result.value_num) : null),
-            value_numeric: result.value_num,
-            unit: result.unit,
-            flag: result.flag && String(result.flag).toLowerCase() !== 'unknown' ? result.flag : null,
-            ref_low: (result as any).ref_low ?? null,
-            ref_high: (result as any).ref_high ?? null,
-          };
-          console.log('[apply] lab payload', labPayload);
-          const lRes = await supabase.from('lab_results').insert(labPayload).select('id').maybeSingle();
-          console.log('[apply] lab result', lRes.error || lRes.data);
-          if (lRes.error) errors.push(`Lab "${result.analyte}": ${lRes.error.message}`);
-          else applied.labs++;
-        }
+        applied.labs++;
       }
 
-      // 3. weights — insert every dated row; pets.weight only if newest
-      const weightRows = editableWeights.length ? editableWeights : (editableWeight.value != null ? [editableWeight] : []);
-      const newest = weightRows.filter((w) => w.value != null && w.measured_on).sort((a, b) => String(b.measured_on).localeCompare(String(a.measured_on)))[0];
-      const existingWeightDates = new Set(weightEntries.map((w) => w.measured_on).filter(Boolean));
+      // 3. weights — every Weight History row
+      const rawWeights: ExtractedWeight[] = editableWeights.length
+        ? editableWeights
+        : Array.isArray(rawDoc.weights) ? rawDoc.weights : (editableWeight.value != null ? [editableWeight] : []);
+      const newest = rawWeights.filter((w) => w.value != null && w.measured_on).sort((a, b) => String(b.measured_on).localeCompare(String(a.measured_on)))[0];
       const seenWeight = new Set<string>();
-      for (const w of weightRows) {
+      for (const w of rawWeights) {
         if (w.value == null) continue;
-        const unit = (w.unit || 'lb').toLowerCase();
-        const lb = unit === 'kg' ? w.value * 2.20462 : w.value;
-        const measured = w.measured_on || new Date().toISOString().slice(0, 10);
-        if (seenWeight.has(measured) || existingWeightDates.has(measured)) continue;
-        seenWeight.add(measured);
-        const payload = { pet_id: petId, weight_lb: lb, measured_on: measured, source: 'ai_extracted' };
+        const unit = String(w.unit || 'lb').toLowerCase();
+        const lb = unit.startsWith('kg') ? Number(w.value) * 2.20462 : Number(w.value);
+        const measured = w.measured_on || null;
+        const key = `${measured}|${Math.round(lb * 10) / 10}`;
+        if (seenWeight.has(key)) continue;
+        seenWeight.add(key);
+        const payload: any = { pet_id: petId, weight_lb: lb, measured_on: measured || new Date().toISOString().slice(0, 10) };
         console.log('[apply] weight payload', payload);
-        const res = await supabase.from('weight_entries').insert(payload);
-        if (res.error) errors.push(`Weight ${measured}: ${res.error.message}`);
-        else applied.weights++;
+        let res = await supabase.from('weight_entries').insert(payload);
+        if (res.error) {
+          console.log('[apply] weight fail', res.error.message, payload);
+          res = await supabase.from('weight_entries').insert({ pet_id: petId, weight_lb: lb });
+          if (res.error) { errors.push(`Weight ${measured}: ${res.error.message}`); continue; }
+        }
+        applied.weights++;
       }
       if (newest && newest.value != null) {
         const unit = (newest.unit || 'lb').toLowerCase();
@@ -1689,17 +1726,39 @@ export default function PetRecordScreen() {
         }));
       }
 
-      for (const ex of extractionReview.exams || []) {
-        if (!ex.visit_date && !ex.vitals && !ex.systems) continue;
-        const { error } = await supabase.from('pet_exams').insert({
+      let examsIn = (extractionReview.exams && extractionReview.exams.length)
+        ? extractionReview.exams
+        : (rawDoc.exams || []);
+      if (!examsIn.length) {
+        const visitsSrc = rawDoc.visits || editableProcedures.map((v) => ({ date: v.occurred_on, clinic: null, summary: v.notes }));
+        examsIn = visitsSrc.map((v: any) => ({
+          visit_date: v.date || v.occurred_on,
+          clinic: v.clinic || rawDoc.clinic || null,
+          vitals: { bcs: rawDoc.identity?.bcs || pet?.body_condition_score || null },
+          systems: [],
+        })).filter((e: any) => e.visit_date);
+      }
+      const seenExam = new Set<string>();
+      for (const ex of examsIn) {
+        const visitDate = ex.visit_date || ex.date || null;
+        const key = String(visitDate);
+        if (visitDate && seenExam.has(key)) continue;
+        if (visitDate) seenExam.add(key);
+        const payload = {
           pet_id: petId,
-          visit_date: ex.visit_date || null,
+          visit_date: visitDate,
           clinic: ex.clinic || null,
           vitals: ex.vitals || {},
           systems: ex.systems || [],
           source_document_id: sourceDocId,
-        });
-        if (error) errors.push(`Exam ${ex.visit_date || ''}: ${error.message}`);
+        };
+        const { error, data } = await supabase.from('pet_exams').insert(payload).select('id').maybeSingle();
+        if (error) {
+          console.log('[apply] exam fail', visitDate, error.message);
+          errors.push(`Exam ${visitDate || ''}: ${error.message}`);
+        } else {
+          console.log('[apply] exam ok', visitDate, data?.id);
+        }
       }
 
       for (const c of extractionReview.conditions || []) {
@@ -1733,6 +1792,14 @@ export default function PetRecordScreen() {
         }
       }
 
+      const identBcs = Number(rawDoc.identity?.bcs || extractionReview.data?.identity?.bcs);
+      if (Number.isFinite(identBcs)) {
+        await supabase.from('pets').update({
+          body_condition_score: identBcs,
+          ...(identBcs >= 8 && !pet?.target_weight_kg ? { target_weight_kg: lbToKg(15) } : {}),
+        }).eq('id', petId);
+      }
+
       await supabase.from('pet_documents').update({
         ai_status: 'confirmed',
         ai_summary: { ...(documents.find((d) => d.id === sourceDocId)?.ai_summary || {}), applied: true },
@@ -1743,8 +1810,15 @@ export default function PetRecordScreen() {
         reviewed_at: new Date().toISOString(),
       }).eq('id', extractionReview.extractionId);
 
-      console.log('[apply] counts', applied);
-      const summary = `Applied vaccinations: ${applied.vaccinations}, weights: ${applied.weights}, labs: ${applied.labs}, visits: ${applied.visits}`;
+      console.log('[apply] insert counts', applied, 'errors', errors);
+      const [labsC, examsC, wC] = await Promise.all([
+        supabase.from('lab_results').select('id', { count: 'exact', head: true }).eq('pet_id', petId),
+        supabase.from('pet_exams').select('id', { count: 'exact', head: true }).eq('pet_id', petId),
+        supabase.from('weight_entries').select('id', { count: 'exact', head: true }).eq('pet_id', petId),
+      ]);
+      const dbCounts = { labs: labsC.count ?? 0, exams: examsC.count ?? 0, weights: wC.count ?? 0 };
+      console.log('[apply] SQL counts', dbCounts, labsC.error, examsC.error, wC.error);
+      const summary = `Applied vax ${applied.vaccinations}, weights ${applied.weights}, labs ${applied.labs}, visits ${applied.visits} · DB labs=${dbCounts.labs} exams=${dbCounts.exams} weights=${dbCounts.weights}`;
       if (errors.length > 0) {
         showBanner(`${summary}. Some items had errors: ${errors.slice(0, 2).join('; ')}`, 'info');
       } else {
@@ -1897,7 +1971,7 @@ export default function PetRecordScreen() {
   if (latestLb != null && targetLb != null) {
     if (latestLb > targetLb * 1.08 || (bcs != null && bcs >= 7)) {
       weightTone = 'due';
-      weightSub = `Overweight · ${latestLb} → ${targetLb} lb`;
+      weightSub = `Overweight\n${latestLb} → ${targetLb} lb`;
     } else if (latestLb < targetLb * 0.92 || (bcs != null && bcs <= 3)) {
       weightTone = 'over';
       weightSub = `${latestLb} lb · underweight`;
@@ -2059,22 +2133,35 @@ export default function PetRecordScreen() {
       setAiFindings(json);
       setAiLastRun(json.ran_at || new Date().toISOString());
       setAiShared(false);
-      const nextNum = (aiRuns[0]?.run_number || aiRuns.length || 0) + 1;
-      const { data: saved } = await supabase.from('ai_health_analyses').insert({
+      const nextNum = (aiRuns[0]?.run_number || aiRuns[0]?.run_no || aiRuns.length || 0) + 1;
+      const prev = aiRuns[0];
+      const diff = prev ? `Changed since last note · Run ${prev.run_number || prev.run_no}` : null;
+      let ins = await supabase.from('ai_health_analyses').insert({
         pet_id: petId,
         run_number: nextNum,
+        run_no: nextNum,
         findings: json.findings || [],
         timeline: json.timeline || [],
         trends: json.trends || [],
         conclusion: json.conclusion || json.summary,
         verdict: json.verdict,
         summary: json.summary,
+        diff_vs_previous: diff,
         inputs: { verdict: json.verdict, timeline: json.timeline, trends: json.trends, conclusion: json.conclusion },
         model: 'claude-haiku-4-5',
       }).select('*').maybeSingle();
-      const packed = { ...json, id: saved?.id, run_number: nextNum, ran_at: json.ran_at || new Date().toISOString() };
+      if (ins.error) {
+        console.log('[ai] insert fail', ins.error.message);
+        ins = await supabase.from('ai_health_analyses').insert({
+          pet_id: petId,
+          findings: json.findings || [],
+          summary: json.conclusion || json.summary,
+        }).select('*').maybeSingle();
+        if (ins.error) console.log('[ai] insert slim fail', ins.error.message);
+      }
+      const packed = { ...json, id: ins.data?.id, run_number: nextNum, ran_at: json.ran_at || new Date().toISOString(), diff_vs_previous: diff };
       setAiFindings(packed);
-      setAiRuns((prev) => [packed, ...prev]);
+      setAiRuns((prevRuns) => [packed, ...prevRuns]);
     } catch (e: any) {
       showBanner(e.message || 'AI Health failed.');
     }
@@ -2425,7 +2512,7 @@ export default function PetRecordScreen() {
                   <Text style={styles.detailK}>{m.k}</Text>
                   <Text style={[styles.detailV, { color: m.tone === 'over' ? Colors.critical : m.tone === 'due' ? Colors.accent : Colors.navy }]}>{m.v}</Text>
                   {m.delta != null ? <Text style={styles.ovFoot}>{m.delta > 0 ? '▲' : m.delta < 0 ? '▼' : '•'} {Math.abs(Math.round(m.delta * 10) / 10)} vs prior</Text> : null}
-                  {m.nums.length > 1 ? <LabSparkline values={m.nums} color={m.tone === 'over' ? Colors.critical : Colors.navy} /> : null}
+                  {m.nums.length > 0 ? <LabSparkline values={m.nums} color={m.tone === 'over' ? Colors.critical : m.tone === 'due' ? Colors.accent : Colors.teal} height={40} /> : null}
                 </View>
               ))}
             </View>
@@ -2475,7 +2562,7 @@ export default function PetRecordScreen() {
               {aiFindings ? (
                 <View style={{ gap: 8 }}>
                   <Text style={styles.docTitle}>Run {aiFindings.run_number || 1} · {formatDate(aiFindings.ran_at)}</Text>
-                  {aiRuns[1] ? <Text style={styles.ovFoot}>Changed since last note · Run {aiRuns[1].run_number}</Text> : null}
+                  {aiRuns[1] || aiFindings.diff_vs_previous ? <Text style={styles.ovFoot}>{aiFindings.diff_vs_previous || `Changed since last note · Run ${aiRuns[1]?.run_number}`}</Text> : null}
                   {(aiFindings.findings || []).slice(0, 4).map((f: any, i: number) => (
                     <Text key={i} style={styles.docClinic}>{f.title} — {f.body || f.detail}</Text>
                   ))}
@@ -3668,7 +3755,7 @@ const styles = StyleSheet.create({
   statusTileWrap: { flex: 1 },
   statusTile: { alignItems: 'center', justifyContent: 'center', gap: 6, padding: 12, borderRadius: 12, minHeight: 96, height: '100%' },
   statusIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  statusLabel: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy, textAlign: 'center' },
+  statusLabel: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy, textAlign: 'center' },
   statusSub: { fontFamily: Fonts.bold, fontSize: 11, textAlign: 'center', lineHeight: 14 },
   statusExtra: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.tealDark },
   outlineChip: { borderWidth: 1.5, borderColor: Colors.borderInput, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },

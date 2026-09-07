@@ -53,18 +53,33 @@ export function WeightLineChart({
   );
 }
 
-export function LabSparkline({ values, color = Colors.navy }: { values: number[]; color?: string }) {
-  if (values.length < 2) return null;
-  const w = 120, h = 36, pad = 3;
+export function LabSparkline({
+  values,
+  color = Colors.navy,
+  tones,
+  height = 40,
+}: {
+  values: number[];
+  color?: string;
+  tones?: ('ok' | 'due' | 'over' | 'unknown')[];
+  height?: number;
+}) {
+  if (values.length < 1) return null;
+  const w = 140, pad = 4;
   const min = Math.min(...values);
   const max = Math.max(...values);
   const span = Math.max(0.001, max - min);
-  const x = (i: number) => pad + (i * (w - pad * 2)) / (values.length - 1);
-  const y = (v: number) => pad + (1 - (v - min) / span) * (h - pad * 2);
+  const x = (i: number) => pad + (i * (w - pad * 2)) / Math.max(1, values.length - 1);
+  const y = (v: number) => pad + (1 - (v - min) / span) * (height - pad * 2);
+  const toneColor = (t?: string) => t === 'over' ? Colors.critical : t === 'due' ? Colors.accent : t === 'ok' ? Colors.teal : color;
   return (
-    <Svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
-      <Polyline points={values.map((v, i) => `${x(i)},${y(v)}`).join(' ')} fill="none" stroke={color} strokeWidth={1.75} />
-      <Circle cx={x(values.length - 1)} cy={y(values[values.length - 1])} r={3} fill={color} />
+    <Svg width="100%" height={height} viewBox={`0 0 ${w} ${height}`}>
+      {values.length > 1 ? (
+        <Polyline points={values.map((v, i) => `${x(i)},${y(v)}`).join(' ')} fill="none" stroke={color} strokeWidth={1.75} />
+      ) : null}
+      {values.map((v, i) => (
+        <Circle key={i} cx={x(i)} cy={y(v)} r={3} fill={toneColor(tones?.[i])} />
+      ))}
     </Svg>
   );
 }

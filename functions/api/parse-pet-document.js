@@ -31,14 +31,16 @@ Return JSON only, no markdown:
   "visits": [{"clinic": null, "date": "YYYY-MM-DD or null", "reason": null, "summary": null}],
   "labs": [{"analyte": "", "value": "", "unit": null, "flag": "normal|high|low|abnormal|unknown", "collected_on": null}],
   "weight": {"value": null, "unit": "lb|kg", "measured_on": null},
-  "ai_note": "3-5 short lines: key findings, deltas vs prior values for the same analytes, flags. Plain text, no markdown."
+  "ai_note": "3-5 short lines: key findings, deltas vs prior values for the same analytes, flags. Plain text, no markdown.",
+  "owner_notes": [{"text": "behavioral or lifestyle guidance for the owner", "date": "YYYY-MM-DD or null"}]
 }
 Rules:
 - labs[].value MUST be a string or a number. Qualitative PCR (e.g. "Detected", "Not detected") stays as that string; unit null. If value is Detected (case-insensitive) flag=abnormal; if Not detected flag=normal. Numeric labs keep the printed number and unit.
 - vaccinations: extract EVERY vaccine administered or mentioned anywhere, including visit notes and discharge text. Capture product/brand, date given, next_due / valid_until when printed.
 - weight: return the printed {value, unit} as-is (do not convert). Empty arrays if unreadable. Never invent dates.
 - conditions: one row per distinct issue. If a visit notes an existing problem is better or gone, set status=resolved (or monitoring), do not duplicate the name. Use onset_date/resolved_date when printed.
-- ai_note: 3–5 lines covering findings, any delta vs prior labs for the same analytes, and flags. Do not diagnose.`;
+- ai_note: 3–5 lines covering findings, any delta vs prior labs for the same analytes, and flags. Do not diagnose.
+- owner_notes: behavioral/lifestyle guidance quoted from the vet notes for the owner (diet, indoor-only, activity, follow-up at home). Not clinical findings, diagnoses, or lab values. Empty array if none.`;
 
 const MODELS = ['claude-haiku-4-5', 'claude-3-5-haiku-latest', 'claude-3-5-sonnet-20241022'];
 const SYSTEM = 'Respond with a single JSON object only, no markdown, no commentary';
@@ -346,6 +348,7 @@ export async function onRequestPost(context) {
         labs,
         weight,
         ai_note: parsed.ai_note || null,
+        owner_notes: Array.isArray(parsed.owner_notes) ? parsed.owner_notes.filter((n) => n && n.text) : [],
       };
       console.log('[parse-pet-document] OK', model, {
         documentId,

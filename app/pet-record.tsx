@@ -43,6 +43,7 @@ import {
   Building2,
   Download,
   Bluetooth,
+  Activity,
 } from 'lucide-react-native';
 import { InlineBanner } from '@/components/InlineBanner';
 import { prepareImageFile } from '@/lib/prepare-image';
@@ -389,6 +390,36 @@ function ageFromDob(dob?: string | null, ageText?: string | null) {
     }
   }
   return ageText || null;
+}
+
+function StatusTile({
+  icon: Icon,
+  label,
+  sub,
+  tone,
+  onPress,
+}: {
+  icon: any;
+  label: string;
+  sub: string;
+  tone: 'ok' | 'due' | 'over' | 'unknown';
+  onPress?: () => void;
+}) {
+  const bg = tone === 'ok' ? Colors.tealBg : tone === 'due' ? Colors.standardBg : tone === 'over' ? Colors.criticalBg : Colors.surface;
+  const fg = tone === 'ok' ? Colors.tealDark : tone === 'due' ? Colors.accentDark : tone === 'over' ? Colors.critical : Colors.textTertiary;
+  const inner = (
+    <View style={styles.statusTile}>
+      <View style={[styles.statusIcon, { backgroundColor: bg }]}>
+        <Icon color={fg} size={20} />
+      </View>
+      <Text style={styles.statusLabel} numberOfLines={1}>{label}</Text>
+      <Text style={[styles.statusSub, { color: fg }]} numberOfLines={2}>{sub}</Text>
+    </View>
+  );
+  if (onPress) {
+    return <TouchableOpacity style={styles.statusTileWrap} onPress={onPress} activeOpacity={0.85}>{inner}</TouchableOpacity>;
+  }
+  return <View style={styles.statusTileWrap}>{inner}</View>;
 }
 
 export default function PetRecordScreen() {
@@ -1500,11 +1531,54 @@ export default function PetRecordScreen() {
     : 'STABLE';
   const felvFiv = labRows.filter((l) => /felv|fiv/i.test(String(l.analyte || l.name || '')));
   const vaxCount = vaccinations.filter((v) => v.confirmed !== false).length;
+  const nowMs = Date.now();
+  const vaxDues = vaccinations.map((v) => v.next_due_on).filter(Boolean).map((d) => new Date(String(d)).getTime()).filter((t) => !Number.isNaN(t));
+  const vaxTone: 'ok' | 'due' | 'over' | 'unknown' = vaxCount === 0 ? 'unknown'
+    : vaxDues.some((t) => t < nowMs) ? 'over'
+    : vaxDues.some((t) => t - nowMs < 30 * 864e5) ? 'due'
+    : 'ok';
+  const vaxSub = vaxTone === 'over' ? 'Overdue' : vaxTone === 'due' ? 'Due soon' : vaxTone === 'ok' ? 'Up to date' : 'No record';
+  const bcs = pet.body_condition_score;
+  let weightTone: 'ok' | 'due' | 'over' | 'unknown' = 'unknown';
+  let weightSub = latestLb != null ? `${latestLb} lb` : 'No weight';
+  if (latestLb != null && targetLb != null) {
+    if (latestLb > targetLb * 1.08 || (bcs != null && bcs >= 7)) {
+      weightTone = 'due';
+      weightSub = `${latestLb} → ${targetLb} lb target`;
+    } else if (latestLb < targetLb * 0.92 || (bcs != null && bcs <= 3)) {
+      weightTone = 'over';
+      weightSub = `${latestLb} lb · underweight`;
+    } else {
+      weightTone = 'ok';
+      weightSub = `${latestLb} lb · Ideal`;
+    }
+  } else if (bcs != null) {
+    if (bcs >= 7) { weightTone = 'due'; weightSub = `${weightSub} · Overweight`; }
+    else if (bcs <= 3) { weightTone = 'over'; weightSub = `${weightSub} · Underweight`; }
+    else { weightTone = 'ok'; weightSub = `${weightSub} · Ideal`; }
+  }
+  const felvNeg = felvFiv.length > 0 && felvFiv.every((l) => /not detected|negative|\bneg\b/i.test(String(l.value ?? l.value_text ?? '')));
+  const felvPos = felvFiv.some((l) => /detected|\bpos/i.test(String(l.value ?? l.value_text ?? '')) && !/not detected/i.test(String(l.value ?? l.value_text ?? '')));
+  const felvTone: 'ok' | 'due' | 'over' | 'unknown' = felvNeg ? 'ok' : felvPos ? 'over' : 'unknown';
+  const felvSub = felvNeg ? 'Negative' : felvPos ? 'Detected' : 'No result';
   const lastDeviceSync = deviceReadings[0]?.recorded_at || petDevices[0]?.created_at;
   const stoolLog = deviceReadings.find((r) => /stool/i.test(String(r.metric || r.kind || '')));
   const scaleW = deviceReadings.find((r) => /weight|scale/i.test(String(r.metric || r.kind || '')));
   const weekAgo = Date.now() - 7 * 864e5;
-  const visits7 = deviceReadings.filter((r) => /visit|use/i.test(String(r.metric || r.kind || '')) && new Date(r.recorded_at).getTime() > weekAgo).length;
+  const visits7 = deviceReadings.filter((r) => /visit|use|activity/i.test(String(r.metric || r.kind || '')) && new Date(r.recorded_at).getTime() > weekAgo).length;
+  const visitsPrev = deviceReadings.filter((r) => {
+    const t = new Date(r.recorded_at).getTime();
+    return /visit|use|activity/i.test(String(r.metric || r.kind || '')) && t <= weekAgo && t > weekAgo - 7 * 864e5;
+  }).length;
+  const activityTone: 'ok' | 'due' | 'over' | 'unknown' = petDevices.length === 0 && visits7 === 0 ? 'unknown'
+    : (visits7 === 0 || (visitsPrev > 0 && visits7 < visitsPrev * 0.7)) ? 'due'
+    : 'ok';
+  const activitySub = activityTone === 'unknown' ? 'No device' : activityTone === 'due' ? 'Low activity' : `${visits7} visits / 7d`;
+  const ownerNotes = documents.flatMap((d) => {
+    const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary : {};
+    const notes = Array.isArray((ai as any).owner_notes) ? (ai as any).owner_notes : [];
+    return notes.filter((n: any) => n && n.text).map((n: any) => ({ text: String(n.text), date: n.date || d.taken_on || null }));
+  }).slice(0, 3);
   const ownerSince = currentRels.find((r) => r.relationship === 'owner')?.started_on;
 
   const TABS: { key: Tab; label: string }[] = [
@@ -1659,32 +1733,34 @@ export default function PetRecordScreen() {
         {/* OVERVIEW */}
         {tab === 'overview' && (
           <View style={styles.tabContent}>
-            <View style={styles.chipRow}>
-              {felvFiv.map((l, i) => {
-                const v = String(l.value ?? l.value_text ?? '').toLowerCase();
-                const neg = /not detected|negative|\bneg\b/.test(v);
-                const name = String(l.analyte || l.name || 'FELV/FIV').toUpperCase();
-                return (
-                  <View key={i} style={[styles.ovChip, neg && styles.ovChipTeal]}>
-                    <Text style={[styles.ovChipTxt, neg && styles.ovChipTealTxt]}>{name} {neg ? 'negative' : (l.value ?? l.value_text)}</Text>
-                  </View>
-                );
-              })}
-              {pet.spayed_neutered ? (
-                <View style={[styles.ovChip, styles.ovChipTeal]}><Text style={styles.ovChipTealTxt}>Spayed/Neutered</Text></View>
-              ) : null}
-              {pet.microchipped || chipNumber ? (
-                <View style={[styles.ovChip, styles.ovChipTeal]}><Text style={styles.ovChipTealTxt}>Microchipped</Text></View>
-              ) : null}
-              {vaxCount > 0 ? (
-                <TouchableOpacity style={[styles.ovChip, styles.ovChipTeal]} onPress={() => { setTab('medical'); setMedicalHub('records'); }} activeOpacity={0.85}>
-                  <Text style={styles.ovChipTealTxt}>Vaccinated · view history →</Text>
-                </TouchableOpacity>
-              ) : null}
-              {latestLb != null ? (
-                <View style={styles.ovChip}><Text style={styles.ovChipTxt}>{latestLb} lb</Text></View>
-              ) : null}
+            <View style={styles.tileGrid}>
+              <View style={styles.tileRow}>
+                <StatusTile icon={Syringe} label="Vaccinated" sub={vaxSub} tone={vaxTone} onPress={() => { setTab('medical'); setMedicalHub('records'); }} />
+                <StatusTile icon={Heart} label="Spayed/Neutered" sub={pet.spayed_neutered ? 'Yes' : 'Not recorded'} tone={pet.spayed_neutered ? 'ok' : 'unknown'} />
+                <StatusTile icon={Shield} label="Microchipped" sub={chipNumber ? `••${String(chipNumber).slice(-4)}` : (pet.microchipped ? 'On file' : 'Not on file')} tone={(chipNumber || pet.microchipped) ? 'ok' : 'unknown'} />
+              </View>
+              <View style={styles.tileRow}>
+                <StatusTile icon={Scale} label="Weight" sub={weightSub} tone={weightTone} />
+                <StatusTile icon={FlaskConical} label="FELV/FIV" sub={felvSub} tone={felvTone} />
+                <StatusTile icon={Activity} label="Activity" sub={activitySub} tone={activityTone} />
+              </View>
             </View>
+            {ownerNotes.length > 0 ? (
+              <View style={styles.ovCard}>
+                <View style={styles.ovCardHead}>
+                  <Text style={styles.ovKicker}>NOTES FOR YOU</Text>
+                  <TouchableOpacity onPress={() => { setTab('medical'); setMedicalHub('history'); }}>
+                    <Text style={styles.linkTxt}>See all → History</Text>
+                  </TouchableOpacity>
+                </View>
+                {ownerNotes.map((n, i) => (
+                  <View key={i}>
+                    <Text style={styles.docTitle}>{n.text}</Text>
+                    {n.date ? <Text style={styles.docClinic}>{formatDate(String(n.date))}</Text> : null}
+                  </View>
+                ))}
+              </View>
+            ) : null}
 
             <View style={styles.ovCard}>
               <View style={styles.ovCardHead}>
@@ -2998,6 +3074,13 @@ const styles = StyleSheet.create({
   requestBtn: { backgroundColor: Colors.navy, borderRadius: 12, paddingVertical: 10, alignItems: 'center', marginTop: 4 },
   requestBtnTxt: { color: Colors.white, fontFamily: Fonts.bold, fontSize: 13 },
   linkTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.tealDark },
+  tileGrid: { gap: 10, alignItems: 'center' },
+  tileRow: { flexDirection: 'row', justifyContent: 'center', gap: 10, width: '100%' },
+  statusTileWrap: { flex: 1, maxWidth: 140 },
+  statusTile: { alignItems: 'center', gap: 6, paddingVertical: 8 },
+  statusIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  statusLabel: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy, textAlign: 'center' },
+  statusSub: { fontFamily: Fonts.semibold, fontSize: 10.5, textAlign: 'center', lineHeight: 14 },
   aiTitle: { fontFamily: Fonts.extrabold, color: Colors.critical, fontSize: FontSizes.md },
 
   tabContent: { paddingTop: 12, paddingHorizontal: 0 },

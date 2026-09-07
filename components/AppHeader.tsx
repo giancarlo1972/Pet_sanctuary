@@ -12,15 +12,16 @@ interface AppHeaderProps {
   title: string;
   showBack?: boolean;
   rightAction?: React.ReactNode;
+  maxWidth?: number;
 }
 
-export default function AppHeader({ title, showBack = false, rightAction }: AppHeaderProps) {
+export default function AppHeader({ title, showBack = false, rightAction, maxWidth = CONTENT_MAX }: AppHeaderProps) {
   const router = useRouter();
   const { user } = useAuth();
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.inner}>
+      <View style={[styles.inner, { maxWidth }]}>
       <View style={styles.header}>
         {showBack ? (
           <TouchableOpacity style={styles.sideBtn} onPress={() => router.back()} activeOpacity={0.75}>

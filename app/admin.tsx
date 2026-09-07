@@ -135,6 +135,20 @@ export default function AdminScreen() {
     );
   }
 
+  const assignAdmin = async (orgId: string) => {
+    if (typeof window === 'undefined') return;
+    const email = (window.prompt('Email of the new org admin') || '').trim().toLowerCase();
+    if (!email || !user) return;
+    setBusyId(orgId); setError(null);
+    const { data: ppl } = await supabase.from('profiles').select('id').ilike('email', email).maybeSingle();
+    if (!ppl) { setError('No user with that email.'); setBusyId(null); return; }
+    await supabase.from('organization_members').update({ role: 'staff' }).eq('organization_id', orgId).eq('role', 'admin');
+    const { error: up } = await supabase.from('organization_members').upsert({ organization_id: orgId, user_id: ppl.id, role: 'admin' });
+    if (up) setError(up.message);
+    else await supabase.from('audit_log').insert({ actor_id: user.id, action: 'org.admin_assigned', organization_id: orgId, subject_id: ppl.id });
+    setBusyId(null); load();
+  };
+
   const orgsQ = queue.filter((q) => q.subject_type === 'organization');
   const reportsQ = queue.filter((q) => q.subject_type === 'report');
   const usersQ = queue.filter((q) => q.subject_type === 'user' || q.subject_type === 'id');
@@ -176,7 +190,9 @@ export default function AdminScreen() {
                   <Text style={styles.cardTitle}>{o.name}</Text>
                   <Text style={styles.meta}>{(o.org_type || 'Organization')} · {o.status || 'unknown'}</Text>
                 </View>
-                <Text style={styles.reassign}>Reassign</Text>
+                <TouchableOpacity onPress={() => assignAdmin(o.id)} disabled={busyId === o.id}>
+                  <Text style={styles.reassign}>{busyId === o.id ? '…' : 'Assign admin'}</Text>
+                </TouchableOpacity>
               </View>
             ))}
             <Text style={styles.noteTxt}>Each entity gets one Org admin who manages its own members. Platform admins can reassign, suspend, or step in.</Text>

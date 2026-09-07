@@ -211,7 +211,7 @@ function Card({
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: Colors.screen },
-  phone: { flex: 1, width: '100%', maxWidth: 430, alignSelf: 'center' },
+  phone: { flex: 1, width: '100%', width: '100%' },
   scroll: { padding: 16, paddingBottom: 48, gap: 12 },
   pad: { padding: 16, fontFamily: Fonts.regular, color: Colors.textSecondary },
   kicker: { fontFamily: Fonts.extrabold, fontSize: 10, color: Colors.coral, letterSpacing: 0.8 },

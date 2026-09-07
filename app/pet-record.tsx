@@ -62,6 +62,7 @@ import { useAuth } from '@/lib/context/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import { Page, CONTENT_MAX } from '@/components/Page';
 import { WeightLineChart, LabSparkline } from '@/components/PetCharts';
+import { extractPdfText } from '@/lib/pdf-text';
 
 function blobTypeFromName(path: string) {
   if (/\.pdf$/i.test(path)) return 'application/pdf';
@@ -273,6 +274,7 @@ interface ExtractedIdentity {
   sex: string | null;
   breed: string | null;
   colors: string | null;
+  bcs?: number | null;
 }
 
 interface ExtractedData {
@@ -593,14 +595,18 @@ export default function PetRecordScreen() {
     conditions: { name: string; kind?: string; notes?: string }[];
     visitsCount: number;
     labsCount: number;
+    weightsCount?: number;
+    pageCount?: number;
   } | null>(null);
   const parsedAttempted = useRef<Set<string>>(new Set());
   const [editableVax, setEditableVax] = useState<ExtractedVaccination[]>([]);
   const [editableLabs, setEditableLabs] = useState<ExtractedLabPanel[]>([]);
   const [editableWeight, setEditableWeight] = useState<ExtractedWeight>({ value: null, unit: null, measured_on: null });
+  const [editableWeights, setEditableWeights] = useState<ExtractedWeight[]>([]);
   const [editableProcedures, setEditableProcedures] = useState<ExtractedProcedure[]>([]);
   const [applyingExtraction, setApplyingExtraction] = useState(false);
   const [confirmEdit, setConfirmEdit] = useState<Set<string>>(new Set());
+  const [parseProgress, setParseProgress] = useState<string | null>(null);
 
   const [photoUploading, setPhotoUploading] = useState(false);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
@@ -1236,11 +1242,29 @@ export default function PetRecordScreen() {
     setDocModalVisible(false);
     load();
     if (docData?.id) {
-      const dataUrl = await fileToDataUrl(docFile.uri).catch(() => null);
+      let dataUrl: string | null = null;
+      let extractedText: string | undefined;
+      let pageCount = 0;
+      const mime = (docFile as any).mimeType || blobTypeFromName(filePath);
+      if (mime.includes('pdf') || /\.pdf$/i.test(filePath)) {
+        try {
+          setParseProgress('Reading PDF pages…');
+          const pdf = await extractPdfText(docFile.uri);
+          extractedText = pdf.text;
+          pageCount = pdf.pageCount;
+          setParseProgress(`Reading ${pdf.pageCount} pages · ${pdf.charCount.toLocaleString()} characters`);
+        } catch (e) {
+          console.log('[pet-record] pdf text extract failed', e);
+        }
+      } else {
+        dataUrl = await fileToDataUrl(docFile.uri).catch(() => null);
+      }
       triggerExtraction(docData.id, {
         imageBase64: dataUrl,
-        mimeType: (docFile as any).mimeType || blobTypeFromName(filePath),
+        mimeType: mime,
         path: filePath,
+        extractedText,
+        pageCount,
       });
     }
   };
@@ -1283,8 +1307,8 @@ export default function PetRecordScreen() {
         value_num: numericOnly ? parseFloat(printed) : (typeof l.value === 'number' ? l.value : null),
         value_text: printed || null,
         unit: l.unit && !printed.includes(String(l.unit)) ? l.unit : (numericOnly ? (l.unit || null) : null),
-        ref_low: null,
-        ref_high: null,
+        ref_low: l.ref_low ?? null,
+        ref_high: l.ref_high ?? null,
         flag,
       };
     });
@@ -1312,25 +1336,35 @@ export default function PetRecordScreen() {
       }
     }
     setEditableVax(vax);
+    const allWeights: ExtractedWeight[] = Array.isArray(parsed.weights) && parsed.weights.length
+      ? parsed.weights.map((w: any) => ({
+          value: Number(w.value),
+          unit: String(w.unit || 'lb').toLowerCase().startsWith('kg') ? 'kg' : 'lb',
+          measured_on: w.measured_on || null,
+        }))
+      : (wt.value != null ? [wt] : []);
+    setEditableWeights(allWeights);
     setEditableLabs(labs.length ? [{ panel_name: 'Labs', collected_on: parsed.date || null, clinic_name: parsed.clinic || null, vet_name: null, results: labs }] : []);
     setEditableWeight(wt);
     setEditableProcedures(visits);
     setConfirmEdit(new Set());
     setExtractionReview({
       documentId,
-      data: { vaccinations: vax, lab_panels: [], weight: wt, procedures: visits, identity: { microchip: null, date_of_birth: null, sex: null, breed: null, colors: null } },
+      data: { vaccinations: vax, lab_panels: [], weight: wt, procedures: visits, identity: parsed.identity || { microchip: null, date_of_birth: null, sex: null, breed: null, colors: null } },
       extractionId: documentId,
       vaxDuplicates,
       conditions: parsed.conditions || [],
       visitsCount: visits.length,
       labsCount: labs.length,
+      weightsCount: allWeights.length,
+      pageCount: parsed.page_count || parsed.progress?.page_count,
     });
   };
 
-  const triggerExtraction = async (documentId: string, extra?: { imageBase64?: string | null; mimeType?: string; path?: string }, silent = false) => {
+  const triggerExtraction = async (documentId: string, extra?: { imageBase64?: string | null; mimeType?: string; path?: string; extractedText?: string; pageCount?: number }, silent = false) => {
     if (!user) return;
     parsedAttempted.current.add(documentId);
-    if (!silent) setExtracting(true);
+    if (!silent) { setExtracting(true); setParseProgress(extra?.pageCount ? `Reading ${extra.pageCount} pages · parsing visits` : 'Analyzing document…'); }
     await supabase.from('pet_documents').update({ ai_status: 'processing' }).eq('id', documentId);
     setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'processing' } : d));
     try {
@@ -1340,7 +1374,27 @@ export default function PetRecordScreen() {
         path = row?.file_path || row?.storage_path;
       }
       const payload: Record<string, unknown> = { document_id: documentId, path, mimeType: extra?.mimeType };
-      if (!silent && extra?.imageBase64) payload.imageBase64 = extra.imageBase64;
+      let extractedText = extra?.extractedText;
+      let pageCount = extra?.pageCount || 0;
+      if (!extractedText && path && /\.pdf$/i.test(path) && typeof document !== 'undefined') {
+        try {
+          setParseProgress('Reading PDF pages…');
+          const { data: signed } = await supabase.storage.from('pet-documents').createSignedUrl(path, 180);
+          if (signed?.signedUrl) {
+            const pdf = await extractPdfText(signed.signedUrl);
+            extractedText = pdf.text;
+            pageCount = pdf.pageCount;
+            setParseProgress(`Reading ${pdf.pageCount} pages · parsing visits`);
+          }
+        } catch (e) {
+          console.log('[parse-pet-document] client pdf extract failed', e);
+        }
+      }
+      if (!silent && extra?.imageBase64 && !extractedText) payload.imageBase64 = extra.imageBase64;
+      if (extractedText) {
+        payload.extractedText = extractedText;
+        payload.pageCount = pageCount;
+      }
       console.log('[parse-pet-document] POST /api/parse-pet-document', { documentId, silent, hasImage: Boolean(payload.imageBase64), path });
       const resp = await fetch('/api/parse-pet-document', {
         method: 'POST',
@@ -1373,7 +1427,7 @@ export default function PetRecordScreen() {
       await supabase.from('pet_documents').update({ ai_status: 'failed', ai_summary: summary }).eq('id', documentId);
       setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'failed', ai_summary: summary } : d));
     } finally {
-      if (!silent) setExtracting(false);
+      if (!silent) { setExtracting(false); setParseProgress(null); }
     }
   };
 
@@ -1452,6 +1506,8 @@ export default function PetRecordScreen() {
             value_numeric: result.value_num,
             unit: result.unit,
             flag: result.flag && String(result.flag).toLowerCase() !== 'unknown' ? result.flag : null,
+            ref_low: (result as any).ref_low ?? null,
+            ref_high: (result as any).ref_high ?? null,
           };
           console.log('[apply] lab payload', labPayload);
           const lRes = await supabase.from('lab_results').insert(labPayload).select('id').maybeSingle();
@@ -1461,31 +1517,33 @@ export default function PetRecordScreen() {
         }
       }
 
-      // 3. weight — always insert an entry; update pets only if newer
-      if (editableWeight.value != null) {
-        const unit = (editableWeight.unit || 'lb').toLowerCase();
-        const lb = unit === 'kg' ? editableWeight.value * 2.20462 : editableWeight.value;
-        const kg = unit === 'lb' ? lbToKg(editableWeight.value) : editableWeight.value;
-        const measured = editableWeight.measured_on || new Date().toISOString().slice(0, 10);
-        await run('Weight entry', () => supabase.from('weight_entries').insert({
-          pet_id: petId, weight_lb: lb, measured_on: measured, source: 'ai_extracted',
-        }));
+      // 3. weights — insert every dated row; pets.weight only if newest
+      const weightRows = editableWeights.length ? editableWeights : (editableWeight.value != null ? [editableWeight] : []);
+      const newest = weightRows.filter((w) => w.value != null && w.measured_on).sort((a, b) => String(b.measured_on).localeCompare(String(a.measured_on)))[0];
+      for (const w of weightRows) {
+        if (w.value == null) continue;
+        const unit = (w.unit || 'lb').toLowerCase();
+        const lb = unit === 'kg' ? w.value * 2.20462 : w.value;
+        const measured = w.measured_on || new Date().toISOString().slice(0, 10);
+        const payload = { pet_id: petId, weight_lb: lb, measured_on: measured, source: 'ai_extracted' };
+        console.log('[apply] weight payload', payload);
+        const res = await supabase.from('weight_entries').insert(payload);
+        if (res.error) errors.push(`Weight ${measured}: ${res.error.message}`);
+        else appliedCount++;
+      }
+      if (newest && newest.value != null) {
+        const unit = (newest.unit || 'lb').toLowerCase();
+        const kg = unit === 'lb' ? lbToKg(newest.value) : newest.value;
         const currentMeasured = pet?.weight_measured_on || '';
-        if (!currentMeasured || measured > currentMeasured) {
+        if (!currentMeasured || (newest.measured_on || '') > currentMeasured) {
+          const ident: any = extractionReview.data?.identity || {};
           await run('Pet weight', () => supabase.from('pets').update({
             weight_kg: kg,
-            weight_measured_on: measured,
+            weight_measured_on: newest.measured_on,
+            ...(ident.bcs ? { body_condition_score: ident.bcs } : {}),
+            ...(ident.date_of_birth ? { date_of_birth: ident.date_of_birth } : {}),
           }).eq('id', petId));
         }
-        await run('Weight event', () => supabase.from('pet_care_events').insert({
-          pet_id: petId,
-          event_type: 'weight',
-          occurred_on: measured,
-          title: 'Weight recorded (from document)',
-          notes: `${editableWeight.value} ${editableWeight.unit || 'lb'}`,
-          weight_kg: kg,
-          recorded_by: user.id,
-        }));
       }
 
       // 4. visits
@@ -3103,11 +3161,19 @@ export default function PetRecordScreen() {
               <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8 }}>
                 <Text style={styles.modalTitle}>Review extraction</Text>
                 <Text style={styles.extractionSummary}>
-                  {editableVax.length} vaccination{editableVax.length !== 1 ? 's' : ''} · {extractionReview.visitsCount} visit{extractionReview.visitsCount !== 1 ? 's' : ''} · {extractionReview.labsCount} lab{extractionReview.labsCount !== 1 ? 's' : ''}
-                  {editableWeight.value != null ? ' · weight' : ''}
+                  {editableVax.length} vaccine{editableVax.length !== 1 ? 's' : ''} · {extractionReview.visitsCount} visit{extractionReview.visitsCount !== 1 ? 's' : ''} · {extractionReview.labsCount} lab{extractionReview.labsCount !== 1 ? 's' : ''} · {editableWeights.length} weight{editableWeights.length !== 1 ? 's' : ''}
+                  {extractionReview.pageCount ? ` · ${extractionReview.pageCount} pages` : ''}
                 </Text>
               </View>
               <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24, gap: 12 }} showsVerticalScrollIndicator={false}>
+                {editableWeights.length > 0 ? (
+                  <View style={styles.confirmCard}>
+                    <Text style={styles.docTitle}>Weight history ({editableWeights.length})</Text>
+                    {editableWeights.slice().sort((a, b) => String(b.measured_on).localeCompare(String(a.measured_on))).map((w, i) => (
+                      <Text key={`${w.measured_on}-${i}`} style={styles.confirmLine}>{w.measured_on} · {w.value} {w.unit || 'lb'}</Text>
+                    ))}
+                  </View>
+                ) : null}
                 {editableVax.map((vax, i) => {
                   const editing = confirmEdit.has(`vax-${i}`);
                   const rows: [string, string | null][] = [
@@ -3188,6 +3254,7 @@ export default function PetRecordScreen() {
                   const editing = confirmEdit.has(key);
                   return (
                     <View key={key} style={styles.confirmCard}>
+                      <Text style={styles.ovKicker}>VISIT {proc.occurred_on || ''}</Text>
                       <View style={styles.ovCardHead}>
                         <Text style={styles.docTitle}>{proc.title || 'Visit'}</Text>
                         <TouchableOpacity onPress={() => setConfirmEdit((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; })}>
@@ -3229,7 +3296,7 @@ export default function PetRecordScreen() {
           <View style={styles.extractingOverlay}>
             <View style={styles.extractingCard}>
               <ActivityIndicator size="large" color={Colors.coral} />
-              <Text style={styles.extractingText}>Analyzing document with AI...</Text>
+              <Text style={styles.extractingText}>{parseProgress || 'Analyzing document with AI...'}</Text>
             </View>
           </View>
         </Modal>

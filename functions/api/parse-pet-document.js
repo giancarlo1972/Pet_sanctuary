@@ -1,3 +1,14 @@
+import {
+  splitServiceBlocks,
+  parseWeightHistory,
+  parseReminders,
+  parseInventoryVaccines,
+  parseLabTables,
+  parsePatientHeader,
+  parseConditions,
+  batchBlocks,
+} from '../lib/clinic-export.js';
+
 function decodedBytes(b64) {
   const raw = String(b64 || '').replace(/^data:[^;]+;base64,/, '');
   return Math.floor(raw.length * 0.75);
@@ -95,6 +106,8 @@ function normalizeLab(l) {
     value,
     unit,
     flag,
+    ref_low: l?.ref_low ?? null,
+    ref_high: l?.ref_high ?? null,
     collected_on: l?.collected_on || null,
   };
 }
@@ -185,7 +198,151 @@ async function fetchDocBytes(env, path) {
   const bytes = new Uint8Array(buf);
   let binary = '';
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return { b64: btoa(binary), isPdf: /\.pdf$/i.test(path), byteLength: bytes.length };
+  return { b64: btoa(binary), isPdf: /\.pdf$/i.test(path), byteLength: bytes.length, bytes };
+}
+
+function extractPdfTextNaive(bytes) {
+  let latin1 = '';
+  const chunk = 0x4000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    const slice = bytes.subarray(i, Math.min(i + chunk, bytes.length));
+    latin1 += String.fromCharCode.apply(null, slice);
+  }
+  const pageCount = (latin1.match(/\/Type\s*\/Page(?!s)/g) || []).length;
+  const parts = [];
+  const tj = /\(((?:\\.|[^\\)])*)\)\s*Tj/g;
+  let m;
+  while ((m = tj.exec(latin1))) {
+    parts.push(m[1].replace(/\\n/g, '\n').replace(/\\([()\\])/g, '$1'));
+  }
+  const text = parts.join(' ').replace(/[ \t]{2,}/g, ' ');
+  return { text, pageCount, charCount: text.length };
+}
+
+const VISIT_PROMPT = `This is one or more veterinary visit blocks from a clinic export. Return JSON only:
+{"visits":[{"clinic":null,"date":"YYYY-MM-DD","reason":null,"summary":null}],"vaccinations":[{"name":"","product":null,"manufacturer":null,"lot":null,"given":"YYYY-MM-DD","next_due":null,"vet":null,"clinic":null}],"labs":[{"analyte":"","value":"","unit":null,"flag":"normal|high|low|abnormal","ref_low":null,"ref_high":null,"collected_on":null}],"conditions":[{"name":"","kind":"condition|allergy|medication","status":"active|resolved|monitoring","notes":null}],"owner_notes":[{"text":"","date":null}],"ai_note":""}
+Use given for administered date. Inventory Item PUREVAX lines are vaccines given that service date. Lab tables: keep H/L flags and reference ranges.`;
+
+async function parseClinicExport(env, key, documentId, text, pageCount) {
+  const charCount = text.length;
+  const blocks = splitServiceBlocks(text);
+  console.log('[parse-pet-document] clinic export', { pageCount, charCount, visits: blocks.length });
+  if (documentId) {
+    await updateDoc(env, documentId, {
+      ai_status: 'processing',
+      ai_summary: {
+        schemaVersion: 2,
+        progress: { page_count: pageCount, char_count: charCount, visits_total: blocks.length, visits_parsed: 0, stage: 'header' },
+      },
+    });
+  }
+  const header = parsePatientHeader(text);
+  const weights = parseWeightHistory(text);
+  const reminderVax = parseReminders(text).map(normalizeVax);
+  const conditions = parseConditions(text);
+  let labs = parseLabTables(text).map(normalizeLab);
+  const visits = [];
+  const vax = [...reminderVax];
+  blocks.forEach((b, i) => {
+    visits.push({ clinic: null, date: b.date, reason: 'Visit', summary: b.text.slice(0, 1200) });
+    parseInventoryVaccines(b.text, b.date).forEach((v) => vax.push(normalizeVax(v)));
+    parseLabTables(b.text).forEach((l) => labs.push(normalizeLab({ ...l, collected_on: l.collected_on || b.date })));
+    if (documentId && i % 8 === 0) {
+      updateDoc(env, documentId, {
+        ai_status: 'processing',
+        ai_summary: {
+          schemaVersion: 2,
+          progress: { page_count: pageCount, char_count: charCount, visits_total: blocks.length, visits_parsed: i + 1, stage: 'visits' },
+        },
+      }).catch(() => {});
+    }
+  });
+  for (const r of reminderVax) {
+    const hit = vax.find((v) => v.name && r.name && v.name.toLowerCase().includes(r.name.split(' ')[0].toLowerCase()) && v.given && !v.next_due);
+    if (hit) hit.next_due = r.next_due;
+  }
+  const batches = batchBlocks(blocks, 16000).slice(0, 3);
+  for (let bi = 0; bi < batches.length; bi++) {
+    const chunk = batches[bi].map((b) => `--- Service on ${b.date} ---\n${b.text.slice(0, 6000)}`).join('\n\n');
+    try {
+      const { resp, text: raw } = await callClaude(key, MODELS[0], [{ type: 'text', text: `${VISIT_PROMPT}\n\n${chunk}` }]);
+      if (!resp.ok) continue;
+      const parsed = parseClaudeJson(raw);
+      (parsed.visits || []).forEach((v) => {
+        const existing = visits.find((x) => x.date === v.date);
+        if (existing && v.summary) existing.summary = v.summary;
+        else if (v.date) visits.push(v);
+      });
+      (parsed.vaccinations || []).forEach((v) => vax.push(normalizeVax(v)));
+      (parsed.labs || []).forEach((l) => labs.push(normalizeLab(l)));
+      (parsed.conditions || []).forEach((c) => conditions.push(c));
+    } catch (e) {
+      console.log('[parse-pet-document] visit batch skip', bi, String(e));
+    }
+    if (documentId) {
+      await updateDoc(env, documentId, {
+        ai_status: 'processing',
+        ai_summary: {
+          schemaVersion: 2,
+          progress: {
+            page_count: pageCount, char_count: charCount,
+            visits_total: blocks.length,
+            visits_parsed: Math.min(blocks.length, (bi + 1) * Math.ceil(blocks.length / Math.max(batches.length, 1))),
+            stage: 'visits',
+          },
+        },
+      });
+    }
+  }
+  const dedupeVax = [];
+  const seenV = new Set();
+  for (const v of vax) {
+    const k = `${(v.name || '').toLowerCase()}|${v.given || v.next_due || ''}`;
+    if (!v.name || seenV.has(k)) continue;
+    seenV.add(k);
+    dedupeVax.push(v);
+  }
+  const dedupeLabs = [];
+  const seenL = new Set();
+  for (const l of labs) {
+    const k = `${(l.analyte || '').toLowerCase()}|${l.value}|${l.collected_on || ''}`;
+    if (!l.analyte || seenL.has(k)) continue;
+    seenL.add(k);
+    dedupeLabs.push(l);
+  }
+  const latestW = weights.slice().sort((a, b) => String(b.measured_on).localeCompare(String(a.measured_on)))[0] || null;
+  const out = {
+    parsed: true,
+    source: 'ai_extracted',
+    schemaVersion: 2,
+    kind: 'clinic_export',
+    title: 'Clinic export',
+    clinic: null,
+    date: visits[0]?.date || null,
+    vaccinations: dedupeVax,
+    conditions,
+    medications: [],
+    visits,
+    labs: dedupeLabs,
+    weights,
+    weight: latestW,
+    identity: header,
+    page_count: pageCount,
+    char_count: charCount,
+    progress: { page_count: pageCount, char_count: charCount, visits_total: blocks.length, visits_parsed: blocks.length, stage: 'done' },
+    ai_note: `${blocks.length} visits · ${weights.length} weights · ${dedupeVax.length} vaccines · ${dedupeLabs.length} labs`,
+    owner_notes: [],
+  };
+  console.log('[parse-pet-document] clinic done', out.ai_note, 'vaccinations[0]', dedupeVax[0]);
+  if (documentId) {
+    await updateDoc(env, documentId, {
+      ai_status: 'ready',
+      ai_summary: out,
+      title: out.title,
+      taken_on: out.date || undefined,
+    });
+  }
+  return Response.json(out, { headers });
 }
 
 async function updateDoc(env, documentId, patch) {
@@ -211,18 +368,26 @@ export async function onRequestPost(context) {
     const documentId = body.document_id || body.documentId || null;
     const key = getKey(env);
     const sb = getSupabase(env);
+    const extractedText = body.extractedText || body.text || '';
+    const pageCountIn = Number(body.pageCount) || 0;
     console.log('[parse-pet-document] start', {
       documentId,
       hasAnthropic: Boolean(key),
       hasSupabase: Boolean(sb.url && sb.key),
       hasImage: Boolean(body.imageBase64),
       hasImages: Array.isArray(body.images) && body.images.length,
+      textChars: extractedText.length,
+      pageCount: pageCountIn,
       mime: body.mimeType || null,
     });
     if (!key) {
       console.log('[parse-pet-document] FAIL missing ANTHROPIC_API_KEY');
       if (documentId) await updateDoc(env, documentId, { ai_status: 'failed', ai_summary: { reason: 'model_error', error: 'AI key missing' } });
       return fail('model_error', { error: 'AI key missing' });
+    }
+
+    if (extractedText && (extractedText.length > 2500 || /Service on\s+\d/i.test(extractedText))) {
+      return parseClinicExport(env, key, documentId, extractedText, pageCountIn || splitServiceBlocks(extractedText).length);
     }
 
     let imgs = Array.isArray(body.images) ? body.images : (body.imageBase64 ? [body.imageBase64] : []);
@@ -233,6 +398,13 @@ export async function onRequestPost(context) {
         imgs = [fetched.b64];
         isPdf = fetched.isPdf;
         console.log('[parse-pet-document] fetched storage', fetched.byteLength, 'pdf=', isPdf);
+        if (fetched.isPdf && fetched.bytes) {
+          const naive = extractPdfTextNaive(fetched.bytes);
+          console.log('[parse-pet-document] naive pdf text', naive.charCount, 'pages', naive.pageCount);
+          if (naive.charCount > 2500 || /Service on\s+\d/i.test(naive.text)) {
+            return parseClinicExport(env, key, documentId, naive.text, naive.pageCount || pageCountIn);
+          }
+        }
       }
     }
     if (imgs.length === 0 && documentId) {

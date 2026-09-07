@@ -17,7 +17,7 @@ export default function UpdatesScreen() {
           <Text style={styles.ctaKicker}>NEW ON THIS PREVIEW</Text>
           <Text style={styles.ctaTitle}>Admin console — orgs, reports, IDs</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.ctaAlt} onPress={() => router.push('/pet-care')}>
+        <TouchableOpacity style={styles.ctaAlt} onPress={() => router.push('/(tabs)/profile')}>
           <Text style={styles.ctaAltTxt}>Gina care record</Text>
         </TouchableOpacity>
         <View style={styles.card}>

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Linking, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Linking, useWindowDimensions, TextInput, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import AppHeader from '@/components/AppHeader';
@@ -27,7 +27,9 @@ export default function AdminScreen() {
   const [role, setRole] = useState<string | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [orgs, setOrgs] = useState<{ id: string; name: string; status: string | null; ein: string | null }[]>([]);
-  const [allOrgs, setAllOrgs] = useState<{ id: string; name: string; org_type: string | null; status: string | null }[]>([]);
+  const [allOrgs, setAllOrgs] = useState<any[]>([]);
+  const [editOrg, setEditOrg] = useState<any | null>(null);
+  const [editName, setEditName] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,7 +61,7 @@ export default function AdminScreen() {
     setOrgs(orgRows ?? []);
     const { data: allRows } = await supabase
       .from('organizations')
-      .select('id, name, org_type, status')
+      .select('id, name, org_type, status, website, contact_email, logo_url, ein')
       .order('name')
       .limit(80);
     setAllOrgs(allRows ?? []);
@@ -186,7 +188,7 @@ export default function AdminScreen() {
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
             {allOrgs.map((o) => (
               <View key={o.id} style={{ width: wide ? '48.5%' : '100%' }}>
-              <View style={styles.entity}>
+              <TouchableOpacity style={styles.entity} onPress={() => { setEditOrg(o); setEditName(o.name || ''); }} activeOpacity={0.85}>
                 <View style={[styles.entityAv, { backgroundColor: Colors.navy }]}>
                   <Text style={styles.entityAvTxt}>{(o.name || '?').charAt(0).toUpperCase()}</Text>
                 </View>
@@ -194,10 +196,8 @@ export default function AdminScreen() {
                   <Text style={styles.cardTitle}>{o.name}</Text>
                   <Text style={styles.meta}>{(o.org_type || 'Organization')} · {o.status || 'unknown'}</Text>
                 </View>
-                <TouchableOpacity onPress={() => assignAdmin(o.id)} disabled={busyId === o.id}>
-                  <Text style={styles.reassign}>{busyId === o.id ? '…' : 'Assign admin'}</Text>
-                </TouchableOpacity>
-              </View>
+                <Text style={styles.reassign}>Edit</Text>
+              </TouchableOpacity>
               </View>
             ))}
             </View>
@@ -229,12 +229,43 @@ export default function AdminScreen() {
           <View style={styles.note}>
             <Text style={styles.noteTxt}>Every admin action is written to the audit log with your user ID and timestamp. Access to PII/medical records requires an approved access request even for admins.</Text>
           </View>
-          <View style={styles.links}>
-            <TouchableOpacity style={styles.ghost} onPress={() => router.push('/invoices')}><Text style={styles.ghostTxt}>Invoices by role</Text></TouchableOpacity>
-            <TouchableOpacity style={styles.ghost} onPress={() => router.push('/pet-care')}><Text style={styles.ghostTxt}>Gina care record</Text></TouchableOpacity>
-          </View>
         </View>
       </ScrollView>
+
+      {editOrg ? (
+        <View style={styles.sheetScrim}>
+          <View style={styles.sheet}>
+            <Text style={styles.heroTitle}>Edit organization</Text>
+            <Text style={styles.meta}>Status: {editOrg.status || 'unknown'}</Text>
+            <TextInput style={styles.input} value={editName} onChangeText={setEditName} placeholder="Name" />
+            <View style={styles.row}>
+              {['approved','rejected','suspended','pending_review'].map((st) => (
+                <TouchableOpacity key={st} style={styles.ghost} onPress={async () => {
+                  await supabase.from('organizations').update({ status: st, name: editName.trim() || editOrg.name }).eq('id', editOrg.id);
+                  setEditOrg(null); load();
+                }}>
+                  <Text style={styles.ghostTxt}>{st === 'approved' ? 'Approve' : st === 'rejected' ? 'Reject' : st === 'suspended' ? 'Suspend' : 'Pending'}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity style={styles.ghost} onPress={() => assignAdmin(editOrg.id)}>
+              <Text style={styles.ghostTxt}>Assign admin</Text>
+            </TouchableOpacity>
+            {editOrg.logo_url ? (
+              <TouchableOpacity style={styles.ghost} onPress={async () => {
+                await supabase.from('organizations').update({ logo_url: null }).eq('id', editOrg.id);
+                setEditOrg(null); load();
+              }}><Text style={styles.ghostTxt}>Remove image</Text></TouchableOpacity>
+            ) : null}
+            <TouchableOpacity style={styles.reject} onPress={async () => {
+              if (typeof window !== 'undefined' && !window.confirm('Delete this organization? This cannot be undone.')) return;
+              await supabase.from('organizations').delete().eq('id', editOrg.id);
+              setEditOrg(null); load();
+            }}><Text style={styles.rejectTxt}>Delete</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => setEditOrg(null)}><Text style={styles.link}>Close</Text></TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }

@@ -469,6 +469,25 @@ function catalogBreed(raw?: string | null): string {
     .trim();
 }
 
+function breedKey(raw?: string | null): string {
+  return catalogBreed(raw).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function displayBreed(primary?: string | null, secondary?: string | null, fallback?: string | null): string {
+  const p = catalogBreed(primary);
+  const s = catalogBreed(secondary);
+  if (p && s && breedKey(p) === breedKey(s)) return p;
+  if (p && s) return `${p} / ${s}`;
+  return p || s || catalogBreed(fallback) || '—';
+}
+
+function dedupeBreedPair(primary?: string | null, secondary?: string | null) {
+  const p = catalogBreed(primary) || null;
+  let s = catalogBreed(secondary) || null;
+  if (s && p && breedKey(s) === breedKey(p)) s = null;
+  return { primary: p, secondary: s };
+}
+
 function ageFromDob(dob?: string | null, ageText?: string | null) {
   const p = parseLocalParts(dob || null);
   if (p) {
@@ -651,6 +670,7 @@ export default function PetRecordScreen() {
   const [detailsDob, setDetailsDob] = useState('');
   const [detailsSex, setDetailsSex] = useState('');
   const [detailsSpayed, setDetailsSpayed] = useState(false);
+  const [detailsSince, setDetailsSince] = useState('');
   const [savingDetails, setSavingDetails] = useState(false);
 
   const [docModalVisible, setDocModalVisible] = useState(false);
@@ -1152,13 +1172,15 @@ export default function PetRecordScreen() {
   const saveBreed = async () => {
     if (!petId) return;
     setSavingBreed(true);
+    const pair = dedupeBreedPair(breedForm.breed_primary, breedForm.breed_secondary);
     const { error } = await supabase
       .from('pets')
       .update({
-        breed_primary: breedForm.breed_primary || null,
-        breed_secondary: breedForm.breed_secondary || null,
-        is_mixed: breedForm.is_mixed,
+        breed_primary: pair.primary,
+        breed_secondary: pair.secondary,
+        is_mixed: pair.secondary ? true : breedForm.is_mixed,
         breed_notes: breedForm.breed_notes.trim() || null,
+        breed: pair.primary,
       })
       .eq('id', petId);
     if (error) { console.error('[pet-record] breed update:', error); showBanner(error.message || 'Could not save breed info.'); setSavingBreed(false); return; }
@@ -1184,17 +1206,23 @@ export default function PetRecordScreen() {
     setDetailsSex(pet?.gender || '');
     setDetailsSpayed(Boolean(pet?.spayed_neutered));
     setDetailsCoat(pet?.coat || pet?.ai_traits?.coat || inferCoat(pet?.breed_primary || pet?.breed, pet?.breed_notes) || '');
+    const ownerRel = (relationships || []).find((r) =>
+      !r.ended_on && /owner/i.test(r.relationship || '') && (!pet?.owner_id || r.user_id === pet.owner_id)
+    ) || (relationships || []).find((r) => !r.ended_on && /owner/i.test(r.relationship || ''));
+    setDetailsSince((ownerRel?.started_on || '').slice(0, 10));
     setDetailsSheetVisible(true);
   };
 
   const saveDetails = async () => {
     if (!petId) return;
     setSavingDetails(true);
+    const pair = dedupeBreedPair(breedForm.breed_primary, breedForm.breed_secondary);
     const { error } = await supabase.from('pets').update({
-      breed_primary: breedForm.breed_primary || null,
-      breed_secondary: breedForm.breed_secondary || null,
-      is_mixed: breedForm.is_mixed,
+      breed_primary: pair.primary,
+      breed_secondary: pair.secondary,
+      is_mixed: pair.secondary ? true : breedForm.is_mixed,
       breed_notes: breedForm.breed_notes.trim() || null,
+      breed: pair.primary,
       primary_color: colorForm.primary_color || null,
       secondary_color: colorForm.secondary_color || null,
       color_notes: colorForm.color_notes.trim() || null,
@@ -1203,6 +1231,25 @@ export default function PetRecordScreen() {
       spayed_neutered: detailsSpayed,
       coat: detailsCoat || null,
     }).eq('id', petId);
+    if (!error && detailsSince) {
+      const ownerRel = (relationships || []).find((r) =>
+        !r.ended_on && /owner/i.test(r.relationship || '') && (!pet?.owner_id || r.user_id === pet.owner_id)
+      ) || (relationships || []).find((r) => !r.ended_on && /owner/i.test(r.relationship || ''));
+      const since = detailsSince.slice(0, 10);
+      if (ownerRel?.id) {
+        const { error: relErr } = await supabase.from('pet_relationships').update({ started_on: since }).eq('id', ownerRel.id);
+        if (relErr) showBanner(relErr.message || 'Saved details, but With you since did not persist.');
+      } else if (pet?.owner_id) {
+        const { error: relErr } = await supabase.from('pet_relationships').insert({
+          pet_id: petId, user_id: pet.owner_id, relationship: 'owner', started_on: since, source: 'owner',
+        });
+        if (relErr) {
+          await supabase.from('pet_relationships').insert({
+            pet_id: petId, user_id: pet.owner_id, relationship: 'owner', started_on: since,
+          });
+        }
+      }
+    }
     setSavingDetails(false);
     if (error) { showBanner(error.message || 'Could not save details.'); return; }
     setDetailsSheetVisible(false);
@@ -1992,7 +2039,7 @@ export default function PetRecordScreen() {
     );
   }
 
-  const breedDisplay = catalogBreed([pet.breed_primary, pet.breed_secondary].filter(Boolean).join(' / ') || pet.breed || '') || '—';
+  const breedDisplay = displayBreed(pet.breed_primary, pet.breed_secondary, pet.breed);
   const colorDisplay = [pet.primary_color, pet.secondary_color].filter(Boolean).join(' / ') || '—';
   const latestWeightRow = weightEntries.reduce((best, w) => {
     if (!w.measured_on) return best;
@@ -2111,12 +2158,14 @@ export default function PetRecordScreen() {
     const notes = Array.isArray((ai as any).owner_notes) ? (ai as any).owner_notes : [];
     return notes.filter((n: any) => n && n.text).map((n: any) => ({ text: String(n.text), date: n.date || d.taken_on || null }));
   }).slice(0, 3);
-  const ownerSince = currentRels.find((r) => r.relationship === 'owner')?.started_on;
-  const priorOwners = relationships.filter((r) => r.relationship === 'owner' && r.ended_on);
+  const ownerRel = currentRels.find((r) => /owner/i.test(r.relationship || '') && (!pet.owner_id || r.user_id === pet.owner_id))
+    || currentRels.find((r) => /owner/i.test(r.relationship || ''));
+  const ownerSince = ownerRel?.started_on || null;
+  const priorOwners = relationships.filter((r) => /owner/i.test(r.relationship || '') && r.ended_on);
   const withYouLabel = (() => {
     if (!ownerSince) return '—';
     if (priorOwners.length === 0) return `First owner · since ${formatDate(ownerSince)}`;
-    return formatDate(ownerSince);
+    return `since ${formatDate(ownerSince)}`;
   })();
   const speciesLabel = (() => {
     const s = (pet.species || '').toLowerCase();
@@ -2469,9 +2518,11 @@ export default function PetRecordScreen() {
                 <View style={styles.detailTile}>
                   <Text style={styles.detailK}>Sex</Text>
                   {sexSymbol ? (
-                    <Text style={{ fontSize: 28, lineHeight: 32, fontFamily: Fonts.extrabold, color: sexSymbol === '♀' ? Colors.coral : Colors.navy }}>{sexSymbol}</Text>
+                    <Text style={styles.detailV} numberOfLines={1}>
+                      <Text style={[styles.sexGlyph, { color: sexSymbol === '♀' ? Colors.coral : Colors.navy }]}>{sexSymbol}</Text>
+                      {sexAlter ? ` ${sexAlter}` : ''}
+                    </Text>
                   ) : <Text style={styles.detailV}>—</Text>}
-                  {sexAlter ? <Text style={styles.detailV}>{sexAlter}</Text> : null}
                 </View>
                 <View style={styles.detailTile}>
                   <Text style={styles.detailK}>Date of birth</Text>
@@ -2486,6 +2537,12 @@ export default function PetRecordScreen() {
                 <View style={styles.detailTile}>
                   <Text style={styles.detailK}>With you since</Text>
                   <Text style={styles.detailV}>{withYouLabel}</Text>
+                </View>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>Weight</Text>
+                  <Text style={styles.detailV}>
+                    {latestLb != null ? `${latestLb} lb` : '—'}{bcs != null ? ` · BCS ${bcs}` : ''}
+                  </Text>
                 </View>
               </View>
             </View>
@@ -3374,8 +3431,18 @@ export default function PetRecordScreen() {
               keyExtractor={(item) => `${item.species}-${item.id}`}
               renderItem={({ item }) => (
                 <TouchableOpacity style={styles.searchResultRow} onPress={() => {
-                  if (selectingBreedField === 'primary') setBreedForm((p) => ({ ...p, breed_primary: item.name }));
-                  else setBreedForm((p) => ({ ...p, breed_secondary: item.name }));
+                  if (selectingBreedField === 'primary') {
+                    setBreedForm((p) => ({
+                      ...p,
+                      breed_primary: item.name,
+                      breed_secondary: breedKey(item.name) === breedKey(p.breed_secondary) ? '' : p.breed_secondary,
+                    }));
+                  } else {
+                    setBreedForm((p) => ({
+                      ...p,
+                      breed_secondary: breedKey(item.name) === breedKey(p.breed_primary) ? '' : item.name,
+                    }));
+                  }
                   setSelectingBreedField(null);
                 }} activeOpacity={0.85}
                 >
@@ -3448,6 +3515,13 @@ export default function PetRecordScreen() {
                 <input type="date" value={detailsDob} onChange={(e: any) => setDetailsDob(e.target.value)} style={{ fontSize: 16, padding: 12, borderRadius: 10, border: `1px solid ${Colors.borderInput}`, fontFamily: Fonts.medium, color: Colors.navy, width: '100%' }} />
               ) : (
                 <TextInput style={styles.modalInput} value={detailsDob} onChangeText={setDetailsDob} placeholder="YYYY-MM-DD" placeholderTextColor={Colors.textTertiary} />
+              )}
+              <Text style={styles.modalLabel}>With you since</Text>
+              {Platform.OS === 'web' ? (
+                // @ts-ignore web date input
+                <input type="date" value={detailsSince} onChange={(e: any) => setDetailsSince(e.target.value)} style={{ fontSize: 16, padding: 12, borderRadius: 10, border: `1px solid ${Colors.borderInput}`, fontFamily: Fonts.medium, color: Colors.navy, width: '100%' }} />
+              ) : (
+                <TextInput style={styles.modalInput} value={detailsSince} onChangeText={setDetailsSince} placeholder="YYYY-MM-DD" placeholderTextColor={Colors.textTertiary} />
               )}
               <Text style={styles.modalLabel}>Sex</Text>
               <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -3845,9 +3919,10 @@ const styles = StyleSheet.create({
   requestBtnTxt: { color: Colors.white, fontFamily: Fonts.bold, fontSize: 13 },
   linkTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.tealDark },
   detailGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  detailTile: { width: '48%', gap: 4, backgroundColor: Colors.surface, borderRadius: 12, padding: 10 },
-  detailK: { fontFamily: Fonts.extrabold, fontSize: 10, letterSpacing: 0.6, color: Colors.textTertiary, textTransform: 'uppercase' },
-  detailV: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.navy },
+  detailTile: { width: '48%', minHeight: 64, gap: 4, backgroundColor: Colors.surface, borderRadius: 12, padding: 10, justifyContent: 'center' },
+  detailK: { fontFamily: Fonts.bold, fontSize: 10.5, letterSpacing: 0.7, color: '#9AA1AC', textTransform: 'uppercase' },
+  detailV: { fontFamily: Fonts.medium, fontSize: 14, color: Colors.navy, fontWeight: '600' },
+  sexGlyph: { fontFamily: Fonts.extrabold, fontSize: 20, lineHeight: 22, fontWeight: '700' },
   aiTitle: { fontFamily: Fonts.extrabold, color: Colors.critical, fontSize: FontSizes.md },
   reviewBox: { backgroundColor: Colors.standardBg, borderRadius: 14, padding: 14, gap: 8 },
   reviewTitle: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.accentDark },

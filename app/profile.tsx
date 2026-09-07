@@ -99,8 +99,8 @@ export default function ProfileScreen() {
         </View>
         <ScrollView contentContainerStyle={styles.authScroll} showsVerticalScrollIndicator={false}>
           <View style={styles.authHeader}>
-            <Text style={styles.authTitle}>Welcome Back</Text>
-            <Text style={styles.authSubtitle}>Sign in to view your profile and activity.</Text>
+            <Text style={styles.authTitle}>Sign in</Text>
+            <Text style={styles.authSubtitle}>Use Continue with Google (your personal account) to open Admin and your pets.</Text>
           </View>
           <AuthForm variant="plain" />
         </ScrollView>

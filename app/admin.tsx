@@ -137,7 +137,7 @@ export default function AdminScreen() {
       <AppHeader title="Admin" showBack />
       <View style={styles.phone}>
         <ScrollView contentContainerStyle={styles.scroll}>
-          <Text style={styles.kicker}>FULL ACCESS · {role.toUpperCase()}</Text>
+          <Text style={styles.kicker}>FULL ACCESS · ADMINISTRATOR</Text>
           <Text style={styles.h1}>Admin console</Text>
           <Text style={styles.body}>Org verifications, reports, and ID review. Actions write to Supabase. PII stays in approved requests only.</Text>
           {error ? <Text style={styles.err}>{error}</Text> : null}

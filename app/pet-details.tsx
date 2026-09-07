@@ -39,6 +39,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import OrgAvatar from '@/components/OrgAvatar';
 import SignedImage from '@/components/SignedImage';
+import { Page } from '@/components/Page';
 
 
 interface PetRecord {
@@ -527,13 +528,14 @@ export default function PetDetailsScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <Page scroll={false} wideMax={720}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.scrollContent, { paddingBottom: 90 + insets.bottom }]}>
         {banner && <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />}
         {/* Hero image */}
         <View style={styles.heroWrap}>
           {pet.main_photo_url ? (
             pet.main_photo_url.startsWith('http') ? (
-        <Image source={{ uri: pet.main_photo_url }} style={styles.heroImage} resizeMode="contain" />
+        <Image source={{ uri: pet.main_photo_url }} style={styles.heroImage} resizeMode="cover" />
             ) : (
               <SignedImage path={pet.main_photo_url} style={styles.heroImage} />
             )
@@ -871,6 +873,7 @@ export default function PetDetailsScreen() {
           </View>
         )}
       </View>
+      </Page>
     </SafeAreaView>
   );
 }
@@ -885,7 +888,7 @@ const styles = StyleSheet.create({
 
   scrollContent: { paddingBottom: 100 },
 
-  heroWrap: { position: 'relative', width: '100%', height: 360, backgroundColor: Colors.navy },
+  heroWrap: { position: 'relative', width: '100%', aspectRatio: 4/3, borderRadius: 20, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 12 },
   heroImage: { width: '100%', height: '100%' },
   heroPlaceholder: { justifyContent: 'center', alignItems: 'center' },
   heroBack: {
@@ -902,8 +905,8 @@ const styles = StyleSheet.create({
   },
 
   petInfo: {
-    backgroundColor: Colors.white, borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    marginTop: -24, paddingTop: 24, paddingHorizontal: 20, paddingBottom: 20,
+    backgroundColor: Colors.white, borderRadius: 16,
+    marginTop: 12, paddingTop: 20, paddingHorizontal: 4, paddingBottom: 20,
   },
   petHeader: {
     flexDirection: 'row', alignItems: 'baseline', gap: 8, marginBottom: 4,
@@ -1083,7 +1086,7 @@ const styles = StyleSheet.create({
   },
 
   // Bottom actions — fixed footer
-  bottomActions: {
+  bottomActions: { width: '100%', {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     flexDirection: 'row', backgroundColor: Colors.white,
     paddingHorizontal: 20, paddingTop: 16, gap: 12,

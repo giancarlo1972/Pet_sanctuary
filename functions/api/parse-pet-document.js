@@ -35,6 +35,63 @@ Return JSON only, no markdown:
 Extract only what is printed. Empty arrays if unreadable. Never invent dates.`;
 
 const MODELS = ['claude-haiku-4-5', 'claude-3-5-haiku-latest', 'claude-3-5-sonnet-20241022'];
+const SYSTEM = 'Respond with a single JSON object only, no markdown, no commentary';
+
+function stripFences(text) {
+  return String(text || '')
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```\s*$/, '')
+    .trim();
+}
+
+function extractJsonBlock(text) {
+  const cleaned = stripFences(text);
+  const start = cleaned.indexOf('{');
+  if (start < 0) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (inStr) {
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return cleaned.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+function parseClaudeJson(text) {
+  const block = extractJsonBlock(text);
+  if (!block) throw new SyntaxError('no JSON object in model text');
+  return JSON.parse(block);
+}
+
+async function callClaude(key, model, userContent, extraText) {
+  const content = extraText
+    ? [...userContent, { type: 'text', text: extraText }]
+    : userContent;
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      max_tokens: 4000,
+      system: SYSTEM,
+      messages: [{ role: 'user', content }],
+    }),
+  });
+  const json = await resp.json();
+  return { resp, json, text: json.content?.find((b) => b.type === 'text')?.text || '' };
+}
 const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
 
 export async function onRequestOptions() {
@@ -159,20 +216,36 @@ export async function onRequestPost(context) {
     let lastErr = 'Claude did not respond.';
     for (const model of MODELS) {
       console.log('[parse-pet-document] trying', model);
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({ model, max_tokens: 2000, messages: [{ role: 'user', content }] }),
-      });
-      const json = await resp.json();
+      let { resp, json, text } = await callClaude(key, model, content);
       if (!resp.ok) {
         lastErr = json?.error?.message || 'model error';
         console.log('[parse-pet-document] model fail', model, resp.status, lastErr);
         continue;
       }
-      const text = json.content?.find((b) => b.type === 'text')?.text || '{}';
-      const sliced = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1);
-      const parsed = JSON.parse(sliced || '{}');
+      let parsed;
+      try {
+        parsed = parseClaudeJson(text);
+      } catch (e) {
+        console.log('[parse-pet-document] JSON fail', model, String(e), 'raw=', String(text).slice(0, 1500));
+        const retry = await callClaude(
+          key,
+          model,
+          content,
+          `Your previous reply was not valid JSON (${e.message}). Return a single JSON object only, no markdown.`,
+        );
+        if (!retry.resp.ok) {
+          lastErr = retry.json?.error?.message || 'model error';
+          continue;
+        }
+        text = retry.text;
+        try {
+          parsed = parseClaudeJson(text);
+        } catch (e2) {
+          lastErr = e2.message || 'JSON parse failed';
+          console.log('[parse-pet-document] JSON fail retry', model, String(e2), 'raw=', String(text).slice(0, 1500));
+          continue;
+        }
+      }
       const vaccinations = Array.isArray(parsed.vaccinations) ? parsed.vaccinations : [];
       const conditions = Array.isArray(parsed.conditions) ? parsed.conditions : [];
       const medications = Array.isArray(parsed.medications) ? parsed.medications : [];

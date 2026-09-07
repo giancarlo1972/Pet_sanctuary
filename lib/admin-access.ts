@@ -1,17 +1,6 @@
-/** Rescue Army platform masters — /admin only. Not org staff. */
-const PLATFORM_ROLES = new Set([
-  'platform_admin',
-  'application_admin',
-  'app_admin',
-  'devops',
-  'devops_admin',
-  'owner',
-  'superadmin',
-  'administrator',
-]);
+/** profiles.role is only platform_admin | member. Org admin is membership. */
 
-/** Shelter/org staff — /org-admin only, scoped to their org. */
-const ORG_ROLES = new Set(['org_admin', 'shelter']);
+const PLATFORM_ROLES = new Set(['platform_admin', 'admin', 'application_admin', 'app_admin', 'devops', 'devops_admin', 'owner', 'superadmin', 'administrator']);
 
 const EMAIL_OK = new Set(
   [
@@ -32,11 +21,18 @@ export function isPlatformAdmin(role?: string | null, email?: string | null) {
   const r = (role || '').toLowerCase().trim();
   if (PLATFORM_ROLES.has(r)) return true;
   const e = (email || '').toLowerCase().trim();
-  if (e && EMAIL_OK.has(e)) return true;
+  return Boolean(e && EMAIL_OK.has(e));
+}
+
+/** @deprecated org admin is derived from organization_members, not profiles.role */
+export function isOrgAdminRole(_role?: string | null) {
   return false;
 }
 
-export function isOrgAdminRole(role?: string | null) {
-  const r = (role || '').toLowerCase().trim();
-  return ORG_ROLES.has(r);
-}
+export const SHARE_LEVELS = [
+  { key: 'co_owner', label: 'Co-owner', hint: 'Full edit of this pet' },
+  { key: 'caretaker', label: 'Caretaker', hint: 'Read + weight, feeding, notes' },
+  { key: 'veterinarian', label: 'Veterinarian', hint: 'Read + write clinical records' },
+] as const;
+
+export type ShareLevel = (typeof SHARE_LEVELS)[number]['key'];

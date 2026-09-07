@@ -37,6 +37,7 @@ export default function RootLayout() {
           <Stack.Screen name="nearby-clinics" />
           <Stack.Screen name="auth" />
           <Stack.Screen name="org-admin" />
+          <Stack.Screen name="share-accept" />
         </Stack>
         <StatusBar style="auto" />
       </>

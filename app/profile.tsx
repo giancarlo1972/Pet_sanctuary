@@ -20,19 +20,20 @@ import {
   MapPin, Shield, ShieldCheck, LogOut, ChevronRight,
   EyeOff, Heart, TriangleAlert as AlertTriangle,
   FileText, Settings, Phone, IdCard, GraduationCap,
-  Award, PawPrint, Home, Clock, Check, X, Plus, MessageCircle, Pencil, Bell,
+  Award, PawPrint, Home, Clock, Check, X, Plus, MessageCircle, Pencil, Bell, Share2,
 } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { router, useFocusEffect } from 'expo-router';
 import { useSafeBack } from '@/hooks/useSafeBack';
 import { useAuth } from '@/lib/context/AuthContext';
-import { isPlatformAdmin, isOrgAdminRole } from '@/lib/admin-access';
+import { isPlatformAdmin } from '@/lib/admin-access';
 import { supabase } from '@/lib/supabase';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 import AuthForm from '@/components/AuthForm';
 import SignedImage from '@/components/SignedImage';
+import SharePetSheet from '@/components/SharePetSheet';
 import { isUsablePhoto } from '@/lib/photos';
 import { vaccineType } from '@/lib/catalog';
 
@@ -154,10 +155,11 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
   const [reviewModalVisible, setReviewModalVisible] = useState(false);
 
   // My Pets (pet_relationships)
-  interface PetRel { id: string; pet_id: string; pet_name: string; pet_photo: string | null; species: string | null; breed: string | null; relationship: string; started_on: string | null; ended_on: string | null; }
+  interface PetRel { id: string; pet_id: string; pet_name: string; pet_photo: string | null; species: string | null; breed: string | null; relationship: string; started_on: string | null; ended_on: string | null; is_owner?: boolean; }
   const [activePets, setActivePets] = useState<PetRel[]>([]);
   const [pastPets, setPastPets] = useState<PetRel[]>([]);
   const [showPastPets, setShowPastPets] = useState(false);
+  const [sharePet, setSharePet] = useState<{ id: string; name: string } | null>(null);
 
   // Due Soon reminders
   interface PetReminder { pet_id: string; pet_name: string; pet_photo: string | null; label: string; days_until_due: number; urgency: string; }
@@ -358,6 +360,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
           pet_photo: petMap[r.pet_id]?.photo || null, species: petMap[r.pet_id]?.species || null,
           breed: petMap[r.pet_id]?.breed || null, relationship: r.relationship,
           started_on: r.started_on, ended_on: r.ended_on,
+          is_owner: r.relationship === 'owner' || r.relationship === 'own',
         }));
         setActivePets(mapped.filter((r) => !r.ended_on));
         setPastPets(mapped.filter((r) => r.ended_on));
@@ -373,9 +376,11 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
           const extra = ownedPets.filter((p: any) => !have.has(p.id)).map((p: any) => ({
             id: `own-${p.id}`, pet_id: p.id, pet_name: p.name || 'Unknown',
             pet_photo: p.main_photo_url || null, species: p.species, breed: p.breed,
-            relationship: 'own', started_on: null, ended_on: null,
+            relationship: 'own', started_on: null, ended_on: null, is_owner: true,
           }));
-          return extra.length ? [...extra, ...prev] : prev;
+          const ownedIds = new Set(ownedPets.map((p: any) => p.id));
+          const next = extra.length ? [...extra, ...prev] : prev;
+          return next.map((r) => ownedIds.has(r.pet_id) ? { ...r, is_owner: true } : r);
         });
       }
 
@@ -654,14 +659,10 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
   const cityState = [profile?.address_city, profile?.address_state].map((p) => p?.trim()).filter(Boolean).join(', ');
   const isVerified = verifications.id_verified && verifications.phone_verified;
   const isOwner = isPlatformAdmin(profile?.role, profile?.email || email);
-  const isOrgAdmin = Boolean(manageOrg) || (isOrgAdminRole(profile?.role) && !isOwner);
+  const isOrgAdmin = Boolean(manageOrg);
   const roleLabel = isOwner
     ? 'Rescue Army admin'
-    : (manageOrg ? `Org admin · ${manageOrg.name}` : (
-      isOrgAdminRole(profile?.role) ? 'Org admin' : (
-        ({ first_responder: 'First responder', volunteer: 'Volunteer', member: 'Member' } as Record<string, string>)[(profile?.role || 'member').toLowerCase()] || 'Member'
-      )
-    ));
+    : (manageOrg ? `Org admin · ${manageOrg.name}` : 'Member');
 
 
   const trainingPill = verifications.responder_training === 'passed'
@@ -695,19 +696,14 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                   <Text style={styles.userName}>{displayName}</Text>
                   {isVerified && <ShieldCheck color={Colors.teal} size={16} />}
                 </View>
-                <Text style={styles.userSubtitle}>
-                  {isOwner ? 'Rescue Army admin' : isOrgAdmin && manageOrg ? `Org admin · ${manageOrg.name}` : isVerified ? 'Verified rescuer' : 'Rescue Army member'}{cityState ? ` · ${cityState}` : ''}
-                </Text>
+                <Text style={styles.userSubtitle}>{cityState || displayEmail}</Text>
+              </View>
+              <View style={[styles.roleChip, styles.roleChipOn, { paddingHorizontal: 10, paddingVertical: 6, maxWidth: 140 }]}>
+                <Text style={[styles.roleChipTxt, styles.roleChipTxtOn]} numberOfLines={1}>{roleLabel}</Text>
               </View>
             </View>
 
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>My Role</Text>
-              <View style={styles.roleRow}>
-                <View style={[styles.roleChip, styles.roleChipOn]}>
-                  <Text style={[styles.roleChipTxt, styles.roleChipTxtOn]}>{roleLabel}</Text>
-                </View>
-              </View>
               {isOwner ? (
                 <TouchableOpacity style={styles.adminCta} onPress={() => { router.replace('/admin'); }} activeOpacity={0.85}>
                   <Shield color={Colors.white} size={18} />
@@ -765,6 +761,14 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                         <Text style={styles.petRelName}>{p.pet_name}</Text>
                         <Text style={styles.petRelMeta}>{[p.species, p.breed].filter(Boolean).join(' · ') || 'Pet'}</Text>
                       </View>
+                      {p.is_owner ? (
+                        <TouchableOpacity
+                          onPress={(e: any) => { e?.stopPropagation?.(); setSharePet({ id: p.pet_id, name: p.pet_name }); }}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <Share2 color={Colors.navy} size={16} />
+                        </TouchableOpacity>
+                      ) : null}
                       <ChevronRight color={Colors.textTertiary} size={18} />
                       </View>
                       {petNotes.map((r, i) => {
@@ -1380,6 +1384,14 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
           </View>
         </View>
       </Modal>
+      {sharePet ? (
+        <SharePetSheet
+          visible
+          petId={sharePet.id}
+          petName={sharePet.name}
+          onClose={() => setSharePet(null)}
+        />
+      ) : null}
     </>
   );
 }

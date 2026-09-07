@@ -44,6 +44,7 @@ import {
   Download,
   Bluetooth,
   Activity,
+  Share2,
 } from 'lucide-react-native';
 import { InlineBanner } from '@/components/InlineBanner';
 import { prepareImageFile } from '@/lib/prepare-image';
@@ -68,6 +69,7 @@ import { SearchablePicker } from '@/components/SearchablePicker';
 import { DateField } from '@/components/DateField';
 import { matchCatalog, vaccineType, durationYearsFromProduct, addYearsLocal, type CatalogRow } from '@/lib/catalog';
 import { SourceBadge } from '@/components/SourceBadge';
+import SharePetSheet from '@/components/SharePetSheet';
 
 function blobTypeFromName(path: string) {
   if (/\.pdf$/i.test(path)) return 'application/pdf';
@@ -601,6 +603,9 @@ export default function PetRecordScreen() {
   const [colors, setColors] = useState<ColorOption[]>([]);
   const [weightUnit, setWeightUnit] = useState<'kg' | 'lb'>('lb');
   const [canEdit, setCanEdit] = useState(false);
+  const [canCare, setCanCare] = useState(false);
+  const [isPetOwner, setIsPetOwner] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [historyVisible, setHistoryVisible] = useState(false);
 
   const [vaxModalVisible, setVaxModalVisible] = useState(false);
@@ -725,7 +730,9 @@ export default function PetRecordScreen() {
       .eq('pet_id', petId)
       .eq('user_id', user.id)
       .is('ended_on', null);
-    const isCurrentFoster = myRels?.some((r) => r.relationship === 'foster') ?? false;
+    const rels = (myRels || []).map((r) => (r.relationship || '').toLowerCase());
+    const isCoOwner = rels.some((r) => r === 'co_owner' || r === 'co-owner' || r === 'owner' || r === 'own');
+    const isCurrentFoster = rels.includes('foster') || rels.includes('caretaker');
 
     let isOrgStaff = false;
     if (petData.shelter_id) {
@@ -744,7 +751,9 @@ export default function PetRecordScreen() {
         .maybeSingle();
       if (om) isOrgStaff = true;
     }
-    setCanEdit(isOwner || isCurrentFoster || isOrgStaff);
+    setCanEdit(isOwner || isCoOwner || isOrgStaff);
+    setCanCare(isOwner || isCoOwner || isCurrentFoster || isOrgStaff);
+    setIsPetOwner(isOwner);
 
     const { data: profileData } = await supabase
       .from('profiles')
@@ -2290,7 +2299,14 @@ export default function PetRecordScreen() {
           ) : null}
         </View>
         <View style={styles.petBannerInfo}>
-          <Text style={styles.petName}>{pet.name || 'Unnamed'}{pet.previous_names?.length ? ` (formerly ${pet.previous_names.join(', ')})` : ''}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={[styles.petName, { flex: 1 }]}>{pet.name || 'Unnamed'}{pet.previous_names?.length ? ` (formerly ${pet.previous_names.join(', ')})` : ''}</Text>
+            {isPetOwner ? (
+              <TouchableOpacity onPress={() => setShareOpen(true)} style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center' }}>
+                <Share2 color={Colors.navy} size={16} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
           {breedDisplay !== '—' ? <Text style={styles.petMeta}>{breedDisplay}{pet.is_mixed ? ' (Mixed)' : ''}</Text> : null}
           {pet.age_text ? <Text style={styles.petMeta}>{pet.age_text}</Text> : null}
           {pet.gender ? <Text style={styles.petMeta}>{titleCase(pet.gender)}</Text> : null}
@@ -2326,7 +2342,7 @@ export default function PetRecordScreen() {
                 <StatusTile icon={Shield} label="Microchipped" sub={chipNumber ? `••${String(chipNumber).slice(-4)}` : (pet.microchipped ? 'On file' : 'Not on file')} tone={(chipNumber || pet.microchipped) ? 'ok' : 'unknown'} />
               </View>
               <View style={styles.tileRow}>
-                <StatusTile icon={Scale} label="Weight" sub={weightSub} tone={weightTone} extraLink={canEdit ? 'Record' : undefined} extraOnPress={openWeight} />
+                <StatusTile icon={Scale} label="Weight" sub={weightSub} tone={weightTone} extraLink={canCare ? 'Record' : undefined} extraOnPress={openWeight} />
                 <StatusTile icon={FlaskConical} label="FELV/FIV" sub={felvTone === 'unknown' ? 'Add' : felvSub} tone={felvTone} onPress={() => { setTab('medical'); }} />
                 <StatusTile icon={Activity} label="Activity" sub={activityTone === 'unknown' ? 'Connect' : activitySub} tone={activityTone} onPress={() => showBanner('Connect a litter box, feeder, or GPS collar from Me → Devices.', 'info')} />
               </View>
@@ -3700,6 +3716,9 @@ export default function PetRecordScreen() {
           </View>
         </Modal>
       )}
+      {shareOpen && petId ? (
+        <SharePetSheet visible petId={petId} petName={pet.name || 'this pet'} onClose={() => setShareOpen(false)} />
+      ) : null}
     </SafeAreaView>
   );
 }

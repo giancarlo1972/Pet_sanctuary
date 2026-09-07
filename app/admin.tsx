@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Linking, useWindowDimensions, TextInput, Modal } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import AppHeader from '@/components/AppHeader';
@@ -34,6 +35,12 @@ export default function AdminScreen() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [members, setMembers] = useState<{ id: string; email: string | null; full_name: string | null; role: string | null; blocked: boolean | null }[]>([]);
+  const [memberQ, setMemberQ] = useState('');
+  const [bugs, setBugs] = useState<{ id: string; title: string | null; body: string | null; status: string; created_at: string }[]>([]);
+  const [supportEmail, setSupportEmail] = useState('support.animals@rescue-army.com');
+  const [maintenance, setMaintenance] = useState('');
+  const [uploadUserId, setUploadUserId] = useState('');
 
   const load = useCallback(async () => {
     if (!user) { setLoading(false); return; }
@@ -68,6 +75,24 @@ export default function AdminScreen() {
       .limit(80);
     if (allErr) setError((orgErr?.message ? orgErr.message + ' · ' : '') + allErr.message);
     setAllOrgs(allRows ?? []);
+
+    const { data: mems } = await supabase
+      .from('profiles')
+      .select('id, email, full_name, role, blocked')
+      .order('email')
+      .limit(80);
+    if (mems) setMembers(mems as any);
+    else {
+      const { data: mems2 } = await supabase.from('profiles').select('id, email, full_name, role').order('email').limit(80);
+      setMembers(((mems2 || []) as any).map((m: any) => ({ ...m, blocked: false })));
+    }
+    const { data: bugRows } = await supabase.from('bug_reports').select('id, title, body, status, created_at').order('created_at', { ascending: false }).limit(30);
+    setBugs((bugRows as any) ?? []);
+    const { data: settings } = await supabase.from('app_settings').select('key, value');
+    (settings || []).forEach((s: any) => {
+      if (s.key === 'support_email') setSupportEmail(typeof s.value === 'string' ? s.value.replace(/"/g, '') : String(s.value || ''));
+      if (s.key === 'maintenance_message') setMaintenance(typeof s.value === 'string' ? s.value.replace(/^"|"$/g, '') : '');
+    });
     setLoading(false);
   }, [user]);
 
@@ -239,6 +264,79 @@ export default function AdminScreen() {
             {usersQ.map((q) => (
               <Card key={q.id} title={q.flag_reason || 'ID review'} meta="Responder / volunteer / foster" busy={busyId === q.id} okLabel="Approve" onOk={() => decide(q, 'approved')} onNo={() => decide(q, 'rejected')} />
             ))}
+          </Section>
+
+          <Section title="Members">
+            <TextInput style={styles.input} value={memberQ} onChangeText={setMemberQ} placeholder="Search email or name" placeholderTextColor={Colors.textTertiary} />
+            {members.filter((m) => {
+              const q = memberQ.trim().toLowerCase();
+              if (!q) return true;
+              return `${m.email || ''} ${m.full_name || ''}`.toLowerCase().includes(q);
+            }).slice(0, 40).map((m) => (
+              <View key={m.id} style={styles.entity}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>{m.full_name || m.email || m.id.slice(0, 8)}</Text>
+                  <Text style={styles.meta}>{m.email} · {m.role || 'member'}{m.blocked ? ' · blocked' : ''}</Text>
+                </View>
+                <TouchableOpacity onPress={async () => {
+                  setBusyId(m.id);
+                  await supabase.from('profiles').update({ role: m.role === 'platform_admin' ? 'member' : 'platform_admin' }).eq('id', m.id);
+                  setBusyId(null); load();
+                }}><Text style={styles.reassign}>{m.role === 'platform_admin' ? 'Make member' : 'Make admin'}</Text></TouchableOpacity>
+                <TouchableOpacity onPress={async () => {
+                  setBusyId(m.id);
+                  await supabase.from('profiles').update({ blocked: !m.blocked }).eq('id', m.id);
+                  setBusyId(null); load();
+                }}><Text style={m.blocked ? styles.reassign : styles.rejectTxt}>{m.blocked ? 'Unblock' : 'Block'}</Text></TouchableOpacity>
+              </View>
+            ))}
+            <Text style={styles.noteTxt}>Upload a document for a user (ID, license) — they still confirm it.</Text>
+            <TextInput style={styles.input} value={uploadUserId} onChangeText={setUploadUserId} placeholder="User email to upload for" placeholderTextColor={Colors.textTertiary} autoCapitalize="none" />
+            <TouchableOpacity style={styles.ghost} onPress={async () => {
+              const email = uploadUserId.trim().toLowerCase();
+              if (!email) return;
+              const { data: ppl } = await supabase.from('profiles').select('id').ilike('email', email).maybeSingle();
+              if (!ppl) { setError('No user with that email.'); return; }
+              const pick = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 0.8 });
+              if (pick.canceled || !pick.assets?.[0]) return;
+              const blob = await (await fetch(pick.assets[0].uri)).blob();
+              const path = `${ppl.id}/admin-upload-${Date.now()}.jpg`;
+              const { error: up } = await supabase.storage.from('id-docs').upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+              if (up) { setError(up.message); return; }
+              await supabase.from('user_verifications').upsert({ user_id: ppl.id, id_document_path: path, id_status: 'pending', id_verified: false });
+              setError(null);
+            }}><Text style={styles.ghostTxt}>Upload for user</Text></TouchableOpacity>
+          </Section>
+
+          <Section title="Bug reports">
+            {bugs.length === 0 ? <Empty /> : null}
+            {bugs.map((b) => (
+              <View key={b.id} style={styles.card}>
+                <Text style={styles.cardTitle}>{b.title || 'Untitled'}</Text>
+                <Text style={styles.meta}>{b.status} · {b.body}</Text>
+                <View style={styles.row}>
+                  {['open', 'in_progress', 'resolved', 'wontfix'].map((st) => (
+                    <TouchableOpacity key={st} style={styles.ghost} onPress={async () => {
+                      await supabase.from('bug_reports').update({ status: st }).eq('id', b.id);
+                      load();
+                    }}><Text style={styles.ghostTxt}>{st}</Text></TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            ))}
+          </Section>
+
+          <Section title="App settings">
+            <Text style={styles.meta}>Support email</Text>
+            <TextInput style={styles.input} value={supportEmail} onChangeText={setSupportEmail} autoCapitalize="none" />
+            <Text style={styles.meta}>Maintenance message (empty = off)</Text>
+            <TextInput style={styles.input} value={maintenance} onChangeText={setMaintenance} />
+            <TouchableOpacity style={styles.verify} onPress={async () => {
+              await supabase.from('app_settings').upsert([
+                { key: 'support_email', value: JSON.stringify(supportEmail), updated_by: user?.id },
+                { key: 'maintenance_message', value: JSON.stringify(maintenance), updated_by: user?.id },
+              ]);
+            }}><Text style={styles.verifyTxt}>Save settings</Text></TouchableOpacity>
           </Section>
 
           <View style={styles.note}>

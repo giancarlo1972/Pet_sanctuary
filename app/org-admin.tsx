@@ -52,12 +52,21 @@ export default function OrgAdminScreen() {
     supabase.from('audit_log').insert({ actor_id: user!.id, action, organization_id: org!.id, ...extra });
 
   const cycleRole = async (m: Member) => {
-    if (m.user_id === user!.id) return; // don't demote yourself here
+    if (m.user_id === user!.id) return;
     const next = ROLES[(ROLES.indexOf(m.role) + 1) % ROLES.length];
-    if (next === 'admin') return; // one admin per org — reassign via platform admin
     setBusy(m.user_id);
     const { error: e } = await supabase.from('organization_members').update({ role: next }).eq('organization_id', org!.id).eq('user_id', m.user_id);
     if (e) setError(e.message); else await log('member.role_changed', { subject_type: 'user', subject_id: m.user_id, detail: { to: next } });
+    setBusy(null); load();
+  };
+
+  const addOrgAdmin = async () => {
+    const email = invite.trim().toLowerCase(); if (!email || !org) return;
+    setBusy('admin');
+    const { data: ppl } = await supabase.from('profiles').select('id').ilike('email', email).maybeSingle();
+    if (!ppl) { setError('No user with that email — they must sign up first.'); setBusy(null); return; }
+    const { error: e } = await supabase.from('organization_members').upsert({ organization_id: org.id, user_id: ppl.id, role: 'admin' });
+    if (e) setError(e.message); else { setInvite(''); await log('member.admin_added', { subject_id: ppl.id }); }
     setBusy(null); load();
   };
 
@@ -107,9 +116,9 @@ export default function OrgAdminScreen() {
                   <Text style={s.name}>{m.profiles?.full_name || 'Member'}</Text>
                   <Text style={s.meta}>{m.profiles?.email}</Text>
                 </View>
-                <TouchableOpacity onPress={() => cycleRole(m)} disabled={busy === m.user_id || m.role === 'admin'}
+                <TouchableOpacity onPress={() => cycleRole(m)} disabled={busy === m.user_id}
                   style={[s.pill, m.role === 'admin' ? s.pillNavy : m.role === 'staff' ? s.pillTeal : m.role === 'volunteer' ? s.pillYellow : s.pillGray]}>
-                  <Text style={[s.pillTxt, m.role === 'admin' && { color: Colors.white }]}>{roleLabel(m.role)} {m.role !== 'admin' ? '▾' : ''}</Text>
+                  <Text style={[s.pillTxt, m.role === 'admin' && { color: Colors.white }]}>{roleLabel(m.role)} ▾</Text>
                 </TouchableOpacity>
               </View>
             ))}
@@ -118,6 +127,9 @@ export default function OrgAdminScreen() {
             <TextInput value={invite} onChangeText={setInvite} placeholder="Invite by email" placeholderTextColor={Colors.textTertiary} autoCapitalize="none" keyboardType="email-address" style={s.input} />
             <TouchableOpacity style={s.inviteBtn} onPress={sendInvite} disabled={busy === 'invite'}><Text style={s.inviteTxt}>Invite</Text></TouchableOpacity>
           </View>
+          <TouchableOpacity style={[s.inviteBtn, { alignSelf: 'stretch', marginBottom: 8 }]} onPress={addOrgAdmin} disabled={busy === 'admin'}>
+            <Text style={s.inviteTxt}>{busy === 'admin' ? '…' : 'Add org admin'}</Text>
+          </TouchableOpacity>
 
           <Text style={s.section}>Pending requests · your org</Text>
           {requests.length === 0 ? <View style={s.card}><Text style={s.meta}>Nothing pending.</Text></View> : null}

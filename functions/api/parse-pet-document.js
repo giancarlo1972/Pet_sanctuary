@@ -36,7 +36,7 @@ Return JSON only, no markdown:
 }
 Rules:
 - labs[].value MUST be a string or a number. Qualitative PCR (e.g. "Detected", "Not detected") stays as that string; unit null. If value is Detected (case-insensitive) flag=abnormal; if Not detected flag=normal. Numeric labs keep the printed number and unit.
-- vaccinations: list EVERY vaccine administered at this visit or mentioned anywhere, including visit notes and discharge text — product name, date given, lot, next due. Include FVRCP, FeLV, rabies, FVRCP combo, etc. even if only named in the notes. Empty array only if the document has no vaccine language at all.
+- vaccinations: list EVERY vaccine administered at this visit AND every vaccine listed as current / up to date, with product name, date given, lot, and next_due. Spay, neuter, pre-op, and wellness records ALWAYS include current vaccines (FVRCP, FeLV, rabies, etc.) — extract them even if the document is titled Pre-op or Spay. Empty array only if the document has no vaccine language at all.
 - weight: return the printed {value, unit} as-is (do not convert). Empty arrays if unreadable. Never invent dates.
 - conditions: one row per distinct issue. If a visit notes an existing problem is better or gone, set status=resolved (or monitoring), do not duplicate the name. Use onset_date/resolved_date when printed.
 - ai_note: 3–5 lines covering findings, any delta vs prior labs for the same analytes, and flags. Do not diagnose.

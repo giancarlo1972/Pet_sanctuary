@@ -454,12 +454,14 @@ function StatusTile({
         <Icon color={Colors.white} size={20} />
       </View>
       <Text style={styles.statusLabel} numberOfLines={1}>{label}</Text>
-      <Text style={[styles.statusSub, { color: fg }]} numberOfLines={2}>{sub}</Text>
-      {extraLink ? (
-        <TouchableOpacity onPress={extraOnPress} hitSlop={8}>
-          <Text style={styles.statusExtra}>{extraLink}</Text>
-        </TouchableOpacity>
-      ) : null}
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, flexWrap: 'wrap' }}>
+        <Text style={[styles.statusSub, { color: fg }]} numberOfLines={1}>{sub}</Text>
+        {extraLink ? (
+          <TouchableOpacity onPress={extraOnPress} hitSlop={8}>
+            <Text style={styles.statusExtra}>{extraLink}</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
     </View>
   );
   if (onPress) {
@@ -706,7 +708,7 @@ export default function PetRecordScreen() {
       }
     }
     if (docsRes.error) console.error('[pet-record] documents', docsRes.error);
-    setDocuments(((docsRes.data as any[]) || []).map((d) => ({
+    const mappedDocs = ((docsRes.data as any[]) || []).map((d) => ({
       id: d.id,
       pet_id: d.pet_id,
       kind: d.kind,
@@ -717,7 +719,14 @@ export default function PetRecordScreen() {
       notes: d.notes,
       ai_summary: d.ai_summary || d.extracted || null,
       ai_status: d.ai_status || null,
-    })));
+    }));
+    const seenPath = new Set<string>();
+    setDocuments(mappedDocs.filter((d) => {
+      const key = d.file_path || d.id;
+      if (seenPath.has(key)) return false;
+      seenPath.add(key);
+      return true;
+    }));
     setBreeds((breedsRes.data as BreedOption[]) || []);
     setColors((colorsRes.data as ColorOption[]) || []);
     if (colorsRes.error) {
@@ -1307,12 +1316,7 @@ export default function PetRecordScreen() {
         body: JSON.stringify(payload),
       });
       const result = await resp.json().catch(() => ({ parsed: false, error: 'bad json', reason: 'model_error' }));
-      console.log('[parse-pet-document] response', resp.status, {
-        parsed: result.parsed, reason: result.reason, error: result.error,
-        vax: result.vaccinations?.length,
-        vaxNames: (result.vaccinations || []).map((v: any) => v.name || v.vaccine || v.product),
-        visits: result.visits?.length, labs: result.labs?.length,
-      });
+      console.log('[parse-pet-document] result.vaccinations', result.vaccinations);
       if (!resp.ok || !result.parsed) {
         const reason = result.reason || (result.error === 'too_large' ? 'too_large' : result.error === 'no_file' || result.labeled?.includes('missing') ? 'no_file' : 'model_error');
         const status = reason === 'no_file' ? 'missing_file' : 'failed';
@@ -1442,7 +1446,7 @@ export default function PetRecordScreen() {
         if (!visit.title && !visit.event_type) continue;
         await run(`Visit "${visit.title || 'Visit'}"`, () => supabase.from('medical_records').insert({
           pet_id: petId,
-          record_type: visit.event_type || 'visit',
+          record_type: 'visit',
           title: visit.title || 'Visit',
           details: visit.notes || null,
           record_date: visit.occurred_on || new Date().toISOString().slice(0, 10),
@@ -1572,10 +1576,11 @@ export default function PetRecordScreen() {
   const breedDisplay = [pet.breed_primary, pet.breed_secondary].filter(Boolean).join(' / ')
     || pet.breed || '—';
   const colorDisplay = [pet.primary_color, pet.secondary_color].filter(Boolean).join(' / ') || '—';
-  const latestWeightRow = [...weightEntries]
-    .filter((w) => w.measured_on)
-    .sort((a, b) => String(b.measured_on).localeCompare(String(a.measured_on)))[0]
-    || weightEntries[0];
+  const latestWeightRow = weightEntries.reduce((best, w) => {
+    if (!w.measured_on) return best;
+    if (!best || String(w.measured_on) > String(best.measured_on)) return w;
+    return best;
+  }, null as typeof weightEntries[0] | null);
   const latestLb = latestWeightRow?.weight_lb
     ?? (pet.weight_kg != null ? kgToLb(pet.weight_kg) : null);
   const targetLb = pet.target_weight_kg != null ? kgToLb(pet.target_weight_kg) : null;
@@ -1594,6 +1599,13 @@ export default function PetRecordScreen() {
   })();
   const activeConditions = tableConditions.filter((c) => (c.status || 'active') === 'active');
   const resolvedConditions = tableConditions.filter((c) => (c.status || '') === 'resolved');
+  const year = String(new Date().getFullYear());
+  const visitsThisYear = medicalRecords.filter((m) => {
+    const t = (m.record_type || 'visit').toLowerCase();
+    if (t !== 'visit') return false;
+    const d = m.record_date || '';
+    return !d || d.startsWith(year);
+  }).length;
   const healthVerdict = (aiFindings?.verdict === 'MONITOR' || aiFindings?.verdict === 'WATCH')
     ? 'MONITOR'
     : 'STABLE';
@@ -2106,7 +2118,7 @@ export default function PetRecordScreen() {
               </View>
               <View style={styles.healthStats}>
                 <View style={styles.healthStat}>
-                  <Text style={styles.healthN}>{historyEvents.length}</Text>
+                  <Text style={styles.healthN}>{visitsThisYear}</Text>
                   <Text style={styles.healthL}>Visits</Text>
                 </View>
                 <View style={styles.healthStat}>
@@ -3257,11 +3269,11 @@ const styles = StyleSheet.create({
   statusCard: { backgroundColor: Colors.white, borderRadius: 16, padding: 14, borderWidth: 1, borderColor: Colors.border, gap: 10 },
   tileRow: { flexDirection: 'row', gap: 10, width: '100%' },
   statusTileWrap: { flex: 1 },
-  statusTile: { alignItems: 'center', gap: 6, padding: 12, borderRadius: 12 },
+  statusTile: { alignItems: 'center', justifyContent: 'center', gap: 6, padding: 12, borderRadius: 12, minHeight: 96, height: '100%' },
   statusIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   statusLabel: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy, textAlign: 'center' },
   statusSub: { fontFamily: Fonts.bold, fontSize: 11, textAlign: 'center', lineHeight: 14 },
-  statusExtra: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.tealDark, marginTop: 2 },
+  statusExtra: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.tealDark },
   outlineChip: { borderWidth: 1.5, borderColor: Colors.borderInput, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
   outlineChipTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy },
   coralChip: { backgroundColor: Colors.coral, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },

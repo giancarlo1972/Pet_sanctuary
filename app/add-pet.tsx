@@ -10,6 +10,7 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import { InlineBanner } from '@/components/InlineBanner';
+import { prepareImageFile } from '@/lib/prepare-image';
 
 const SPECIES_OPTIONS = ['Dog', 'Cat', 'Rabbit', 'Bird', 'Other'];
 
@@ -42,16 +43,11 @@ export default function AddPetScreen() {
       if (!file) return;
       setAnalyzing(true); setBanner(null);
       try {
-        const dataUrl = await new Promise<string>((resolve, reject) => {
-          const r = new FileReader();
-          r.onload = () => resolve(String(r.result));
-          r.onerror = reject;
-          r.readAsDataURL(file);
-        });
-        const res = await fetch('/api/analyze-pet-photo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: dataUrl }) });
+        const prepared = await prepareImageFile(file);
+        setPhotoFile(new File([prepared.blob], 'pet.jpg', { type: 'image/jpeg' }));
+        const res = await fetch('/api/analyze-pet-photo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: prepared.dataUrl }) });
         const json = await res.json();
         if (!json.analyzed) throw new Error(json.error || 'AI could not read the photo.');
-        setPhotoFile(file);
         setAi(json);
         if (json.species) setSpecies(json.species);
         if (json.breed_guess) setBreed(json.breed_guess);

@@ -26,6 +26,7 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { router, useFocusEffect } from 'expo-router';
 import { useSafeBack } from '@/hooks/useSafeBack';
 import { useAuth } from '@/lib/context/AuthContext';
+import { isPlatformAdmin } from '@/lib/admin-access';
 import { supabase } from '@/lib/supabase';
 import AppHeader from '@/components/AppHeader';
 import AuthForm from '@/components/AuthForm';
@@ -194,7 +195,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
 
   useEffect(() => {
     const realWidth = Dimensions.get('window').width;
-    setDrawerWidth(realWidth * 0.86);
+    setDrawerWidth(Math.min(430, realWidth));
   }, []);
 
   const openDrawer = useCallback(() => {
@@ -564,7 +565,8 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
   const initial = displayName.charAt(0).toUpperCase();
   const cityState = [profile?.address_city, profile?.address_state].map((p) => p?.trim()).filter(Boolean).join(', ');
   const isVerified = verifications.id_verified && verifications.phone_verified;
-  const isOrgAdmin = profile?.role === 'admin' || profile?.role === 'shelter';
+  const isOwner = isPlatformAdmin(profile?.role, profile?.email || email);
+  const isOrgAdmin = isOwner || profile?.role === 'admin' || profile?.role === 'shelter';
 
   const trainingPill = verifications.responder_training === 'passed'
     ? { bg: Colors.tealBg, color: Colors.tealDark, text: 'Passed' }
@@ -620,9 +622,18 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                   {isVerified && <ShieldCheck color={Colors.teal} size={16} />}
                 </View>
                 <Text style={styles.userSubtitle}>
-                  {isVerified ? 'Verified rescuer' : 'Rescue Army member'}{cityState ? ` · ${cityState}` : ''}
+                  {isOwner ? 'Administrator' : isVerified ? 'Verified rescuer' : 'Rescue Army member'}{cityState ? ` · ${cityState}` : ''}
                 </Text>
               </View>
+            </View>
+
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Rescue Army</Text>
+              <DrawerMenuItem icon={<MapPin color={Colors.coral} size={18} />} title="Nearby clinics & shelters" onPress={() => { closeDrawer(); router.push('/nearby-clinics'); }} />
+              <DrawerMenuItem icon={<PawPrint color={Colors.teal} size={18} />} title="Pet record (Gina)" onPress={() => { closeDrawer(); router.push('/pet-care'); }} />
+              <DrawerMenuItem icon={<FileText color={Colors.navy} size={18} />} title="Invoices" onPress={() => { closeDrawer(); router.push('/invoices'); }} />
+              <DrawerMenuItem icon={<Shield color={Colors.navy} size={18} />} title="Admin" onPress={() => { closeDrawer(); router.push('/admin'); }} />
+              <DrawerMenuItem icon={<Bell color={Colors.coral} size={18} />} title="Updates" onPress={() => { closeDrawer(); router.push('/updates'); }} />
             </View>
 
             {/* Trust & Verification */}
@@ -1092,14 +1103,6 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
               )}
             </View>
 
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Rescue Army</Text>
-              <DrawerMenuItem icon={<MapPin color={Colors.coral} size={18} />} title="Nearby clinics & shelters" onPress={() => { closeDrawer(); router.push('/nearby-clinics'); }} />
-              <DrawerMenuItem icon={<PawPrint color={Colors.teal} size={18} />} title="Pet record (Gina)" onPress={() => { closeDrawer(); router.push('/pet-care'); }} />
-              <DrawerMenuItem icon={<FileText color={Colors.navy} size={18} />} title="Invoices" onPress={() => { closeDrawer(); router.push('/invoices'); }} />
-              <DrawerMenuItem icon={<Shield color={Colors.navy} size={18} />} title="Admin" onPress={() => { closeDrawer(); router.push('/admin'); }} />
-              <DrawerMenuItem icon={<Bell color={Colors.coral} size={18} />} title="Updates" onPress={() => { closeDrawer(); router.push('/updates'); }} />
-            </View>
 
             {/* Activity links */}
             <View style={styles.section}>
@@ -1381,7 +1384,8 @@ const styles = StyleSheet.create({
   scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15,15,40,0.35)', zIndex: 90 },
   scrimTouchable: { flex: 1 },
   drawer: {
-    position: 'absolute', top: 0, right: 0, bottom: 0,
+    position: 'absolute', top: 0, bottom: 0, left: 0, right: 0,
+    maxWidth: 430, width: '100%', alignSelf: 'center',
     backgroundColor: Colors.screen, zIndex: 100,
     elevation: 16, shadowColor: Colors.shadow, shadowOffset: { width: -4, height: 0 },
     shadowOpacity: 0.2, shadowRadius: 16,

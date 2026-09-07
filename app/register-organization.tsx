@@ -40,6 +40,19 @@ export default function RegisterOrganizationScreen() {
     setLoading(true);
     setBanner(null);
     try {
+      const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      const digits = ein.replace(/\D/g, '');
+      const { data: existing } = await supabase.from('organizations').select('id, name, ein').limit(200);
+      const dup = (existing || []).find((row) => {
+        if (digits && (row.ein || '').replace(/\D/g, '') === digits) return true;
+        return norm(row.name || '') === norm(name);
+      });
+      if (dup) {
+        setBanner({ message: 'This organization already exists — request to join instead.', kind: 'error' });
+        setLoading(false);
+        setTimeout(() => router.replace(`/organization-details?id=${dup.id}`), 1200);
+        return;
+      }
       const { data, error } = await supabase.from('organizations').insert({
         name: name.trim(),
         org_type: orgType === 'sponsor' ? 'business' : orgType,

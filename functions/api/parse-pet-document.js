@@ -25,7 +25,7 @@ Return JSON only, no markdown:
   "kind": "vaccination|lab|visit|invoice|insurance|other",
   "clinic": "string or null",
   "date": "YYYY-MM-DD or null",
-  "vaccinations": [{"brand": null, "name": "", "product": null, "lot": null, "dose": null, "date": "YYYY-MM-DD or null", "next_due": "YYYY-MM-DD or null", "valid_until": "YYYY-MM-DD or null", "reactions": null, "clinic": null}],
+  "vaccinations": [{"name": "", "product": null, "manufacturer": null, "lot": null, "dose": null, "given": "YYYY-MM-DD date administered — never the due date", "next_due": "YYYY-MM-DD or null", "vet": null, "clinic": null, "reactions": null}],
   "conditions": [{"name": "", "kind": "condition|allergy", "status": "active|resolved|monitoring", "onset_date": "YYYY-MM-DD or null", "resolved_date": "YYYY-MM-DD or null", "notes": null}],
   "medications": [{"name": "", "dose": null, "given_on": null}],
   "visits": [{"clinic": null, "date": "YYYY-MM-DD or null", "reason": null, "summary": null}],
@@ -36,7 +36,7 @@ Return JSON only, no markdown:
 }
 Rules:
 - labs[].value MUST be a string or a number. Qualitative PCR (e.g. "Detected", "Not detected") stays as that string; unit null. If value is Detected (case-insensitive) flag=abnormal; if Not detected flag=normal. Numeric labs keep the printed number and unit.
-- vaccinations: list EVERY vaccine administered at this visit AND every vaccine listed as current / up to date, with product name, date given, lot, and next_due. Spay, neuter, pre-op, and wellness records ALWAYS include current vaccines (FVRCP, FeLV, rabies, etc.) — extract them even if the document is titled Pre-op or Spay. Empty array only if the document has no vaccine language at all.
+- vaccinations: list EVERY vaccine administered at this visit AND every vaccine listed as current. Field "given" = date administered (e.g. 2026-08-12). Field "next_due" = next due / valid until, only if a SECOND later date is printed. If the card shows only one date, put it in given and leave next_due null. Never put the administered date in next_due. Always include manufacturer (Purevax, Merck, Elanco), lot, and vet when printed.
 - weight: return the printed {value, unit} as-is (do not convert). Empty arrays if unreadable. Never invent dates.
 - conditions: one row per distinct issue. If a visit notes an existing problem is better or gone, set status=resolved (or monitoring), do not duplicate the name. Use onset_date/resolved_date when printed.
 - ai_note: 3–5 lines covering findings, any delta vs prior labs for the same analytes, and flags. Do not diagnose.
@@ -100,14 +100,11 @@ function normalizeLab(l) {
 }
 
 function normalizeVax(v) {
-  const given = v?.administered_on || v?.administered_date || v?.given_on || v?.given || v?.date_given || v?.date || null;
-  const due = v?.next_due || v?.next_due_on || v?.valid_until || v?.expires_on || v?.due_date || null;
-  let date = given;
-  let next_due = due;
-  if (date && next_due && String(date) > String(next_due)) {
-    const t = date; date = next_due; next_due = t;
-  }
-  if (!date && next_due) { date = next_due; next_due = null; }
+  const given = v?.given || v?.administered_on || v?.given_on || v?.date_given || v?.date || null;
+  const due = v?.next_due || v?.next_due_on || v?.valid_until || v?.expires_on || null;
+  const dates = [given, due].filter(Boolean).map(String).sort();
+  const date = dates[0] || null;
+  const next_due = dates.length === 2 ? dates[1] : null;
   return {
     brand: v?.brand || v?.product || null,
     name: v?.name || v?.vaccine || v?.product || '',
@@ -115,9 +112,10 @@ function normalizeVax(v) {
     manufacturer: v?.manufacturer || v?.maker || v?.company || v?.mfr || v?.brand || null,
     lot: v?.lot || v?.lot_number || v?.lotNumber || v?.lot_no || v?.serial || null,
     dose: v?.dose || null,
+    given: date,
     date,
     next_due,
-    valid_until: v?.valid_until || v?.expires_on || next_due || null,
+    valid_until: next_due,
     reactions: v?.reactions || null,
     clinic: v?.clinic || v?.clinic_name || null,
     vet: v?.vet || v?.vet_name || v?.veterinarian || v?.doctor || v?.provider || null,

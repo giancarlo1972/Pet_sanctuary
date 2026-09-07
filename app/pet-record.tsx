@@ -429,32 +429,28 @@ function ageFromDob(dob?: string | null, ageText?: string | null) {
   return ageText || null;
 }
 
-function firstIso(...vals: any[]): string | null {
-  for (const v of vals) {
-    const s = v == null ? '' : String(v).trim();
-    const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
-    if (m) return m[1];
+function parseAnyDate(v: any): string | null {
+  if (v == null || v === '') return null;
+  const s = String(v).trim();
+  const iso = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (iso) return iso[1];
+  const mdy = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (mdy) {
+    const y = mdy[3].length === 2 ? `20${mdy[3]}` : mdy[3];
+    return `${y}-${mdy[1].padStart(2, '0')}-${mdy[2].padStart(2, '0')}`;
   }
+  const t = Date.parse(s);
+  if (!Number.isNaN(t)) return new Date(t).toISOString().slice(0, 10);
   return null;
 }
 
-function mapVaxRow(v: any, clinic?: string | null) {
-  const given = firstIso(
-    v.administered_on, v.administered_date, v.given_on, v.given, v.date_given,
-    v.vaccination_date, v.dateAdministered, v.date_administered, v.date,
-  );
-  let due = firstIso(v.next_due, v.next_due_on, v.valid_until, v.expires_on, v.due_date, v.expires);
-  if (given && due && given > due) {
-    const swap = given;
-    return {
-      given: due,
-      due: swap,
-    };
-  }
-  if (!given && due) {
-    return { given: due, due: null };
-  }
-  return { given, due: due && due !== given ? due : null };
+function mapVaxRow(v: any) {
+  const a = parseAnyDate(v.given || v.administered_on || v.administered_date || v.given_on || v.date_given || v.date);
+  const b = parseAnyDate(v.next_due || v.next_due_on || v.valid_until || v.expires_on || v.due_date);
+  const dates = [a, b].filter(Boolean).sort() as string[];
+  if (dates.length === 1) return { given: dates[0], due: null };
+  if (dates.length === 2) return { given: dates[0], due: dates[1] };
+  return { given: null, due: null };
 }
 
 function StatusTile({
@@ -676,7 +672,7 @@ export default function PetRecordScreen() {
         .eq('pet_id', petId)
         .order('started_on', { ascending: false }),
       supabase.from('pet_vaccinations')
-        .select('id, vaccine, brand, dose, reactions, confirmed, source, administered_on, next_due_on, vet_clinic, vaccine_type, duration_years, vet_name, vet_license, lot_number, lot_expires_on, manufacturer, injection_site, tag_number, is_booster, superseded, notes, document_url, clinic_id')
+        .select('*')
         .eq('pet_id', petId)
         .order('administered_on', { ascending: false }),
       supabase.from('medical_records')
@@ -1250,6 +1246,7 @@ export default function PetRecordScreen() {
   };
 
   const openConfirmFromParse = (documentId: string, parsed: any) => {
+    console.log('[parse-pet-document] RAW', JSON.stringify(parsed));
     console.log('[parse-pet-document] vaccinations[0]', parsed.vaccinations?.[0]);
     const vax = (parsed.vaccinations || []).map((v: any) => {
       const dates = mapVaxRow(v);
@@ -1262,7 +1259,7 @@ export default function PetRecordScreen() {
         duration_years: null,
         manufacturer: v.manufacturer || v.maker || v.company || v.mfr || v.brand || null,
         lot_number: v.lot || v.lot_number || v.lotNumber || v.lot_no || v.serial || v.serial_number || null,
-        lot_expires_on: firstIso(v.lot_expires_on, v.lot_expiry, v.lot_expires),
+        lot_expires_on: parseAnyDate(v.lot_expires_on || v.lot_expiry || v.lot_expires),
         injection_site: v.injection_site || v.site || null,
         vaccine_type: v.vaccine_type || v.type || null,
         tag_number: v.tag_number || v.tag || null,
@@ -1399,52 +1396,68 @@ export default function PetRecordScreen() {
     };
 
     try {
-      // 1. vaccinations
+      const { data: rel } = await supabase.from('pet_relationships').select('id').eq('pet_id', petId).eq('user_id', user.id).is('ended_on', null).maybeSingle();
+      if (!rel) {
+        console.log('[apply] ensuring owner relationship');
+        await supabase.from('pet_relationships').insert({
+          pet_id: petId, user_id: user.id, relationship: 'owner', started_on: new Date().toISOString().slice(0, 10),
+        });
+      }
+
+      // 1. vaccinations — core columns only (source_document_id / brand / confirmed break inserts)
       for (let i = 0; i < editableVax.length; i++) {
         if (extractionReview.vaxDuplicates.has(i)) continue;
         const v = editableVax[i];
         if (!v.vaccine) continue;
-        await run(`Vaccination "${v.vaccine}"`, () => supabase.from('pet_vaccinations').insert({
+        const payload = {
           pet_id: petId,
           vaccine: v.vaccine,
-          brand: v.brand || null,
-          dose: v.dose || null,
           administered_on: v.administered_on || null,
           next_due_on: v.next_due_on || null,
-          duration_years: v.duration_years || null,
           manufacturer: v.manufacturer || null,
           lot_number: v.lot_number || null,
-          lot_expires_on: v.lot_expires_on || null,
-          injection_site: v.injection_site || null,
-          vaccine_type: v.vaccine_type || null,
-          tag_number: v.tag_number || null,
           vet_name: v.vet_name || null,
-          vet_license: v.vet_license || null,
           vet_clinic: v.clinic_name || null,
           recorded_by: user.id,
-          source_document_id: sourceDocId,
-          confirmed: true,
-          source: 'ai_extracted',
-        }));
+        };
+        console.log('[apply] vax payload', payload);
+        const res = await supabase.from('pet_vaccinations').insert(payload).select('id').maybeSingle();
+        console.log('[apply] vax result', res.error || res.data);
+        if (res.error) errors.push(`Vaccination "${v.vaccine}": ${res.error.message}`);
+        else appliedCount++;
       }
 
-      // 2. labs
+      // 2. labs — live schema is lab_panels + lab_results.panel_id
       for (const panel of editableLabs) {
-        for (const result of panel.results || []) {
-          if (!result.analyte) continue;
-          await run(`Lab "${result.analyte}"`, () => supabase.from('lab_results').insert({
-            pet_id: petId,
-            name: result.analyte,
+        const results = (panel.results || []).filter((r) => r.analyte);
+        if (!results.length) continue;
+        const panelPayload = {
+          pet_id: petId,
+          panel_name: panel.panel_name || 'Labs',
+          collected_on: panel.collected_on || null,
+          recorded_by: user.id,
+        };
+        console.log('[apply] lab panel payload', panelPayload);
+        const pRes = await supabase.from('lab_panels').insert(panelPayload).select('id').maybeSingle();
+        console.log('[apply] lab panel result', pRes.error || pRes.data);
+        if (pRes.error || !pRes.data?.id) {
+          errors.push(`Lab panel: ${pRes.error?.message || 'no id'}`);
+          continue;
+        }
+        for (const result of results) {
+          const labPayload = {
+            panel_id: pRes.data.id,
             analyte: result.analyte,
-            value: result.value_text || (result.value_num != null ? String(result.value_num) : null),
-            value_text: result.value_text || null,
-            value_num: result.value_num,
+            value_text: result.value_text || (result.value_num != null ? String(result.value_num) : null),
+            value_numeric: result.value_num,
             unit: result.unit,
-            flag: result.flag,
-            collected_on: panel.collected_on,
-            source: 'ai_extracted',
-            confirmed: true,
-          }));
+            flag: result.flag && String(result.flag).toLowerCase() !== 'unknown' ? result.flag : null,
+          };
+          console.log('[apply] lab payload', labPayload);
+          const lRes = await supabase.from('lab_results').insert(labPayload).select('id').maybeSingle();
+          console.log('[apply] lab result', lRes.error || lRes.data);
+          if (lRes.error) errors.push(`Lab "${result.analyte}": ${lRes.error.message}`);
+          else appliedCount++;
         }
       }
 
@@ -1472,30 +1485,31 @@ export default function PetRecordScreen() {
           notes: `${editableWeight.value} ${editableWeight.unit || 'lb'}`,
           weight_kg: kg,
           recorded_by: user.id,
-          source_document_id: sourceDocId,
         }));
       }
 
       // 4. visits
       for (const visit of editableProcedures) {
-        if (!visit.title && !visit.event_type) continue;
-        await run(`Visit "${visit.title || 'Visit'}"`, () => supabase.from('medical_records').insert({
+        if (!visit.title && !visit.event_type && !visit.occurred_on) continue;
+        const visitPayload = {
           pet_id: petId,
           record_type: 'visit',
           title: visit.title || 'Visit',
           details: visit.notes || null,
           record_date: visit.occurred_on || new Date().toISOString().slice(0, 10),
-        }));
+        };
+        console.log('[apply] visit payload', visitPayload);
+        const vRes = await supabase.from('medical_records').insert(visitPayload).select('id').maybeSingle();
+        console.log('[apply] visit result', vRes.error || vRes.data);
+        if (vRes.error) errors.push(`Visit "${visit.title || 'Visit'}": ${vRes.error.message}`);
+        else appliedCount++;
         await run(`Visit event "${visit.title || 'Visit'}"`, () => supabase.from('pet_care_events').insert({
           pet_id: petId,
-          event_type: visit.event_type && ['visit', 'procedure', 'vaccination', 'medication', 'lab', 'note', 'grooming', 'other', 'weight'].includes(visit.event_type)
-            ? visit.event_type : 'visit',
+          event_type: 'visit',
           occurred_on: visit.occurred_on || null,
           title: visit.title || null,
           notes: visit.notes || null,
-          cost_cents: visit.cost_cents || null,
           recorded_by: user.id,
-          source_document_id: sourceDocId,
         }));
       }
 
@@ -1661,7 +1675,14 @@ export default function PetRecordScreen() {
   const vaxTone: 'ok' | 'due' | 'over' | 'unknown' = vaxCount > 0
     ? (vaxDues.some((t) => t < nowMs) ? 'over' : vaxDues.some((t) => t - nowMs < 30 * 864e5) ? 'due' : 'ok')
     : pendingDocs.length > 0 ? 'due' : 'unknown';
-  const vaxSub = vaxTone === 'over' ? 'Overdue' : vaxTone === 'due' && vaxCount === 0 ? 'Review docs' : vaxTone === 'due' ? 'Due soon' : vaxTone === 'ok' ? 'Up to date' : 'No record';
+  const thruIso = confirmedVax.map((v) => v.next_due_on || v.administered_on).filter(Boolean).sort().pop();
+  const thruLabel = thruIso
+    ? new Date(String(thruIso)).toLocaleString('en-US', { month: 'short', year: 'numeric' })
+    : null;
+  const vaxSub = vaxTone === 'over' ? 'Overdue'
+    : vaxCount === 0 ? (pendingDocs.length > 0 ? 'Review docs' : 'No record')
+    : thruLabel ? `Valid thru ${thruLabel}`
+    : vaxTone === 'due' ? 'Due soon' : 'Up to date';
   const felvFiv = labRows.filter((l) => /felv|fiv/i.test(String(l.analyte || l.name || '')));
   const bcs = pet.body_condition_score;
   let weightTone: 'ok' | 'due' | 'over' | 'unknown' = 'unknown';

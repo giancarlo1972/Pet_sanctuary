@@ -13,6 +13,7 @@ import {
   Switch,
   Modal,
   TextInput,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -447,7 +448,12 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const handleLogout = async () => { await signOut(); };
+  const handleLogout = async () => {
+    await signOut();
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.location.assign('/');
+    }
+  };
 
   const handleModAction = async (item: ModItem, action: 'approved' | 'rejected') => {
     setModItems((prev) => prev.map((m) => m.id === item.id ? { ...m, status: action } : m));
@@ -653,7 +659,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                 })}
               </View>
               {isOwner ? (
-                <TouchableOpacity style={styles.adminCta} onPress={() => { closeDrawer(); router.push('/admin'); }} activeOpacity={0.85}>
+                <TouchableOpacity style={styles.adminCta} onPress={() => { closeDrawer(); router.replace('/admin'); }} activeOpacity={0.85}>
                   <Shield color={Colors.white} size={18} />
                   <Text style={styles.adminCtaTxt}>Open admin console</Text>
                 </TouchableOpacity>

@@ -1,12 +1,19 @@
 export function toIso(s) {
   if (!s) return null;
-  const m = String(s).trim().match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
-  if (!m) {
-    const iso = String(s).match(/^(\d{4}-\d{2}-\d{2})/);
-    return iso ? iso[1] : null;
-  }
-  const y = m[3].length === 2 ? `20${m[3]}` : m[3];
-  return `${y}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+  const raw = String(s).trim();
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const m = raw.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (!m) return null;
+  const a = parseInt(m[1], 10);
+  const b = parseInt(m[2], 10);
+  const y = m[3].length === 2 ? 2000 + parseInt(m[3], 10) : parseInt(m[3], 10);
+  // US clinic records are M/D/YYYY. Only treat as D/M when the first part is > 12.
+  let month = a;
+  let day = b;
+  if (a > 12 && b <= 12) { day = a; month = b; }
+  if (month < 1 || month > 12 || day < 1 || day > 31 || !y) return null;
+  return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
 export function splitServiceBlocks(text) {
@@ -130,7 +137,8 @@ export function parsePatientHeader(text) {
   const sexLine = (head.match(/sex\s*[:.]?\s*([^\n]{0,40})/i) || [])[1] || '';
   const spayed = /spay|neuter|castrat/i.test(sexLine) || /spayed|neutered/i.test(head.slice(0, 8000));
   const sex = /female/i.test(sexLine) ? 'female' : /male/i.test(sexLine) ? 'male' : null;
-  const bcs = parseInt((head.match(/BCS\s*[:.]?\s*(\d(?:\.\d)?|\d\s*[–-]\s*\d)/i) || [])[1], 10);
+  const bcsMatch = head.match(/BCS\s*[:.]?\s*(\d(?:\.\d)?)\s*(?:[–\-]\s*\d)?/i);
+  const bcs = bcsMatch ? parseInt(bcsMatch[1], 10) : NaN;
   return {
     date_of_birth: dob,
     microchip,

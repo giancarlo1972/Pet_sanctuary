@@ -470,8 +470,14 @@ function parseAnyDate(v: any): string | null {
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
   const mdy = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
   if (mdy) {
+    const a = parseInt(mdy[1], 10);
+    const b = parseInt(mdy[2], 10);
     const y = mdy[3].length === 2 ? `20${mdy[3]}` : mdy[3];
-    return `${y}-${mdy[1].padStart(2, '0')}-${mdy[2].padStart(2, '0')}`;
+    let month = a;
+    let day = b;
+    if (a > 12 && b <= 12) { day = a; month = b; }
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   }
   const named = s.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/);
   if (named) {
@@ -781,7 +787,11 @@ export default function PetRecordScreen() {
       setRelationships(relsRes.data.map((r) => ({ ...r, profile_name: nameMap[r.user_id] || 'Unknown' })));
     }
 
-    setVaccinations((vaxRes.data as Vaccination[]) || []);
+    const vaxRows = ((vaxRes.data as Vaccination[]) || []).filter((v) => v.administered_on);
+    if (((vaxRes.data as Vaccination[]) || []).some((v) => !v.administered_on)) {
+      await supabase.from('pet_vaccinations').delete().eq('pet_id', petId).is('administered_on', null);
+    }
+    setVaccinations(vaxRows);
 
     const { data: clinicData } = await supabase.from('vet_clinics').select('id, name, address, phone, website').order('name');
     setClinics((clinicData as ClinicInfo[]) || []);
@@ -1706,7 +1716,7 @@ export default function PetRecordScreen() {
             weight_measured_on: newest.measured_on,
             ...(ident.bcs ? { body_condition_score: ident.bcs } : {}),
             ...(ident.bcs >= 8 && !pet?.target_weight_kg ? { target_weight_kg: lbToKg(15) } : {}),
-            ...(ident.date_of_birth ? { date_of_birth: ident.date_of_birth } : {}),
+            ...(ident.date_of_birth ? { date_of_birth: parseAnyDate(ident.date_of_birth) } : {}),
           }).eq('id', petId));
         }
       }
@@ -2740,12 +2750,15 @@ export default function PetRecordScreen() {
                 date_of_birth: pet.date_of_birth,
                 microchipped: pet.microchipped,
                 spayed_neutered: pet.spayed_neutered,
+                weight_lb: latestLb,
                 weight_kg: pet.weight_kg,
-                body_condition_score: pet.body_condition_score,
+                body_condition_score: lastExam?.vitals?.bcs ?? pet.body_condition_score,
+                target_weight_lb: targetLb,
                 target_weight_kg: pet.target_weight_kg,
                 previous_names: pet.previous_names,
+                weight_unit: 'lb',
               },
-              vaccinations: vaccinations.filter((v) => !v.superseded).map((v) => ({
+              vaccinations: vaccinations.map((v) => ({
                 vaccine: v.vaccine,
                 administered_on: v.administered_on,
                 next_due_on: v.next_due_on,
@@ -2753,6 +2766,7 @@ export default function PetRecordScreen() {
                 manufacturer: v.manufacturer,
                 vet_clinic: v.vet_clinic,
                 vet_name: v.vet_name,
+                superseded: v.superseded,
               })),
               conditions: conditions.map((c) => ({
                 kind: c.kind,
@@ -2761,7 +2775,9 @@ export default function PetRecordScreen() {
                 diagnosed_on: c.diagnosed_on,
                 is_active: c.is_active,
               })),
-              labPanels: [],
+              lastExam,
+              meds: medsGiven,
+              labs: labRows,
               clinics: [],
             }} />
 

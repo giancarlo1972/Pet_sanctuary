@@ -64,6 +64,7 @@ import AppHeader from '@/components/AppHeader';
 import { Page, CONTENT_MAX } from '@/components/Page';
 import { WeightLineChart, LabSparkline } from '@/components/PetCharts';
 import MedicalDashboard from '@/components/MedicalDashboard';
+import { Card, InnerTile } from '@/components/Card';
 import { extractPdfText } from '@/lib/pdf-text';
 import { SearchablePicker } from '@/components/SearchablePicker';
 import { DateField } from '@/components/DateField';
@@ -559,7 +560,7 @@ function StatusTile({
   const tileBg = tone === 'ok' ? Colors.tealBg : tone === 'due' ? Colors.standardBg : tone === 'over' ? Colors.criticalBg : Colors.surface;
   const fg = tone === 'ok' ? Colors.teal : tone === 'due' ? Colors.accent : tone === 'over' ? Colors.critical : Colors.textTertiary;
   const inner = (
-    <View style={[styles.statusTile, { backgroundColor: tileBg }]}>
+    <InnerTile style={[styles.statusTile, { backgroundColor: tileBg }]}>
       <View style={[styles.statusIcon, { backgroundColor: fg }]}>
         <Icon color={Colors.white} size={20} />
       </View>
@@ -572,7 +573,7 @@ function StatusTile({
           </TouchableOpacity>
         ) : null}
       </View>
-    </View>
+    </InnerTile>
   );
   if (onPress) {
     return <TouchableOpacity style={styles.statusTileWrap} onPress={onPress} activeOpacity={0.85}>{inner}</TouchableOpacity>;
@@ -2381,7 +2382,7 @@ export default function PetRecordScreen() {
         {/* OVERVIEW */}
         {tab === 'overview' && (
           <View style={styles.tabContent}>
-            <View style={styles.statusCard}>
+            <Card>
               <View style={styles.tileRow}>
                 <StatusTile icon={Syringe} label="Vaccinated" sub={vaxSub} tone={vaxTone} onPress={() => {
                   if (pendingDocs[0]) { setTab('medical'); openConfirmFromParse(pendingDocs[0].id, pendingDocs[0].ai_summary || {}); }
@@ -2395,9 +2396,9 @@ export default function PetRecordScreen() {
                 <StatusTile icon={FlaskConical} label="FELV/FIV" sub={felvTone === 'unknown' ? 'Add' : felvSub} tone={felvTone} onPress={() => { setTab('medical'); }} />
                 <StatusTile icon={Activity} label="Activity" sub={activityTone === 'unknown' ? 'Connect' : activitySub} tone={activityTone} onPress={() => showBanner('Connect a litter box, feeder, or GPS collar from Me → Devices.', 'info')} />
               </View>
-            </View>
+            </Card>
             {ownerNotes.length > 0 ? (
-              <View style={styles.ovCard}>
+              <Card>
                 <View style={styles.ovCardHead}>
                   <Text style={styles.ovKicker}>NOTES FOR YOU</Text>
                   <TouchableOpacity onPress={() => { setTab('medical'); }}>
@@ -2410,10 +2411,10 @@ export default function PetRecordScreen() {
                     {n.date ? <Text style={styles.docClinic}>{formatDate(String(n.date))}</Text> : null}
                   </View>
                 ))}
-              </View>
+              </Card>
             ) : null}
 
-            <View style={styles.ovCard}>
+            <Card>
               <View style={styles.ovCardHead}>
                 <Text style={styles.ovKicker}>CONNECTED DEVICES</Text>
                 {petDevices.length > 0 ? (
@@ -2452,9 +2453,9 @@ export default function PetRecordScreen() {
                 <Text style={styles.dashedConnectTxt}>+ Connect a device (litter box, feeder, GPS collar)</Text>
               </TouchableOpacity>
               <Text style={styles.ovFoot}>Device readings feed AI Health so patterns (weight, litter-box visits) show up in the analysis.</Text>
-            </View>
+            </Card>
 
-            <View style={styles.ovCard}>
+            <Card identity>
               <Text style={styles.ovKicker}>MICROCHIP</Text>
               <Text style={styles.chipMono}>{chipNumber || (pet.microchipped ? '•••• request access' : 'No microchip on file')}</Text>
               <Text style={styles.ovFoot}>Visible to the owner, verified org staff, and an active foster. Others must request access. Storing it here doesn’t register the chip — verify at the AAHA universal lookup after a move.</Text>
@@ -2466,10 +2467,10 @@ export default function PetRecordScreen() {
                   <Text style={styles.requestBtnTxt}>Request access</Text>
                 </TouchableOpacity>
               ) : null}
-            </View>
+            </Card>
 
             {activeConditions.length > 0 ? (
-              <View style={styles.ovCard}>
+              <Card>
                 <View style={styles.ovCardHead}>
                   <Text style={styles.ovKicker}>LATEST CONDITIONS</Text>
                   <TouchableOpacity onPress={() => { setTab('medical'); }}>
@@ -2479,10 +2480,10 @@ export default function PetRecordScreen() {
                 {activeConditions.slice(0, 3).map((c) => (
                   <Text key={c.id} style={styles.docTitle}>{c.name}{c.severity ? ` · ${c.severity}` : ''}</Text>
                 ))}
-              </View>
+              </Card>
             ) : null}
 
-            <View style={styles.ovCard}>
+            <Card identity>
               <View style={styles.ovCardHead}>
                 <Text style={styles.ovKicker}>CHARACTERISTICS</Text>
                 {canEdit ? (
@@ -2545,9 +2546,9 @@ export default function PetRecordScreen() {
                   </Text>
                 </View>
               </View>
-            </View>
+            </Card>
 
-            <View style={styles.ovCard}>
+            <Card>
               <View style={styles.ovCardHead}>
                 <Text style={styles.ovKicker}>PHOTOS</Text>
                 {canEdit && photos.length < 10 && (
@@ -2580,9 +2581,9 @@ export default function PetRecordScreen() {
                   ))}
                 </View>
               )}
-            </View>
+            </Card>
 
-            <View style={styles.ovCard}>
+            <Card>
               <Text style={styles.ovKicker}>{(pet.name || 'PET').toUpperCase()}’S STORY</Text>
               <Text style={styles.ovFoot}>Pull photos from Google or Apple Photos, then let AI draft a shareable story.</Text>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
@@ -2596,7 +2597,7 @@ export default function PetRecordScreen() {
                   <Text style={styles.coralChipTxt}>Create story with AI</Text>
                 </TouchableOpacity>
               </View>
-            </View>
+            </Card>
 
             <View style={styles.subHeader}>
               <View style={styles.subHeaderLeft}>
@@ -2611,7 +2612,7 @@ export default function PetRecordScreen() {
               )}
             </View>
             {diet ? (
-              <View style={styles.dietCard}>
+              <Card>
                 {diet.food_brand ? <DietRow label="Brand" value={diet.food_brand} /> : null}
                 {diet.food_product ? <DietRow label="Product" value={diet.food_product} /> : null}
                 {diet.food_type ? <DietRow label="Type" value={titleCase(diet.food_type)} /> : null}
@@ -2620,7 +2621,7 @@ export default function PetRecordScreen() {
                 {diet.treats ? <DietRow label="Treats" value={diet.treats} /> : null}
                 {diet.avoid ? <DietRow label="Avoid" value={diet.avoid} /> : null}
                 {diet.feeding_notes ? <DietRow label="Notes" value={diet.feeding_notes} /> : null}
-              </View>
+              </Card>
             ) : (
               <Text style={styles.emptyText}>No diet information yet.</Text>
             )}
@@ -2674,7 +2675,23 @@ export default function PetRecordScreen() {
               bcs={bcsVal}
               bcsDelta={bcsVal != null && prevBcs != null ? bcsVal - prevBcs : null}
               bcsPts={petExams.map((e) => ({ v: Number(e.vitals?.bcs), at: e.visit_date })).filter((p) => Number.isFinite(p.v)).reverse()}
-              risks={(aiFindings?.findings || []).slice(0, 3).map((f: any) => f.title).filter(Boolean)}
+              risks={(() => {
+                const list: string[] = [];
+                if (bcsVal != null && bcsVal >= 8) list.push(`Obesity · BCS ${bcsVal}`);
+                for (const c of activeConditions) {
+                  const n = (c.name || '').trim();
+                  if (!n) continue;
+                  if (list.some((x) => x.toLowerCase().includes(n.toLowerCase()) || n.toLowerCase().includes(x.split('·')[0].trim().toLowerCase()))) continue;
+                  list.push(n);
+                }
+                for (const f of (aiFindings?.findings || [])) {
+                  const t = String(f.title || '').trim();
+                  if (!t) continue;
+                  if (list.some((x) => x.toLowerCase() === t.toLowerCase())) continue;
+                  list.push(t);
+                }
+                return list.slice(0, 3);
+              })()}
               lastExam={lastExam}
               exams={petExams}
               vitals={[
@@ -3121,10 +3138,10 @@ export default function PetRecordScreen() {
                   </ScrollView>
                 ) : null}
                 {weightEntries.length > 0 ? (
-                  <View style={styles.ovCard}>
+                  <Card>
                     <Text style={styles.ovKicker}>WEIGHT (LB)</Text>
                     <WeightLineChart points={weightEntries.slice().reverse()} targetLb={targetLb} height={140} />
-                  </View>
+                  </Card>
                 ) : null}
                 {(() => {
                   const flagged = new Map<string, number[]>();
@@ -3145,10 +3162,10 @@ export default function PetRecordScreen() {
                     }
                   }
                   return [...flagged.entries()].map(([name, nums]) => nums.length > 1 ? (
-                    <View key={name} style={styles.ovCard}>
+                    <Card key={name}>
                       <Text style={styles.docTitle}>{name}</Text>
                       <LabSparkline values={nums} color={Colors.critical} />
-                    </View>
+                    </Card>
                   ) : null);
                 })()}
                 {(aiFindings?.timeline || []).map((t: any, i: number) => (
@@ -3175,10 +3192,10 @@ export default function PetRecordScreen() {
                   );
                 })}
                 {aiFindings?.conclusion ? (
-                  <View style={[styles.ovCard, { backgroundColor: Colors.navy }]}>
+                  <Card style={{ backgroundColor: Colors.navy, borderColor: Colors.navy }}>
                     <Text style={[styles.ovKicker, { color: '#B9BCE0' }]}>CONCLUSION</Text>
                     <Text style={{ fontFamily: Fonts.regular, fontSize: 13, color: Colors.white, lineHeight: 20, marginTop: 6 }}>{aiFindings.conclusion}</Text>
-                  </View>
+                  </Card>
                 ) : null}
                 <TouchableOpacity style={[styles.aiPrimaryBtn, aiBusy && styles.btnDisabled]} disabled={aiBusy} onPress={runAiHealth} activeOpacity={0.85}>
                   {aiBusy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.aiPrimaryTxt}>Run AI Health</Text>}

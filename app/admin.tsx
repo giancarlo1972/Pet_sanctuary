@@ -11,6 +11,7 @@ import { useAuth } from '@/lib/context/AuthContext';
 import { isPlatformAdmin } from '@/lib/admin-access';
 import { SUPPORT_EMAIL, supportMailto } from '@/lib/contact';
 import { Page } from '@/components/Page';
+import { Card as Surface } from '@/components/Card';
 
 type QueueItem = {
   id: string;
@@ -246,23 +247,23 @@ export default function AdminScreen() {
           <Section title="Org verifications">
             {orgs.length === 0 && orgsQ.length === 0 ? <Empty /> : null}
             {orgs.map((o) => (
-              <Card key={o.id} title={o.name} meta={o.org_type || 'Organization'} pill={o.status || 'pending'} pillOk={(o.status || '') === 'approved'}
+              <ReviewCard key={o.id} title={o.name} meta={o.org_type || 'Organization'} pill={o.status || 'pending'} pillOk={(o.status || '') === 'approved'}
                 busy={busyId === o.id} okLabel="Verify org" onOk={() => decideOrg(o.id, 'approved')} onNo={() => decideOrg(o.id, 'rejected')} />
             ))}
             {orgsQ.map((q) => (
-              <Card key={q.id} title={q.flag_reason || 'Organization'} meta="Flagged by moderation" busy={busyId === q.id} okLabel="Verify org" onOk={() => decide(q, 'approved')} onNo={() => decide(q, 'rejected')} />
+              <ReviewCard key={q.id} title={q.flag_reason || 'Organization'} meta="Flagged by moderation" busy={busyId === q.id} okLabel="Verify org" onOk={() => decide(q, 'approved')} onNo={() => decide(q, 'rejected')} />
             ))}
           </Section>
           <Section title="Report moderation">
             {reportsQ.length === 0 ? <Empty /> : null}
             {reportsQ.map((q) => (
-              <Card key={q.id} title={q.flag_reason || 'Report'} meta="Pending review" busy={busyId === q.id} okLabel="Approve" onOk={() => decide(q, 'approved')} onNo={() => decide(q, 'rejected')} />
+              <ReviewCard key={q.id} title={q.flag_reason || 'Report'} meta="Pending review" busy={busyId === q.id} okLabel="Approve" onOk={() => decide(q, 'approved')} onNo={() => decide(q, 'rejected')} />
             ))}
           </Section>
           <Section title="User verifications">
             {usersQ.length === 0 ? <Empty /> : null}
             {usersQ.map((q) => (
-              <Card key={q.id} title={q.flag_reason || 'ID review'} meta="Responder / volunteer / foster" busy={busyId === q.id} okLabel="Approve" onOk={() => decide(q, 'approved')} onNo={() => decide(q, 'rejected')} />
+              <ReviewCard key={q.id} title={q.flag_reason || 'ID review'} meta="Responder / volunteer / foster" busy={busyId === q.id} okLabel="Approve" onOk={() => decide(q, 'approved')} onNo={() => decide(q, 'rejected')} />
             ))}
           </Section>
 
@@ -273,7 +274,7 @@ export default function AdminScreen() {
               if (!q) return true;
               return `${m.email || ''} ${m.full_name || ''}`.toLowerCase().includes(q);
             }).slice(0, 40).map((m) => (
-              <View key={m.id} style={styles.entity}>
+              <Surface key={m.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.cardTitle}>{m.full_name || m.email || m.id.slice(0, 8)}</Text>
                   <Text style={styles.meta}>{m.email} · {m.role || 'member'}{m.blocked ? ' · blocked' : ''}</Text>
@@ -288,7 +289,7 @@ export default function AdminScreen() {
                   await supabase.from('profiles').update({ blocked: !m.blocked }).eq('id', m.id);
                   setBusyId(null); load();
                 }}><Text style={m.blocked ? styles.reassign : styles.rejectTxt}>{m.blocked ? 'Unblock' : 'Block'}</Text></TouchableOpacity>
-              </View>
+              </Surface>
             ))}
             <Text style={styles.noteTxt}>Upload a document for a user (ID, license) — they still confirm it.</Text>
             <TextInput style={styles.input} value={uploadUserId} onChangeText={setUploadUserId} placeholder="User email to upload for" placeholderTextColor={Colors.textTertiary} autoCapitalize="none" />
@@ -311,7 +312,7 @@ export default function AdminScreen() {
           <Section title="Bug reports">
             {bugs.length === 0 ? <Empty /> : null}
             {bugs.map((b) => (
-              <View key={b.id} style={styles.card}>
+              <Surface key={b.id}>
                 <Text style={styles.cardTitle}>{b.title || 'Untitled'}</Text>
                 <Text style={styles.meta}>{b.status} · {b.body}</Text>
                 <View style={styles.row}>
@@ -322,7 +323,7 @@ export default function AdminScreen() {
                     }}><Text style={styles.ghostTxt}>{st}</Text></TouchableOpacity>
                   ))}
                 </View>
-              </View>
+              </Surface>
             ))}
           </Section>
 
@@ -399,14 +400,14 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Card({
+function ReviewCard({
   title, meta, pill, pillOk, busy, okLabel, onOk, onNo,
 }: {
   title: string; meta: string; pill?: string; pillOk?: boolean; busy: boolean; okLabel: string;
   onOk: () => void; onNo: () => void;
 }) {
   return (
-    <View style={styles.card}>
+    <Surface>
       <View style={styles.cardHead}>
         <Text style={styles.cardTitle} numberOfLines={1}>{title}</Text>
         {pill ? <Text style={[styles.pill, pillOk ? styles.pillOk : styles.pillNo]}>{pill}</Text> : null}
@@ -416,7 +417,7 @@ function Card({
         <TouchableOpacity style={styles.verify} onPress={onOk} disabled={busy}><Text style={styles.verifyTxt}>{busy ? '…' : okLabel}</Text></TouchableOpacity>
         <TouchableOpacity style={styles.reject} onPress={onNo} disabled={busy}><Text style={styles.rejectTxt}>Reject</Text></TouchableOpacity>
       </View>
-    </View>
+    </Surface>
   );
 }
 

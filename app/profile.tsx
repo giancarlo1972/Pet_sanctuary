@@ -32,6 +32,7 @@ import { actingLabel } from '@/lib/acting-as';
 import { supabase } from '@/lib/supabase';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
+import { Card } from '@/components/Card';
 import { InlineBanner } from '@/components/InlineBanner';
 import SignedImage from '@/components/SignedImage';
 import SharePetSheet from '@/components/SharePetSheet';
@@ -823,7 +824,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
               </View>
 
               {activePets.length === 0 && pastPets.length === 0 ? (
-                <View style={styles.card}>
+                <Card padded={false}>
                   <Text style={styles.emptyText}>No pets yet</Text>
                   <TouchableOpacity
                     style={styles.emptyAddBtn}
@@ -833,7 +834,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                     <PawPrint color={Colors.white} size={16} />
                     <Text style={styles.emptyAddBtnText}>Add your first pet</Text>
                   </TouchableOpacity>
-                </View>
+                </Card>
               ) : (
                 <>
                   {activePets.map((p) => {
@@ -921,7 +922,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
             {/* Trust & Verification */}
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Trust & Verification</Text>
-              <View style={styles.card}>
+              <Card padded={false}>
               <VerificationRow
                   icon={<IdCard color={Colors.navy} size={18} />}
                   label="Government ID"
@@ -982,13 +983,13 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                     </View>
                   ) : null}
                 </View>
-              </View>
+              </Card>
             </View>
 
             {/* Privacy */}
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Privacy</Text>
-              <View style={styles.card}>
+              <Card padded={false}>
                 <View style={styles.privacyRow}>
                   <View style={styles.privacyLeft}>
                     <EyeOff color={Colors.navy} size={18} />
@@ -1004,7 +1005,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                     thumbColor={Colors.white}
                   />
                 </View>
-              </View>
+              </Card>
             </View>
 
 
@@ -1013,9 +1014,9 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Moderation Queue</Text>
                 {modItems.length === 0 ? (
-                  <View style={styles.card}>
+                  <Card padded={false}>
                     <Text style={styles.emptyText}>No items pending review</Text>
-                  </View>
+                  </Card>
                 ) : (
                   modItems.map((item) => (
                     <View key={item.id} style={styles.modCard}>
@@ -1065,7 +1066,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                 )}
               </View>
               {applicantProfile ? (
-                <View style={styles.card}>
+                <Card padded={false}>
                   <Text style={styles.appProfileNote}>
                     This prefills future applications and doesn't alter submitted ones.
                   </Text>
@@ -1078,11 +1079,11 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                   <Text style={styles.appProfileRow}><Text style={styles.appProfileLabel}>Hours alone/day: </Text>{applicantProfile.hours_alone?.toString() || '—'}</Text>
                   {applicantProfile.vet_clinic_name ? <Text style={styles.appProfileRow}><Text style={styles.appProfileLabel}>Vet: </Text>{applicantProfile.vet_clinic_name}</Text> : null}
                   {applicantProfile.experience ? <Text style={styles.appProfileRow}><Text style={styles.appProfileLabel}>Experience: </Text>{applicantProfile.experience}</Text> : null}
-                </View>
+                </Card>
               ) : (
-                <View style={styles.card}>
+                <Card padded={false}>
                   <Text style={styles.emptyText}>No saved application info yet. It's filled automatically when you submit your first application.</Text>
-                </View>
+                </Card>
               )}
             </View>
 
@@ -1090,9 +1091,9 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>My Applications</Text>
               {myApps.length === 0 ? (
-                <View style={styles.card}>
+                <Card padded={false}>
                   <Text style={styles.emptyText}>No applications yet</Text>
-                </View>
+                </Card>
               ) : (
                 myApps.map((app) => (
                   <View key={app.id} style={styles.modCard}>
@@ -1186,7 +1187,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
             {fosterSummary && fosterSummary.rating_count > 0 && (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Foster Rating</Text>
-                <View style={styles.card}>
+                <Card padded={false}>
                   <View style={styles.ratingSummaryRow}>
                     <Text style={styles.ratingAvg}>{fosterSummary.avg_rating?.toFixed(1) || '0.0'}</Text>
                     <View style={styles.ratingStarsRow}>
@@ -1196,7 +1197,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                     </View>
                     <Text style={styles.ratingCount}>{fosterSummary.rating_count} rating{fosterSummary.rating_count !== 1 ? 's' : ''}</Text>
                   </View>
-                </View>
+                </Card>
                 {fosterRatings.map((r) => (
                   <View key={r.id} style={styles.modCard}>
                     <View style={styles.modHeader}>
@@ -1234,9 +1235,9 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                 </TouchableOpacity>
               </View>
               {services.length === 0 ? (
-                <View style={styles.card}>
+                <Card padded={false}>
                   <Text style={styles.emptyText}>No services listed yet</Text>
-                </View>
+                </Card>
               ) : (
                 services.map((s) => (
                   <View key={s.id} style={styles.modCard}>
@@ -1269,9 +1270,9 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>My Contributions</Text>
               {contributions.length === 0 ? (
-                <View style={styles.card}>
+                <Card padded={false}>
                   <Text style={styles.emptyText}>No contributions logged yet</Text>
-                </View>
+                </Card>
               ) : (
                 <>
                   {contribTotals.length > 0 && (

@@ -39,6 +39,7 @@ import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 import SignedImage from '@/components/SignedImage';
 import HelpersNearby from '@/components/HelpersNearby';
+import { Card } from '@/components/Card';
 
 const FEATURED_WIDTH = 170;
 const FEATURED_HEIGHT = 210;
@@ -281,11 +282,11 @@ export default function HomeScreen() {
   }, [session, helpFlags?.alert_radius_mi]);
 
   const renderFeaturedCard = (pet: Pet) => (
+    <Card key={pet.id} padded={false} style={[styles.featuredCard, { width: wide ? 190 : 170 }]}>
     <TouchableOpacity
-      key={pet.id}
-      style={[styles.featuredCard, { width: wide ? 190 : 170 }]}
       onPress={() => router.push(`/pet-details?id=${pet.id}`)}
       activeOpacity={0.85}
+      style={{ flex: 1 }}
     >
       <SignedImage path={pet.main_photo_url} style={styles.featuredImage} />
       <LinearGradient
@@ -304,6 +305,7 @@ export default function HomeScreen() {
         </View>
       </LinearGradient>
     </TouchableOpacity>
+    </Card>
   );
 
   const renderAlertRow = (report: Report) => {
@@ -312,8 +314,8 @@ export default function HomeScreen() {
     const IconDef = REPORT_TYPE_ICONS[report.report_type] || { icon: AlertTriangle };
     const Icon = IconDef.icon;
     return (
+      <Card key={report.id} padded={false}>
       <TouchableOpacity
-        key={report.id}
         style={styles.alertRow}
         onPress={() => router.push(`/report-details?id=${report.id}`)}
         activeOpacity={0.85}
@@ -331,6 +333,7 @@ export default function HomeScreen() {
         </View>
         <Text style={styles.alertTime}>{timeAgo(report.created_at)}</Text>
       </TouchableOpacity>
+      </Card>
     );
   };
 
@@ -409,15 +412,19 @@ export default function HomeScreen() {
           </TouchableOpacity>
 
           <View style={styles.nearRow}>
-            <TouchableOpacity style={styles.nearPill} onPress={() => router.push('/nearby-clinics?kind=clinic')} activeOpacity={0.85}>
+            <TouchableOpacity style={{ flex: 1 }} onPress={() => router.push('/nearby-clinics?kind=clinic')} activeOpacity={0.85}>
+            <Card identity>
               <Text style={styles.clinicsKicker}>CLINICS · LIVE</Text>
               <Text style={styles.clinicsTitle}>{clinicLive.open} open · {clinicLive.closing_soon} closing soon</Text>
               <Text style={styles.clinicsCta}>Open map  →</Text>
+            </Card>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.nearPill} onPress={() => router.push('/nearby-clinics?kind=shelter')} activeOpacity={0.85}>
+            <TouchableOpacity style={{ flex: 1 }} onPress={() => router.push('/nearby-clinics?kind=shelter')} activeOpacity={0.85}>
+            <Card identity>
               <Text style={styles.clinicsKicker}>SHELTERS · LIVE</Text>
               <Text style={styles.clinicsTitle}>{shelterLive.open} open · {shelterLive.closing_soon} closing soon</Text>
               <Text style={styles.clinicsCta}>Open map  →</Text>
+            </Card>
             </TouchableOpacity>
           </View>
 
@@ -623,8 +630,7 @@ const styles = StyleSheet.create({
   alertList: { gap: 8 },
   alertRow: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: Colors.white, borderRadius: 14, padding: 14,
-    borderWidth: 1, borderColor: Colors.border,
+    padding: 14,
   },
   alertIconTile: {
     width: 38, height: 38, borderRadius: 12, justifyContent: 'center', alignItems: 'center',

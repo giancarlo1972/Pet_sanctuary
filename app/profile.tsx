@@ -711,9 +711,6 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                         <Text style={styles.petRelName}>{p.pet_name}</Text>
                         <Text style={styles.petRelMeta}>{[p.species, p.breed].filter(Boolean).join(' · ') || 'Pet'}</Text>
                       </View>
-                      <View style={[styles.relPill, (p.relationship||'').includes('foster') && styles.relPillFoster, (p.relationship||'').includes('sponsor') && styles.relPillSponsor]}>
-                        <Text style={styles.relPillTxt}>{(p.relationship||'own').toLowerCase().includes('foster') ? 'I FOSTER' : (p.relationship||'').toLowerCase().includes('sponsor') ? 'I SPONSOR' : 'I OWN'}</Text>
-                      </View>
                       <ChevronRight color={Colors.textTertiary} size={18} />
                       </View>
                       {petNotes.map((r, i) => {
@@ -725,7 +722,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                           : `due in ${r.days_until_due}d`;
                         return (
                           <View key={`${r.pet_id}-${i}`} style={[styles.reminderInRow, { backgroundColor: bg }]}>
-                            <Text style={[styles.reminderLabel, { color }]} numberOfLines={1}>{r.label} — {dayLabel}</Text>
+                            <Text style={[styles.reminderLabel, { color, width: '100%' }]} numberOfLines={1}>{r.label} — {dayLabel}</Text>
                           </View>
                         );
                       })}
@@ -816,15 +813,6 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
               </View>
             </View>
 
-            {/* My Badges */}
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>My Badges</Text>
-              <View style={styles.badgeRow}>
-                <BadgeChip icon={<AlertTriangle color={Colors.coral} size={14} />} label="First responder" />
-                <BadgeChip icon={<PawPrint color={Colors.teal} size={14} />} label="12 rescues assisted" />
-                <BadgeChip icon={<Home color={Colors.navy} size={14} />} label="Foster ready" />
-              </View>
-            </View>
 
             {/* Moderation Queue (org-admin only) */}
             {isOrgAdmin && (
@@ -1537,7 +1525,7 @@ const styles = StyleSheet.create({
   // My Pets
   petRelCard: { backgroundColor: Colors.white, borderRadius: 14, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: Colors.border, gap: 8 },
   petRelTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  reminderInRow: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, alignSelf: 'flex-start' },
+  reminderInRow: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, width: '100%' },
   petRelCardPast: { opacity: 0.7 },
   petRelPhoto: { width: 48, height: 48, borderRadius: 24 },
   petRelPhotoFallback: { backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },

@@ -1255,8 +1255,7 @@ export default function PetRecordScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <AppHeader title={pet.name || 'Pet Record'} showBack />
-      <Page scroll={false}>
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 + insets.bottom }} showsVerticalScrollIndicator={false}>
+      <Page>
         {banner && (
           <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />
         )}
@@ -1812,7 +1811,6 @@ export default function PetRecordScreen() {
           </View>
         )}
 
-      </ScrollView>
       </Page>
 
       {/* === Vaccination Modal (full-featured) === */}
@@ -2326,7 +2324,7 @@ function getSevText(sev: string): string {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
   col: { width: '100%', maxWidth: 720, alignSelf: 'center', flex: 1 },
-  heroWrap: { width: '100%', maxWidth: '100%', maxHeight: 360, aspectRatio: 4/3, borderRadius: 20, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 12, alignSelf: 'stretch' },
+  heroWrap: { width: '100%', aspectRatio: 4/3, borderRadius: 20, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 12 },
   hero: { width: '100%', height: '100%' },
   changePhoto: { position: 'absolute', right: 12, bottom: 12, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(38,38,94,0.85)', alignItems: 'center', justifyContent: 'center' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },

@@ -51,7 +51,7 @@ export default function AppHeader({ title, showBack = false, rightAction, maxWid
 }
 
 const styles = StyleSheet.create({
-  container: { backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  container: { backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border, alignItems: 'center' },
   inner: { width: '100%', maxWidth: CONTENT_MAX, alignSelf: 'center' },
   header: {
     flexDirection: 'row',

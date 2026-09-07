@@ -17,6 +17,7 @@ export default function TabLayout() {
           maxWidth: CONTENT_MAX,
           width: '100%',
           alignSelf: 'center',
+          marginHorizontal: 'auto',
         },
       }}
     >

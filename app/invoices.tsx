@@ -8,7 +8,6 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
-import { GINA } from '@/lib/gina-record';
 
 type Share = 'owner' | 'clinic' | 'shelter' | 'organization' | 'sponsor';
 const SHARES: { id: Share; label: string }[] = [
@@ -31,18 +30,7 @@ type Row = {
   shared_with?: string[] | null;
 };
 
-const GINA_PET: PetOpt = { id: 'gina-demo', name: 'Gina', canManage: true };
-
-const DEMO: Row[] = GINA.invoices.map((inv, i) => ({
-  id: `gina-${i}`,
-  pet_id: 'gina-demo',
-  vendor: inv.vendor,
-  description: inv.desc,
-  amount_cents: Math.round(Number(inv.amount.replace(/[^0-9.]/g, '')) * 100),
-  status: inv.status,
-  shared_with: ['owner', 'clinic'],
-}));
-
+;
 function money(cents: number) {
   if (!cents) return '—';
   return `$${(cents / 100).toFixed(2)}`;
@@ -50,10 +38,10 @@ function money(cents: number) {
 
 export default function InvoicesScreen() {
   const { user } = useAuth();
-  const [pets, setPets] = useState<PetOpt[]>([GINA_PET]);
-  const [petId, setPetId] = useState('gina-demo');
+  const [pets, setPets] = useState<PetOpt[]>([]);
+  const [petId, setPetId] = useState('');
   const [filter, setFilter] = useState<Share | 'all'>('all');
-  const [rows, setRows] = useState<Row[]>(DEMO);
+  const [rows, setRows] = useState<Row[]>([]);
   const [fromDb, setFromDb] = useState(false);
   const [vendor, setVendor] = useState('');
   const [amount, setAmount] = useState('');
@@ -79,7 +67,6 @@ export default function InvoicesScreen() {
       relPets = data ?? [];
     }
     const map = new Map<string, PetOpt>();
-    map.set(GINA_PET.id, GINA_PET);
     (owned ?? []).forEach((p) => map.set(p.id, { id: p.id, name: p.name || 'Pet', canManage: true }));
     relPets.forEach((p) => {
       const rel = (rels ?? []).find((r) => r.pet_id === p.id);
@@ -99,8 +86,8 @@ export default function InvoicesScreen() {
       .order('created_at', { ascending: false });
     if (error || !data) {
       setFromDb(false);
-      setRows(DEMO);
-      setNote('Sample lines until invoices exist in Supabase. Owner of a pet always manages that pet\u2019s documents.');
+      setRows([]);
+      setNote('No invoices yet. Owner of a pet always manages that pet’s documents.');
       return;
     }
     setFromDb(true);

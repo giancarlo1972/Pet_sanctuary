@@ -2,7 +2,7 @@
 // Access: organization_members.role = 'admin' for that org (or platform admin).
 // Design: prototype "Manage Happy Paws Shelter" screen — teal header + stats, Team, Pending requests.
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, TextInput } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import AppHeader from '@/components/AppHeader';
@@ -86,7 +86,6 @@ export default function OrgAdminScreen() {
 
   return (
     <Shell>
-      <ScrollView contentContainerStyle={{ paddingBottom: 48 }}>
         <View style={s.col}>
           <View style={s.hero}>
             <Text style={s.heroTitle}>{org.name}</Text>
@@ -138,7 +137,6 @@ export default function OrgAdminScreen() {
 
           <View style={s.note}><Text style={s.noteTxt}>You can only see and manage {org.name}. Platform-wide moderation and other organizations are handled by Rescue Army administrators.</Text></View>
         </View>
-      </ScrollView>
     </Shell>
   );
 }
@@ -147,7 +145,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   return (
     <SafeAreaView style={s.wrap} edges={['top']}>
       <AppHeader title="Manage organization" showBack />
-      <Page scroll={false}>{children}</Page>
+      <Page>{children}</Page>
     </SafeAreaView>
   );
 }

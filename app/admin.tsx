@@ -170,8 +170,7 @@ export default function AdminScreen() {
   return (
     <SafeAreaView style={styles.wrap} edges={['top']}>
       <AppHeader title="Admin" showBack maxWidth={880} />
-      <Page scroll={false} wideMax={880}>
-      <ScrollView contentContainerStyle={styles.scroll}>
+      <Page wideMax={880}>
         <View style={styles.col}>
           <View style={styles.hero}>
             <Text style={styles.heroTitle}>Admin console</Text>
@@ -246,7 +245,6 @@ export default function AdminScreen() {
             <Text style={styles.noteTxt}>Every admin action is written to the audit log with your user ID and timestamp. Access to PII/medical records requires an approved access request even for admins.</Text>
           </View>
         </View>
-      </ScrollView>
 
       {editOrg ? (
         <View style={styles.sheetScrim}>

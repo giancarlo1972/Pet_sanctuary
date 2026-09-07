@@ -528,8 +528,8 @@ export default function PetDetailsScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <Page scroll={false} wideMax={720}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.scrollContent, { paddingBottom: 90 + insets.bottom }]}>
+      <Page wideMax={720}>
+      <View>
         {banner && <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />}
         {/* Hero image */}
         <View style={styles.heroWrap}>
@@ -806,7 +806,8 @@ export default function PetDetailsScreen() {
             </View>
           ) : null}
         </View>
-      </ScrollView>
+        <View style={{ height: 90 + insets.bottom }} />
+      </View>
 
       {/* Bottom actions — fixed footer with top border */}
       <View style={[styles.bottomActions, { paddingBottom: 16 + insets.bottom }]}>

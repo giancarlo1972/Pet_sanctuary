@@ -234,6 +234,7 @@ export default function PetsScreen() {
         </View>
       ) : (
         <FlatList
+          style={{ flex: 1 }}
           data={filteredPets}
           renderItem={renderPetCard}
           keyExtractor={(item) => item.id}

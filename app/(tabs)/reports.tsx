@@ -102,7 +102,11 @@ export default function ReportsTabScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <AppHeader title="Reports" />
-      <Page scroll={false}>
+      <Page
+        refreshControl={tab === 'reports' ? (
+          <RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); loadReports(); }} colors={[Colors.coral]} />
+        ) : undefined}
+      >
       <View style={styles.segment}>
         <TouchableOpacity style={[styles.segBtn, tab === 'reports' && styles.segOn]} onPress={() => setTab('reports')}>
           <Text style={[styles.segText, tab === 'reports' && styles.segTextOn]}>Reports</Text>
@@ -115,11 +119,7 @@ export default function ReportsTabScreen() {
       {tab === 'fund' ? (
         <CareFund />
       ) : (
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scroll}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); loadReports(); }} colors={[Colors.coral]} />}
-        >
+        <>
           <TouchableOpacity style={styles.newBtn} onPress={() => router.push('/lost-stray-report')} activeOpacity={0.85}>
             <Text style={styles.newBtnText}>+  New report</Text>
           </TouchableOpacity>
@@ -161,7 +161,7 @@ export default function ReportsTabScreen() {
           <View style={styles.note}>
             <Text style={styles.noteText}>All reports are reviewed by moderators. Exact locations are visible only to verified responders — the public map shows an approximate area.</Text>
           </View>
-        </ScrollView>
+        </>
       )}
       </Page>
     </SafeAreaView>
@@ -173,7 +173,7 @@ function CareFund() {
   const local = CAMPAIGNS.filter((c) => !c.national);
 
   return (
-    <ScrollView contentContainerStyle={styles.scroll}>
+    <View>
       <View style={styles.hero}>
         <Text style={styles.heroKicker}>CARE FUND · UNITED EFFORTS</Text>
         <Text style={styles.heroTitle}>One hub. Their wallets.</Text>
@@ -189,7 +189,7 @@ function CareFund() {
       {local.map((c) => (
         <CampaignCard key={c.id} c={c} />
       ))}
-    </ScrollView>
+    </View>
   );
 }
 

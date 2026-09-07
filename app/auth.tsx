@@ -103,8 +103,8 @@ export default function AuthScreen() {
             <Text style={styles.brandFoot}>Report · Adopt · Foster · Donate</Text>
           </View>
         )}
-      <Page scroll={false} wideMax={720}>
-      <ScrollView contentContainerStyle={[styles.inner, wide && styles.innerWide]} keyboardShouldPersistTaps="handled">
+      <Page wideMax={720}>
+      <View>
         {!wide && (
         <View style={styles.brandRow}>
           <Image source={require('../assets/icon.png')} style={styles.logo} />
@@ -149,7 +149,7 @@ export default function AuthScreen() {
         <TouchableOpacity onPress={() => router.replace('/(tabs)')} activeOpacity={0.7}>
           <Text style={styles.home}>Back to Home</Text>
         </TouchableOpacity>
-      </ScrollView>
+      </View>
       </Page>
       </View>
     </SafeAreaView>

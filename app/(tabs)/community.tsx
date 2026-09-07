@@ -456,7 +456,15 @@ export default function CommunityScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <AppHeader title="Community" />
-      <Page scroll={false}>
+      <Page
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={() => {
+            setRefreshing(true);
+            loadOrgs();
+            loadStories();
+          }} />
+        }
+      >
       <View style={styles.segmentContainer}>
         {(['orgs', 'fosters', 'stories'] as Segment[]).map((seg) => (
           <TouchableOpacity
@@ -476,17 +484,7 @@ export default function CommunityScreen() {
           <ActivityIndicator size="large" color={Colors.coral} />
         </View>
       ) : (
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scrollContent}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={() => {
-              setRefreshing(true);
-              loadOrgs();
-              loadStories();
-            }} />
-          }
-        >
+        <>
           {activeSegment === 'orgs' && (
             <>
               <View style={styles.apiBanner}>
@@ -598,7 +596,7 @@ export default function CommunityScreen() {
               )}
             </>
           )}
-        </ScrollView>
+        </>
       )}
       {menuStory && (
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setMenuStoryId(null)}>

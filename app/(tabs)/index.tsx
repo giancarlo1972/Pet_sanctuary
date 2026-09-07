@@ -325,7 +325,7 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={Colors.background} />
       <AppHeader title="Home" maxWidth={1080} />
-      <Page scroll={false} wideMax={1080}>
+      <Page wideMax={1080}>
       {loginToast ? (
         <TouchableOpacity style={styles.loginToast} onPress={() => { setLoginToast(null); router.push('/(tabs)/profile'); }} activeOpacity={0.9}>
           <Text style={styles.loginToastTxt}>Signed in as {loginToast}. Admin console is under Me.</Text>
@@ -338,7 +338,7 @@ export default function HomeScreen() {
           <ActivityIndicator size="large" color={Colors.coral} />
         </View>
       ) : (
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        <>
           {/* Proximity alert banner */}
           {nearbyAlert && !nearbyDismissed && (() => {
             const sev = nearbyAlert.severity || 'standard';
@@ -493,7 +493,7 @@ export default function HomeScreen() {
             </View>
           )}
 
-        </ScrollView>
+        </>
       )}
       </Page>
     </SafeAreaView>

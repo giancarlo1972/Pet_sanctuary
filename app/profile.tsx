@@ -34,6 +34,7 @@ import { Page } from '@/components/Page';
 import AuthForm from '@/components/AuthForm';
 import SignedImage from '@/components/SignedImage';
 import { isUsablePhoto } from '@/lib/photos';
+import { vaccineType } from '@/lib/catalog';
 
 const DEFAULT_SCREEN_WIDTH = 375;
 const DRAWER_WIDTH = DEFAULT_SCREEN_WIDTH * 0.86;
@@ -337,6 +338,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
       } else setManageOrg(null);
 
       // === My Pets (pet_relationships) ===
+      let relPetsOut: { id: string; name: string | null; main_photo_url: string | null }[] = [];
       const { data: relsData } = await supabase
         .from('pet_relationships')
         .select('id, pet_id, relationship, started_on, ended_on')
@@ -348,6 +350,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
           .from('pets')
           .select('id, name, species, breed, main_photo_url')
           .in('id', petIds);
+        relPetsOut = (relPets || []) as any;
         const petMap: Record<string, { name: string; species: string | null; breed: string | null; photo: string | null }> = {};
         relPets?.forEach((p) => { petMap[p.id] = { name: p.name || 'Unknown', species: p.species, breed: p.breed, photo: p.main_photo_url }; });
         const mapped: PetRel[] = relsData.map((r) => ({
@@ -376,13 +379,62 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
         });
       }
 
-      // === Due Soon reminders (my_pet_reminders view) ===
+      // === Due Soon reminders — latest dose per vaccine type only ===
+      const reminderPetIds = [
+        ...new Set([
+          ...(relsData || []).map((r: any) => r.pet_id),
+          ...(ownedPets || []).map((p: any) => p.id),
+        ]),
+      ];
       const { data: reminderData } = await supabase
         .from('my_pet_reminders')
         .select('pet_id, pet_name, pet_photo, label, days_until_due, urgency')
         .in('urgency', ['overdue', 'due_soon'])
         .order('days_until_due', { ascending: true });
-      if (reminderData) setReminders(reminderData as PetReminder[]);
+      const otherNotes = ((reminderData || []) as PetReminder[]).filter(
+        (r) => !/vaccin|rabies|fvrcp|felv|dhpp|purevax|bordetella|lepto/i.test(r.label || ''),
+      );
+      let vaxNotes: PetReminder[] = [];
+      if (reminderPetIds.length) {
+        const { data: vaxRows } = await supabase
+          .from('pet_vaccinations')
+          .select('pet_id, vaccine, administered_on, next_due_on')
+          .in('pet_id', reminderPetIds);
+        const latest = new Map<string, { pet_id: string; type: string; administered_on: string; next_due_on: string }>();
+        for (const v of vaxRows || []) {
+          if (!v.administered_on || !v.next_due_on) continue;
+          const type = vaccineType(v.vaccine);
+          const key = `${v.pet_id}|${type}`;
+          const prev = latest.get(key);
+          if (!prev || String(v.administered_on) > String(prev.administered_on)) {
+            latest.set(key, { pet_id: v.pet_id, type, administered_on: v.administered_on, next_due_on: v.next_due_on });
+          }
+        }
+        const petLookup: Record<string, { name: string; photo: string | null }> = {};
+        for (const r of relsData || []) {
+          const p = relPetsOut.find((x) => x.id === r.pet_id);
+          petLookup[r.pet_id] = { name: p?.name || 'Pet', photo: p?.main_photo_url || null };
+        }
+        for (const p of ownedPets || []) petLookup[p.id] = { name: p.name || 'Pet', photo: p.main_photo_url || null };
+        vaxNotes = [...latest.values()].map((v) => {
+          const m = String(v.next_due_on).match(/^(\d{4})-(\d{2})-(\d{2})/);
+          if (!m) return null;
+          const due = new Date(+m[1], +m[2] - 1, +m[3]);
+          const today = new Date(); today.setHours(0, 0, 0, 0);
+          const days = Math.round((due.getTime() - today.getTime()) / 864e5);
+          if (days > 30) return null;
+          const pet = petLookup[v.pet_id] || { name: 'Pet', photo: null };
+          return {
+            pet_id: v.pet_id,
+            pet_name: pet.name,
+            pet_photo: pet.photo,
+            label: `${v.type} vaccine`,
+            days_until_due: days,
+            urgency: days < 0 ? 'overdue' : 'due_soon',
+          } as PetReminder;
+        }).filter(Boolean) as PetReminder[];
+      }
+      setReminders([...vaxNotes, ...otherNotes]);
 
       // === Foster Ratings ===
       const { data: frSummary } = await supabase

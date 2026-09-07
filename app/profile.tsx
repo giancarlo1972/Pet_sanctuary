@@ -195,7 +195,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
 
   useEffect(() => {
     const realWidth = Dimensions.get('window').width;
-    setDrawerWidth(Math.min(430, realWidth));
+    setDrawerWidth(realWidth);
   }, []);
 
   const openDrawer = useCallback(() => {
@@ -1385,7 +1385,7 @@ const styles = StyleSheet.create({
   scrimTouchable: { flex: 1 },
   drawer: {
     position: 'absolute', top: 0, bottom: 0, left: 0, right: 0,
-    maxWidth: 430, width: '100%', alignSelf: 'center',
+    width: '100%',
     backgroundColor: Colors.screen, zIndex: 100,
     elevation: 16, shadowColor: Colors.shadow, shadowOffset: { width: -4, height: 0 },
     shadowOpacity: 0.2, shadowRadius: 16,

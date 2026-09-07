@@ -37,6 +37,7 @@ import SignedImage from '@/components/SignedImage';
 import SharePetSheet from '@/components/SharePetSheet';
 import { isUsablePhoto } from '@/lib/photos';
 import { vaccineType } from '@/lib/catalog';
+import OnDutyCard from '@/components/OnDutyCard';
 
 const DEFAULT_SCREEN_WIDTH = 375;
 const DRAWER_WIDTH = DEFAULT_SCREEN_WIDTH * 0.86;
@@ -231,8 +232,6 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
   const [pastPets, setPastPets] = useState<PetRel[]>([]);
   const [showPastPets, setShowPastPets] = useState(false);
   const [sharePet, setSharePet] = useState<{ id: string; name: string } | null>(null);
-  const [volCount, setVolCount] = useState(0);
-  const [respCount, setRespCount] = useState(0);
 
   // Due Soon reminders
   interface PetReminder { pet_id: string; pet_name: string; pet_photo: string | null; label: string; days_until_due: number; urgency: string; }
@@ -336,11 +335,6 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
         setVerifications(verifRow as Verifications);
         if ((verifRow as any).phone) setPhoneNumber((verifRow as any).phone);
       }
-
-      const { data: vc } = await supabase.rpc('help_alerts_week_count', { kind: 'volunteer' });
-      const { data: rc } = await supabase.rpc('help_alerts_week_count', { kind: 'responder' });
-      if (typeof vc === 'number') setVolCount(vc);
-      if (typeof rc === 'number') setRespCount(rc);
 
       const { data: modData } = await supabase
         .from('moderation_queue')
@@ -804,98 +798,11 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
               </TouchableOpacity>
             </View>
 
-            <View style={styles.helpCard}>
-              <Text style={styles.helpKicker}>I CAN HELP</Text>
-              <View style={styles.helpRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.helpLabel}>Volunteer</Text>
-                  {profile?.volunteer_active ? (
-                    <Text style={styles.helpActive}>Active · {volCount} alerts this week</Text>
-                  ) : (
-                    <Text style={styles.helpHint}>Lost, stray, foster & support nearby</Text>
-                  )}
-                </View>
-                <Switch
-                  value={Boolean(profile?.volunteer_active)}
-                  onValueChange={async (v) => {
-                    const { error } = await supabase.from('profiles').update({ volunteer_active: v }).eq('id', userId);
-                    if (error) { setBanner({ kind: 'error', message: error.message || 'Could not update volunteer status.' }); return; }
-                    setProfile((p) => p ? { ...p, volunteer_active: v } : p);
-                  }}
-                  trackColor={{ false: Colors.borderInput, true: Colors.teal }}
-                  thumbColor={Colors.white}
-                />
-              </View>
-              {(() => {
-                const idOk = verifications.id_status === 'verified' || verifications.id_status === 'approved' || verifications.id_verified;
-                const phoneOk = verifications.phone_verified;
-                const trainOk = verifications.responder_training === 'passed';
-                const responderOk = idOk && phoneOk && trainOk;
-                const missing: { label: string }[] = [];
-                if (!idOk) missing.push({ label: 'Government ID' });
-                if (!phoneOk) missing.push({ label: 'Phone' });
-                if (!trainOk) missing.push({ label: 'Responder training' });
-                return (
-                  <View style={styles.helpRow}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.helpLabel, !responderOk && { color: Colors.textTertiary }]}>First responder</Text>
-                      {profile?.responder_active && responderOk ? (
-                        <Text style={styles.helpActive}>Active · {respCount} alerts this week</Text>
-                      ) : responderOk ? (
-                        <Text style={styles.helpHint}>Emergencies & cruelty reports nearby</Text>
-                      ) : (
-                        <TouchableOpacity onPress={() => setBanner({ kind: 'info', message: `Complete verification: ${missing.map((m) => m.label).join(', ')}.` })}>
-                          <Text style={styles.helpLock}>Complete verification → {missing.map((m) => m.label).join(', ')}</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                    <Switch
-                      value={Boolean(profile?.responder_active) && responderOk}
-                      disabled={!responderOk}
-                      onValueChange={async (v) => {
-                        const { error } = await supabase.from('profiles').update({ responder_active: v }).eq('id', userId);
-                        if (error) { setBanner({ kind: 'error', message: error.message || 'Could not update responder status.' }); return; }
-                        setProfile((p) => p ? { ...p, responder_active: v } : p);
-                      }}
-                      trackColor={{ false: Colors.borderInput, true: Colors.coral }}
-                      thumbColor={Colors.white}
-                    />
-                  </View>
-                );
-              })()}
-              <Text style={styles.helpRadiusLabel}>Alert radius · {profile?.alert_radius_mi || 5} mi</Text>
-              {Platform.OS === 'web' ? (
-                <input
-                  type="range"
-                  min={1}
-                  max={25}
-                  value={profile?.alert_radius_mi || 5}
-                  onChange={async (e: any) => {
-                    const n = Math.max(1, Math.min(25, parseInt(e.target.value, 10) || 5));
-                    setProfile((p) => p ? { ...p, alert_radius_mi: n } : p);
-                    const { error } = await supabase.from('profiles').update({ alert_radius_mi: n }).eq('id', userId);
-                    if (error) setBanner({ kind: 'error', message: error.message || 'Could not save radius.' });
-                  }}
-                  style={{ width: '100%', accentColor: Colors.navy }}
-                />
-              ) : (
-                <View style={styles.radiusPills}>
-                  {[1, 5, 10, 15, 25].map((n) => (
-                    <TouchableOpacity
-                      key={n}
-                      style={[styles.radiusPill, (profile?.alert_radius_mi || 5) === n && styles.radiusPillOn]}
-                      onPress={async () => {
-                        setProfile((p) => p ? { ...p, alert_radius_mi: n } : p);
-                        const { error } = await supabase.from('profiles').update({ alert_radius_mi: n }).eq('id', userId);
-                        if (error) setBanner({ kind: 'error', message: error.message || 'Could not save radius.' });
-                      }}
-                    >
-                      <Text style={[styles.radiusPillTxt, (profile?.alert_radius_mi || 5) === n && styles.radiusPillTxtOn]}>{n} mi</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-            </View>
+            <OnDutyCard
+              userId={userId}
+              phoneVerified={Boolean(verifications.phone_verified)}
+              onBanner={(kind, message) => setBanner({ kind, message })}
+            />
 
             {actingAs?.role !== 'member' ? (
             <View style={styles.section}>

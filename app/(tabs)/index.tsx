@@ -38,6 +38,7 @@ import { loadHelpFlags, loadHelpAlerts, type HelpFlags } from '@/lib/help-alerts
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 import SignedImage from '@/components/SignedImage';
+import HelpersNearby from '@/components/HelpersNearby';
 
 const FEATURED_WIDTH = 170;
 const FEATURED_HEIGHT = 210;
@@ -446,8 +447,14 @@ export default function HomeScreen() {
               <View style={styles.alertList}>
                 {trending.map(renderAlertRow)}
               </View>
+              {session ? <HelpersNearby userId={user?.id || null} /> : null}
             </View>
           )}
+          {trending.length === 0 && session ? (
+            <View style={styles.section}>
+              <HelpersNearby userId={user?.id || null} />
+            </View>
+          ) : null}
 
           {/* Featured pets */}
           {featured.length > 0 && (

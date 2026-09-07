@@ -247,6 +247,8 @@ interface ExtractedWeight {
   value: number | null;
   unit: string | null;
   measured_on: string | null;
+  originalValue?: number | null;
+  originalUnit?: string | null;
 }
 
 interface ExtractedProcedure {
@@ -608,7 +610,11 @@ export default function PetRecordScreen() {
     const pending = documents.filter((d) => {
       const st = d.ai_status;
       if (parsedAttempted.current.has(d.id)) return false;
-      return Boolean(d.file_path) && st !== 'ready' && st !== 'confirmed' && st !== 'parsed';
+      if (!d.file_path && !(d as any).storage_path) return false;
+      if (st === 'confirmed') return false;
+      const ver = d.ai_summary && typeof d.ai_summary === 'object' ? (d.ai_summary as any).schemaVersion : 0;
+      if ((st === 'ready' || st === 'parsed') && ver >= 2) return false;
+      return true;
     });
     pending.slice(0, 4).forEach((d) => triggerExtraction(d.id, { path: d.file_path }));
   }, [documents, canEdit]);
@@ -1025,7 +1031,7 @@ export default function PetRecordScreen() {
       brand: v.brand || null,
       dose: v.dose || null,
       administered_on: v.date || v.given_on || v.administered_on || null,
-      next_due_on: v.valid_until || v.expires_on || v.next_due_on || null,
+      next_due_on: v.next_due || v.valid_until || v.expires_on || v.next_due_on || null,
       duration_years: null,
       manufacturer: v.brand || v.manufacturer || null,
       lot_number: v.lot || v.lot_number || null,
@@ -1038,15 +1044,23 @@ export default function PetRecordScreen() {
       clinic_name: v.clinic || parsed.clinic || null,
       reactions: v.reactions || null,
     }));
-    const labs = (parsed.labs || []).map((l: any) => ({
-      analyte: l.analyte || l.name || '',
-      value_num: typeof l.value === 'number' ? l.value : (parseFloat(l.value) || null),
-      value_text: l.value != null ? String(l.value) : null,
-      unit: l.unit || null,
-      ref_low: null,
-      ref_high: null,
-      flag: l.flag || null,
-    }));
+    const labs = (parsed.labs || []).map((l: any) => {
+      const printed = l.value == null ? '' : String(l.value);
+      const low = printed.trim().toLowerCase();
+      const qualitative = low === 'detected' || low === 'not detected' || low === 'not-detected' || low === 'undetected';
+      let flag = l.flag || null;
+      if (low === 'detected') flag = 'abnormal';
+      else if (low === 'not detected' || low === 'not-detected' || low === 'undetected') flag = 'normal';
+      return {
+        analyte: l.analyte || l.name || '',
+        value_num: qualitative ? null : (typeof l.value === 'number' ? l.value : (parseFloat(printed) || null)),
+        value_text: printed || null,
+        unit: qualitative ? null : (l.unit || null),
+        ref_low: null,
+        ref_high: null,
+        flag,
+      };
+    });
     const visits = (parsed.visits || []).map((v: any) => ({
       event_type: 'visit',
       occurred_on: v.date || null,
@@ -1059,9 +1073,17 @@ export default function PetRecordScreen() {
       if (!v.vaccine || !v.administered_on) return;
       if (vaccinations.some((e) => e.vaccine === v.vaccine && e.administered_on === v.administered_on)) vaxDuplicates.add(i);
     });
-    const wt = parsed.weight && parsed.weight.value != null
-      ? { value: Number(parsed.weight.value), unit: parsed.weight.unit || 'lb', measured_on: parsed.weight.measured_on || parsed.date || null }
-      : { value: null, unit: null, measured_on: null };
+    let wt: ExtractedWeight = { value: null, unit: null, measured_on: null };
+    if (parsed.weight && parsed.weight.value != null) {
+      const raw = Number(parsed.weight.value);
+      const unit = String(parsed.weight.unit || 'lb').toLowerCase();
+      const measured = parsed.weight.measured_on || parsed.date || null;
+      if (unit === 'kg') {
+        wt = { value: Math.round(raw * 2.20462 * 10) / 10, unit: 'lb', measured_on: measured, originalValue: raw, originalUnit: 'kg' };
+      } else {
+        wt = { value: raw, unit: 'lb', measured_on: measured, originalValue: raw, originalUnit: unit };
+      }
+    }
     setEditableVax(vax);
     setEditableLabs(labs.length ? [{ panel_name: 'Labs', collected_on: parsed.date || null, clinic_name: parsed.clinic || null, vet_name: null, results: labs }] : []);
     setEditableWeight(wt);
@@ -1282,7 +1304,9 @@ export default function PetRecordScreen() {
         }
       }
       if (editableWeight.value != null) {
-        const lb = (editableWeight.unit || 'lb').toLowerCase() === 'kg' ? editableWeight.value * 2.20462 : editableWeight.value;
+        const lb = (editableWeight.unit || 'lb').toLowerCase() === 'kg'
+          ? editableWeight.value * 2.20462
+          : editableWeight.value;
         const { error } = await supabase.from('weight_entries').insert({
           pet_id: petId, weight_lb: lb, measured_on: editableWeight.measured_on || new Date().toISOString().slice(0, 10), source: 'ai_extracted',
         });
@@ -2392,27 +2416,31 @@ export default function PetRecordScreen() {
                   <View style={styles.extractionSection}>
                     <Text style={styles.extractionSectionTitle}>Weight</Text>
                     <View style={styles.extractionItem}>
+                      <Text style={styles.extractionSummary}>
+                        {editableWeight.originalUnit === 'kg'
+                          ? `${editableWeight.value} lb (from ${editableWeight.originalValue} kg)`
+                          : `${editableWeight.value} lb`}
+                      </Text>
                       <View style={styles.extractionRow}>
-                        <TextInput style={styles.extractionInputHalf} value={String(editableWeight.value || '')} onChangeText={(val) => setEditableWeight((prev) => ({ ...prev, value: parseFloat(val) || null }))} placeholder="Weight" placeholderTextColor={Colors.textTertiary} keyboardType="numeric" />
-                        <TextInput style={styles.extractionInputHalf} value={editableWeight.unit || ''} onChangeText={(val) => setEditableWeight((prev) => ({ ...prev, unit: val }))} placeholder="Unit (kg/lb)" placeholderTextColor={Colors.textTertiary} />
+                        <TextInput style={styles.extractionInputHalf} value={String(editableWeight.value || '')} onChangeText={(val) => setEditableWeight((prev) => ({ ...prev, value: parseFloat(val) || null }))} placeholder="Weight (lb)" placeholderTextColor={Colors.textTertiary} keyboardType="numeric" />
+                        <TextInput style={styles.extractionInputHalf} value={editableWeight.unit || 'lb'} onChangeText={(val) => setEditableWeight((prev) => ({ ...prev, unit: val }))} placeholder="Unit" placeholderTextColor={Colors.textTertiary} />
                       </View>
                       <TextInput style={styles.extractionInput} value={editableWeight.measured_on || ''} onChangeText={(val) => setEditableWeight((prev) => ({ ...prev, measured_on: val }))} placeholder="Measured on (YYYY-MM-DD)" placeholderTextColor={Colors.textTertiary} />
                     </View>
                   </View>
                 )}
 
-                {/* Procedures */}
                 {editableProcedures.length > 0 && (
                   <View style={styles.extractionSection}>
-                    <Text style={styles.extractionSectionTitle}>Procedures</Text>
+                    <Text style={styles.extractionSectionTitle}>Visit</Text>
                     {editableProcedures.map((proc, i) => (
                       <View key={i} style={styles.extractionItem}>
                         <View style={styles.extractionRow}>
-                          <TextInput style={styles.extractionInputHalf} value={proc.event_type || ''} onChangeText={(val) => setEditableProcedures((prev) => prev.map((p, idx) => idx === i ? { ...p, event_type: val } : p))} placeholder="Type (e.g. surgery)" placeholderTextColor={Colors.textTertiary} />
+                          <TextInput style={styles.extractionInputHalf} value={proc.title || ''} onChangeText={(val) => setEditableProcedures((prev) => prev.map((p, idx) => idx === i ? { ...p, title: val } : p))} placeholder="Reason" placeholderTextColor={Colors.textTertiary} />
                           <TextInput style={styles.extractionInputHalf} value={proc.occurred_on || ''} onChangeText={(val) => setEditableProcedures((prev) => prev.map((p, idx) => idx === i ? { ...p, occurred_on: val } : p))} placeholder="Date (YYYY-MM-DD)" placeholderTextColor={Colors.textTertiary} />
                         </View>
-                        <TextInput style={styles.extractionInput} value={proc.title || ''} onChangeText={(val) => setEditableProcedures((prev) => prev.map((p, idx) => idx === i ? { ...p, title: val } : p))} placeholder="Title" placeholderTextColor={Colors.textTertiary} />
-                        <TextInput style={[styles.extractionInput, styles.modalInputMultiline]} value={proc.notes || ''} onChangeText={(val) => setEditableProcedures((prev) => prev.map((p, idx) => idx === i ? { ...p, notes: val } : p))} placeholder="Notes" placeholderTextColor={Colors.textTertiary} multiline numberOfLines={2} />
+                        <Text style={styles.modalLabel}>Clinical summary</Text>
+                        <TextInput style={[styles.extractionInput, styles.modalInputMultiline]} value={proc.notes || ''} onChangeText={(val) => setEditableProcedures((prev) => prev.map((p, idx) => idx === i ? { ...p, notes: val } : p))} placeholder="Clinical summary" placeholderTextColor={Colors.textTertiary} multiline numberOfLines={3} />
                       </View>
                     ))}
                   </View>

@@ -25,14 +25,17 @@ Return JSON only, no markdown:
   "kind": "vaccination|lab|visit|invoice|insurance|other",
   "clinic": "string or null",
   "date": "YYYY-MM-DD or null",
-  "vaccinations": [{"brand": null, "name": "", "lot": null, "dose": null, "date": "YYYY-MM-DD or null", "valid_until": "YYYY-MM-DD or null", "reactions": null, "clinic": null}],
+  "vaccinations": [{"brand": null, "name": "", "lot": null, "dose": null, "date": "YYYY-MM-DD or null", "next_due": "YYYY-MM-DD or null", "valid_until": "YYYY-MM-DD or null", "reactions": null, "clinic": null}],
   "conditions": [{"name": "", "kind": "condition|allergy", "notes": null}],
   "medications": [{"name": "", "dose": null, "given_on": null}],
   "visits": [{"clinic": null, "date": "YYYY-MM-DD or null", "reason": null, "summary": null}],
-  "labs": [{"analyte": "", "value": null, "unit": null, "flag": "normal|high|low|unknown", "collected_on": null}],
+  "labs": [{"analyte": "", "value": "", "unit": null, "flag": "normal|high|low|abnormal|unknown", "collected_on": null}],
   "weight": {"value": null, "unit": "lb|kg", "measured_on": null}
 }
-Extract only what is printed. Empty arrays if unreadable. Never invent dates.`;
+Rules:
+- labs[].value MUST be a string or a number. Qualitative PCR (e.g. "Detected", "Not detected") stays as that string; unit null. If value is Detected (case-insensitive) flag=abnormal; if Not detected flag=normal. Numeric labs keep the printed number and unit.
+- vaccinations: extract EVERY vaccine administered or mentioned anywhere, including visit notes and discharge text. Capture product/brand, date given, next_due / valid_until when printed.
+- weight: return the printed {value, unit} as-is (do not convert). Empty arrays if unreadable. Never invent dates.`;
 
 const MODELS = ['claude-haiku-4-5', 'claude-3-5-haiku-latest', 'claude-3-5-sonnet-20241022'];
 const SYSTEM = 'Respond with a single JSON object only, no markdown, no commentary';
@@ -73,6 +76,36 @@ function parseClaudeJson(text) {
   const block = extractJsonBlock(text);
   if (!block) throw new SyntaxError('no JSON object in model text');
   return JSON.parse(block);
+}
+
+function normalizeLab(l) {
+  const value = l?.value == null ? null : (typeof l.value === 'number' ? l.value : String(l.value));
+  const printed = String(value ?? '').trim().toLowerCase();
+  let flag = l?.flag || null;
+  let unit = l?.unit ?? null;
+  if (printed === 'detected') { flag = 'abnormal'; unit = unit || null; }
+  else if (printed === 'not detected' || printed === 'not-detected' || printed === 'undetected') { flag = 'normal'; unit = unit || null; }
+  return {
+    analyte: l?.analyte || l?.name || '',
+    value,
+    unit,
+    flag,
+    collected_on: l?.collected_on || null,
+  };
+}
+
+function normalizeVax(v) {
+  return {
+    brand: v?.brand || v?.product || null,
+    name: v?.name || v?.vaccine || '',
+    lot: v?.lot || v?.lot_number || null,
+    dose: v?.dose || null,
+    date: v?.date || v?.given_on || v?.administered_on || null,
+    next_due: v?.next_due || v?.next_due_on || v?.valid_until || v?.expires_on || null,
+    valid_until: v?.valid_until || v?.expires_on || v?.next_due || null,
+    reactions: v?.reactions || null,
+    clinic: v?.clinic || null,
+  };
 }
 
 async function callClaude(key, model, userContent, extraText) {
@@ -246,15 +279,16 @@ export async function onRequestPost(context) {
           continue;
         }
       }
-      const vaccinations = Array.isArray(parsed.vaccinations) ? parsed.vaccinations : [];
+      const vaccinations = (Array.isArray(parsed.vaccinations) ? parsed.vaccinations : []).map(normalizeVax);
       const conditions = Array.isArray(parsed.conditions) ? parsed.conditions : [];
       const medications = Array.isArray(parsed.medications) ? parsed.medications : [];
       const visits = Array.isArray(parsed.visits) ? parsed.visits : [];
-      const labs = Array.isArray(parsed.labs) ? parsed.labs : [];
+      const labs = (Array.isArray(parsed.labs) ? parsed.labs : []).map(normalizeLab);
       const weight = parsed.weight && typeof parsed.weight === 'object' ? parsed.weight : null;
       const out = {
         parsed: true,
         source: 'ai_extracted',
+        schemaVersion: 2,
         title: parsed.title || null,
         kind: parsed.kind || null,
         clinic: parsed.clinic || null,

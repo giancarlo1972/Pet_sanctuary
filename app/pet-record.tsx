@@ -57,7 +57,15 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 
-type Tab = 'overview' | 'medical' | 'labs' | 'clinics' | 'history' | 'people';
+type Tab = 'overview' | 'insurance' | 'medical';
+type MedicalHub = 'records' | 'labs' | 'history' | 'ai';
+
+function isUsablePhoto(url?: string | null) {
+  if (!url) return false;
+  if (/^(file:|content:|blob:|ph:|assets-library:)/i.test(url)) return false;
+  if (url.includes('ImagePicker') || url.includes('/Containers/Data/') || url.includes('file://')) return false;
+  return true;
+}
 
 interface Pet {
   id: string;
@@ -340,6 +348,9 @@ export default function PetRecordScreen() {
 
   const [pet, setPet] = useState<Pet | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
+  const [medicalHub, setMedicalHub] = useState<MedicalHub>('records');
+  const [aiFindings, setAiFindings] = useState<any>(null);
+  const [aiBusy, setAiBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -536,7 +547,16 @@ export default function PetRecordScreen() {
     setHistoryEvents((histRes.data as HistoryEvent[]) || []);
     setConditions((condRes.data as PetCondition[]) || []);
     setDiet((dietRes.data as PetDiet) || null);
-    setPhotos((photosRes.data as PetPhoto[]) || []);
+    const gallery = (photosRes.data as PetPhoto[]) || [];
+    setPhotos(gallery);
+    const petPhoto = petData?.main_photo_url;
+    if (!isUsablePhoto(petPhoto)) {
+      const good = gallery.find((g) => isUsablePhoto(g.photo_url));
+      if (good && petId) {
+        await supabase.from('pets').update({ main_photo_url: good.photo_url }).eq('id', petId);
+        setPet((cur) => cur ? { ...cur, main_photo_url: good.photo_url } : cur);
+      }
+    }
     setDocuments((docsRes.data as PetDocument[]) || []);
     setBreeds((breedsRes.data as BreedOption[]) || []);
     setColors((colorsRes.data as ColorOption[]) || []);
@@ -824,23 +844,22 @@ export default function PetRecordScreen() {
     if (result.canceled || !result.assets?.[0]) return;
     const asset = result.assets[0];
     setPhotoUploading(true);
-    const ext = asset.uri.split('.').pop() || 'jpg';
-    const filePath = `${user.id}/${Date.now()}.${ext}`;
-    const formData = new FormData();
-    formData.append('file', { uri: asset.uri, type: `image/${ext}`, name: `photo.${ext}` } as any);
-    const { error: upErr } = await supabase.storage.from('pet-documents').upload(filePath, formData);
+    const resp = await fetch(asset.uri);
+    const blob = await resp.blob();
+    const file = new File([blob], 'pet.jpg', { type: 'image/jpeg' });
+    const prepared = await prepareImageFile(file);
+    const filePath = `${petId}/${Date.now()}.jpg`;
+    const { error: upErr } = await supabase.storage.from('pet-photos').upload(filePath, prepared.blob, { contentType: 'image/jpeg', upsert: true });
     if (upErr) { console.error('[pet-record] photo upload:', upErr); showBanner('Could not upload photo.'); setPhotoUploading(false); return; }
     const { error: insErr } = await supabase.from('pet_photos').insert({
       pet_id: petId,
       photo_url: filePath,
       sort_order: photos.length,
-      is_profile: photos.length === 0,
+      is_profile: true,
       uploaded_by: user.id,
     });
-    if (insErr) { console.error('[pet-record] photo insert:', insErr); showBanner('Could not add photo.'); setPhotoUploading(false); return; }
-    if (photos.length === 0) {
-      await supabase.from('pets').update({ main_photo_url: filePath }).eq('id', petId);
-    }
+    if (insErr) { console.error('[pet-record] photo insert:', insErr); }
+    await supabase.from('pets').update({ main_photo_url: filePath }).eq('id', petId);
     setPhotoUploading(false);
     load();
   };
@@ -1209,14 +1228,14 @@ export default function PetRecordScreen() {
   const activeConditions = conditions.filter((c) => c.is_active);
   const resolvedConditions = conditions.filter((c) => !c.is_active);
 
-  const TABS: { key: Tab; label: string; icon: any }[] = [
-    { key: 'overview', label: 'Overview', icon: PawPrint },
-    { key: 'medical', label: 'Medical', icon: Stethoscope },
-    { key: 'labs', label: 'Labs', icon: FlaskConical },
-    { key: 'clinics', label: 'Clinics', icon: Building2 },
-    { key: 'history', label: 'History', icon: ClipboardCheck },
-    { key: 'people', label: 'People', icon: Users },
+  const TABS: { key: Tab; label: string }[] = [
+    { key: 'overview', label: 'Overview' },
+    { key: 'insurance', label: 'Insurance' },
+    { key: 'medical', label: 'Medical' },
   ];
+  const displayPhoto = isUsablePhoto(pet.main_photo_url)
+    ? pet.main_photo_url
+    : (photos.find((g) => isUsablePhoto(g.photo_url))?.photo_url || null);
 
   const filteredBreeds = breeds.filter((b) => {
     if (pet.species === 'dog' || pet.species === 'Dog') return b.species === 'dog';
@@ -1241,8 +1260,8 @@ export default function PetRecordScreen() {
         )}
         {/* Pet hero */}
         <View style={styles.heroWrap}>
-          {pet.main_photo_url ? (
-            <SignedImage path={pet.main_photo_url} style={styles.hero} />
+          {displayPhoto ? (
+            <SignedImage path={displayPhoto} style={styles.hero} />
           ) : (
             <View style={[styles.hero, styles.petPhotoFallback]}>
               <PawPrint color={Colors.textTertiary} size={48} />
@@ -1262,23 +1281,21 @@ export default function PetRecordScreen() {
         </View>
 
         {/* Tabs */}
-        <View style={styles.tabBar}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabBar}>
           {TABS.map((t) => {
-            const Icon = t.icon;
             const active = tab === t.key;
             return (
               <TouchableOpacity
                 key={t.key}
-                style={[styles.tab, active && styles.tabActive]}
+                style={[styles.pillTab, active && styles.pillTabOn]}
                 onPress={() => setTab(t.key)}
                 activeOpacity={0.85}
               >
-                <Icon color={active ? Colors.coral : Colors.textTertiary} size={16} />
-                <Text style={[styles.tabText, active && styles.tabTextActive]}>{t.label}</Text>
+                <Text style={[styles.pillTabTxt, active && styles.pillTabTxtOn]}>{t.label}</Text>
               </TouchableOpacity>
             );
           })}
-        </View>
+        </ScrollView>
 
         {/* OVERVIEW */}
         {tab === 'overview' && (
@@ -1405,9 +1422,28 @@ export default function PetRecordScreen() {
           </View>
         )}
 
-        {/* MEDICAL */}
+        {tab === 'insurance' && (
+          <View style={styles.tabContent}>
+            <View style={styles.infoCard}>
+              <Text style={styles.sectionLabel}>INSURANCE</Text>
+              <Text style={styles.emptyText}>No policy on file. When a carrier is linked, claims stay in their app. Rescue Army does not store card or login data.</Text>
+            </View>
+          </View>
+        )}
+
+        {/* MEDICAL HUB */}
         {tab === 'medical' && (
           <View style={styles.tabContent}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hubRow}>
+              {([['records','Records'],['labs','Labs'],['history','History'],['ai','AI Health']] as const).map(([id, label]) => (
+                <TouchableOpacity key={id} style={[styles.pillTab, medicalHub === id && styles.pillTabOn]} onPress={() => setMedicalHub(id)}>
+                  <Text style={[styles.pillTabTxt, medicalHub === id && styles.pillTabTxtOn]}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            {medicalHub === 'records' && (
+            <View>
+
             {/* Conditions */}
             <View style={styles.subHeader}>
               <View style={styles.subHeaderLeft}>
@@ -1670,23 +1706,15 @@ export default function PetRecordScreen() {
           </View>
         )}
 
-        {/* LABS */}
-        {tab === 'labs' && (
-          <View style={styles.tabContent}>
-            <VetLabResults petId={petId} userId={user!.id} clinics={clinics} canEdit={canEdit} />
-          </View>
-        )}
+            </View>
+            )}
+            {medicalHub === 'labs' && (
+              <VetLabResults petId={petId} userId={user!.id} clinics={clinics} canEdit={canEdit} />
+            )}
+            {medicalHub === 'history' && (
+            <View>
+              <VetClinics petId={petId} userId={user!.id} canEdit={canEdit} />
 
-        {/* CLINICS */}
-        {tab === 'clinics' && (
-          <View style={styles.tabContent}>
-            <VetClinics petId={petId} userId={user!.id} canEdit={canEdit} />
-          </View>
-        )}
-
-        {/* HISTORY */}
-        {tab === 'history' && (
-          <View style={styles.tabContent}>
             {!historyVisible ? (
               <View style={styles.historyLocked}>
                 <Shield color={Colors.textTertiary} size={32} />
@@ -1713,10 +1741,31 @@ export default function PetRecordScreen() {
               ))
             )}
           </View>
+            )}
+            {medicalHub === 'ai' && (
+              <View style={styles.aiBox}>
+                <Text style={styles.aiTitle}>AI is not a veterinarian</Text>
+                <Text style={styles.emptyText}>Findings are for the vet. No diagnosis. No treatment from Rescue Army.</Text>
+                <TouchableOpacity style={styles.historyUnlockBtn} disabled={aiBusy} onPress={async () => {
+                  setAiBusy(true);
+                  try {
+                    const res = await fetch('/api/pet-health-analysis', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ record: { vaccines: vaccinations, weight: pet.weight_kg } }) });
+                    setAiFindings(await res.json());
+                  } catch (e: any) { showBanner(e.message || 'AI Health failed.'); }
+                  setAiBusy(false);
+                }}>
+                  <Text style={styles.historyUnlockText}>{aiBusy ? 'Analyzing…' : 'Run AI Health'}</Text>
+                </TouchableOpacity>
+                {aiFindings?.summary ? <Text style={styles.timelineSummary}>{aiFindings.summary}</Text> : null}
+                {(aiFindings?.findings || []).map((f: any, i: number) => (
+                  <Text key={i} style={styles.emptyText}>{f.severity}: {f.title} — {f.detail}</Text>
+                ))}
+              </View>
+            )}
+          </View>
         )}
 
-        {/* PEOPLE */}
-        {tab === 'people' && (
+        {false && (
           <View style={styles.tabContent}>
             <Text style={styles.sectionLabel}>Current</Text>
             {currentRels.length === 0 ? (
@@ -2267,7 +2316,7 @@ function getSevText(sev: string): string {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
   col: { width: '100%', maxWidth: 720, alignSelf: 'center', flex: 1 },
-  heroWrap: { aspectRatio: 4/3, borderRadius: 16, overflow: 'hidden', backgroundColor: Colors.surface, marginHorizontal: 16, marginTop: 12 },
+  heroWrap: { width: '100%', maxHeight: 360, aspectRatio: 4/3, borderRadius: 20, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 12, alignSelf: 'center' },
   hero: { width: '100%', height: '100%' },
   changePhoto: { position: 'absolute', right: 12, bottom: 12, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(38,38,94,0.85)', alignItems: 'center', justifyContent: 'center' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
@@ -2287,11 +2336,14 @@ const styles = StyleSheet.create({
   petName: { fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.text },
   petMeta: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 2 },
 
-  tabBar: { flexDirection: 'row', backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 12 },
-  tabActive: { borderBottomWidth: 2, borderBottomColor: Colors.coral },
-  tabText: { fontSize: FontSizes.sm, fontFamily: Fonts.medium, color: Colors.textTertiary },
-  tabTextActive: { color: Colors.coral, fontFamily: Fonts.bold },
+  tabBar: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingVertical: 12 },
+  hubRow: { flexDirection: 'row', gap: 8, paddingBottom: 12 },
+  pillTab: { backgroundColor: Colors.white, borderWidth: 1, borderColor: '#E8EAF0', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
+  pillTabOn: { backgroundColor: Colors.navy, borderColor: Colors.navy },
+  pillTabTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.text },
+  pillTabTxtOn: { color: Colors.white },
+  aiBox: { backgroundColor: Colors.criticalBg, borderRadius: 14, padding: 14, gap: 8 },
+  aiTitle: { fontFamily: Fonts.extrabold, color: Colors.critical, fontSize: FontSizes.md },
 
   tabContent: { padding: 20 },
 

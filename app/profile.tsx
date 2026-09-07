@@ -620,8 +620,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
     <>
       <View style={styles.container}>
           <AppHeader title="Me" />
-          <Page scroll={false}>
-          <ScrollView style={styles.drawerScroll} showsVerticalScrollIndicator={false} contentContainerStyle={styles.drawerContent}>
+          <Page>
             {loadError && (
               <View style={styles.errorBox}><Text style={styles.errorText}>{loadError}</Text></View>
             )}
@@ -677,33 +676,6 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                 </TouchableOpacity>
               </View>
 
-              {/* Due Soon strip */}
-              {reminders.length > 0 && (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.remindersStrip} contentContainerStyle={{ gap: 8, paddingRight: 16 }}>
-                  {reminders.map((r, i) => {
-                    const isOverdue = r.urgency === 'overdue';
-                    const color = isOverdue ? Colors.critical : Colors.urgent;
-                    const bg = isOverdue ? Colors.criticalBg : Colors.urgentBg;
-                    const dayLabel = isOverdue
-                      ? `${Math.abs(r.days_until_due)}d overdue`
-                      : `due in ${r.days_until_due}d`;
-                    return (
-                      <TouchableOpacity
-                        key={`${r.pet_id}-${i}`}
-                        style={[styles.reminderChip, { backgroundColor: bg, borderColor: `${color}33` }]}
-                        onPress={() => { router.push(`/pet-record?petId=${r.pet_id}`); }}
-                        activeOpacity={0.85}
-                      >
-                        <Text style={styles.reminderPetName} numberOfLines={1}>{r.pet_name}</Text>
-                        <Text style={styles.reminderSep}>—</Text>
-                        <Text style={[styles.reminderLabel, { color }]} numberOfLines={1}>{r.label}</Text>
-                        <Text style={[styles.reminderDue, { color }]}>{dayLabel}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              )}
-
               {activePets.length === 0 && pastPets.length === 0 ? (
                 <View style={styles.card}>
                   <Text style={styles.emptyText}>No pets yet</Text>
@@ -718,13 +690,16 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                 </View>
               ) : (
                 <>
-                  {activePets.map((p) => (
+                  {activePets.map((p) => {
+                    const petNotes = reminders.filter((r) => r.pet_id === p.pet_id);
+                    return (
                     <TouchableOpacity
                       key={p.id}
                       style={styles.petRelCard}
                       onPress={() => { router.push(`/pet-record?petId=${p.pet_id}`); }}
                       activeOpacity={0.85}
                     >
+                      <View style={styles.petRelTop}>
                       {p.pet_photo ? (
                         <SignedImage path={p.pet_photo} style={styles.petRelPhoto} />
                       ) : (
@@ -735,14 +710,28 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                       <View style={styles.petRelInfo}>
                         <Text style={styles.petRelName}>{p.pet_name}</Text>
                         <Text style={styles.petRelMeta}>{[p.species, p.breed].filter(Boolean).join(' · ') || 'Pet'}</Text>
-                        <Text style={styles.petRelMeta}>{[p.species, p.breed].filter(Boolean).join(' · ') || 'Pet'}</Text>
                       </View>
                       <View style={[styles.relPill, (p.relationship||'').includes('foster') && styles.relPillFoster, (p.relationship||'').includes('sponsor') && styles.relPillSponsor]}>
                         <Text style={styles.relPillTxt}>{(p.relationship||'own').toLowerCase().includes('foster') ? 'I FOSTER' : (p.relationship||'').toLowerCase().includes('sponsor') ? 'I SPONSOR' : 'I OWN'}</Text>
                       </View>
                       <ChevronRight color={Colors.textTertiary} size={18} />
+                      </View>
+                      {petNotes.map((r, i) => {
+                        const isOverdue = r.urgency === 'overdue';
+                        const color = isOverdue ? Colors.critical : Colors.urgent;
+                        const bg = isOverdue ? Colors.criticalBg : Colors.urgentBg;
+                        const dayLabel = isOverdue
+                          ? `${Math.abs(r.days_until_due)}d overdue`
+                          : `due in ${r.days_until_due}d`;
+                        return (
+                          <View key={`${r.pet_id}-${i}`} style={[styles.reminderInRow, { backgroundColor: bg }]}>
+                            <Text style={[styles.reminderLabel, { color }]} numberOfLines={1}>{r.label} — {dayLabel}</Text>
+                          </View>
+                        );
+                      })}
                     </TouchableOpacity>
-                  ))}
+                    );
+                  })}
                   {pastPets.length > 0 && (
                     <TouchableOpacity
                       style={styles.pastToggle}
@@ -1153,7 +1142,6 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                 <Text style={styles.logoutText}>Logout</Text>
               </TouchableOpacity>
             </View>
-          </ScrollView>
           </Page>
       </View>
 
@@ -1547,7 +1535,9 @@ const styles = StyleSheet.create({
   modNotesPreview: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textTertiary, flex: 1, marginLeft: 4 },
 
   // My Pets
-  petRelCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: Colors.white, borderRadius: 14, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: Colors.border },
+  petRelCard: { backgroundColor: Colors.white, borderRadius: 14, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: Colors.border, gap: 8 },
+  petRelTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  reminderInRow: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, alignSelf: 'flex-start' },
   petRelCardPast: { opacity: 0.7 },
   petRelPhoto: { width: 48, height: 48, borderRadius: 24 },
   petRelPhotoFallback: { backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },

@@ -2326,7 +2326,7 @@ function getSevText(sev: string): string {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
   col: { width: '100%', maxWidth: 720, alignSelf: 'center', flex: 1 },
-  heroWrap: { width: '100%', maxHeight: 360, aspectRatio: 4/3, borderRadius: 20, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 12, alignSelf: 'center' },
+  heroWrap: { width: '100%', maxWidth: '100%', maxHeight: 360, aspectRatio: 4/3, borderRadius: 20, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 12, alignSelf: 'stretch' },
   hero: { width: '100%', height: '100%' },
   changePhoto: { position: 'absolute', right: 12, bottom: 12, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(38,38,94,0.85)', alignItems: 'center', justifyContent: 'center' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
@@ -2342,11 +2342,11 @@ const styles = StyleSheet.create({
   petBanner: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingVertical: 16, backgroundColor: Colors.white },
   petPhoto: { width: 64, height: 64, borderRadius: 32 },
   petPhotoFallback: { backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
-  petBannerInfo: { flex: 1 },
+  petBannerInfo: { width: '100%', marginTop: 12 },
   petName: { fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.text },
   petMeta: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 2 },
 
-  tabBar: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingVertical: 12 },
+  tabBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingHorizontal: 0, marginTop: 12, marginBottom: 0, position: 'relative' },
   hubRow: { flexDirection: 'row', gap: 8, paddingBottom: 12 },
   pillTab: { backgroundColor: Colors.white, borderWidth: 1, borderColor: '#E8EAF0', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
   pillTabOn: { backgroundColor: Colors.navy, borderColor: Colors.navy },
@@ -2355,7 +2355,7 @@ const styles = StyleSheet.create({
   aiBox: { backgroundColor: Colors.criticalBg, borderRadius: 14, padding: 14, gap: 8 },
   aiTitle: { fontFamily: Fonts.extrabold, color: Colors.critical, fontSize: FontSizes.md },
 
-  tabContent: { padding: 20 },
+  tabContent: { paddingTop: 12, paddingHorizontal: 0 },
 
   infoCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, overflow: 'hidden' },
   infoRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: Colors.border },

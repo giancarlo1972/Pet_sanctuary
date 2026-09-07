@@ -41,13 +41,13 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
         if (error) throw error;
       }
       const { data: sess } = await supabase.auth.getUser();
-      const email = sess.user?.email || email.trim();
+      const loginEmail = sess.user?.email || email.trim();
       let role = '';
       if (sess.user?.id) {
         const { data: profile } = await supabase.from('profiles').select('role').eq('id', sess.user.id).maybeSingle();
         role = profile?.role || '';
       }
-      router.replace(isPlatformAdmin(role, email) ? '/admin' : '/(tabs)');
+      router.replace(isPlatformAdmin(role, loginEmail) ? '/admin' : '/(tabs)');
     } catch (err: any) {
       setError(err.message || 'Authentication failed.');
     } finally {

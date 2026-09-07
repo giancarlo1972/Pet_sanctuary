@@ -363,6 +363,17 @@ function lbToKg(lb: number): number {
   return Math.round((lb / LB_PER_KG) * 100) / 100;
 }
 
+function ageFromDob(dob?: string | null, ageText?: string | null) {
+  if (dob) {
+    const d = new Date(dob);
+    if (!Number.isNaN(d.getTime())) {
+      const y = (Date.now() - d.getTime()) / (365.25 * 864e5);
+      return `${Math.round(y * 10) / 10} y`;
+    }
+  }
+  return ageText || null;
+}
+
 export default function PetRecordScreen() {
   const params = useLocalSearchParams<{ petId?: string; id?: string }>();
   const petId = params.petId || params.id || '';
@@ -375,6 +386,10 @@ export default function PetRecordScreen() {
   const [aiFindings, setAiFindings] = useState<any>(null);
   const [aiShared, setAiShared] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiLastRun, setAiLastRun] = useState<string | null>(null);
+  const [weightEntries, setWeightEntries] = useState<{ weight_lb: number; measured_on: string | null }[]>([]);
+  const [labRows, setLabRows] = useState<any[]>([]);
+  const [deviceReadings, setDeviceReadings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -600,6 +615,27 @@ export default function PetRecordScreen() {
     })));
     setBreeds((breedsRes.data as BreedOption[]) || []);
     setColors((colorsRes.data as ColorOption[]) || []);
+    const [wRes, labRes, devRes, aiRes] = await Promise.all([
+      supabase.from('weight_entries').select('weight_lb, measured_on, source, created_at').eq('pet_id', petId).order('measured_on', { ascending: false }).limit(10),
+      supabase.from('lab_results').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(40),
+      supabase.from('device_readings').select('metric, value, recorded_at').eq('pet_id', petId).order('recorded_at', { ascending: false }).limit(50),
+      supabase.from('ai_health_analyses').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+    ]);
+    setWeightEntries((wRes.data as any[]) || []);
+    setLabRows((labRes.data as any[]) || []);
+    setDeviceReadings((devRes.data as any[]) || []);
+    if (aiRes.data) {
+      const row = aiRes.data as any;
+      setAiFindings({
+        id: row.id,
+        verdict: row.inputs?.verdict || row.findings?.[0]?.severity === 'urgent' ? 'MONITOR' : row.inputs?.verdict,
+        findings: row.findings,
+        summary: row.inputs?.vet_summary || row.summary,
+        ran_at: row.created_at,
+      });
+      setAiLastRun(row.created_at);
+      setAiShared(Boolean(row.shared_with_vet_at));
+    }
     setLoading(false);
   }, [petId, user]);
 
@@ -1390,13 +1426,18 @@ export default function PetRecordScreen() {
   const breedDisplay = [pet.breed_primary, pet.breed_secondary].filter(Boolean).join(' / ')
     || pet.breed || '—';
   const colorDisplay = [pet.primary_color, pet.secondary_color].filter(Boolean).join(' / ') || '—';
-  const weightDisplay = pet.weight_kg != null
-    ? (weightUnit === 'lb' ? `${kgToLb(pet.weight_kg)} lb` : `${Math.round(pet.weight_kg * 100) / 100} kg`)
-    : '—';
+  const latestLb = weightEntries[0]?.weight_lb
+    ?? (pet.weight_kg != null ? kgToLb(pet.weight_kg) : null);
+  const targetLb = pet.target_weight_kg != null ? kgToLb(pet.target_weight_kg) : null;
+  const weightDisplay = latestLb != null ? `${latestLb} lb` : '—';
   const currentRels = relationships.filter((r) => !r.ended_on);
   const pastRels = relationships.filter((r) => r.ended_on);
-  const activeConditions = conditions.filter((c) => c.is_active);
-  const resolvedConditions = conditions.filter((c) => !c.is_active);
+  const tableConditions = conditions.filter((c) => (c.kind || '').toLowerCase() === 'condition');
+  const activeConditions = tableConditions.filter((c) => c.is_active !== false && !c.resolved_on);
+  const resolvedConditions = tableConditions.filter((c) => c.is_active === false || c.resolved_on);
+  const healthVerdict = (aiFindings?.verdict === 'MONITOR' || aiFindings?.verdict === 'WATCH')
+    ? 'MONITOR'
+    : 'STABLE';
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'overview', label: 'Overview' },
@@ -1406,6 +1447,67 @@ export default function PetRecordScreen() {
   const displayPhoto = isUsablePhoto(pet.main_photo_url)
     ? pet.main_photo_url
     : (photos.find((g) => isUsablePhoto(g.photo_url))?.photo_url || null);
+
+  const runAiHealth = async () => {
+    if (!pet || !petId) return;
+    setAiBusy(true);
+    try {
+      const record = {
+        species: pet.species,
+        breed: pet.breed_primary || pet.breed,
+        sex: pet.gender,
+        dob: pet.date_of_birth,
+        age: ageFromDob(pet.date_of_birth, pet.age_text),
+        weight_lb: latestLb,
+        target_weight_lb: targetLb,
+        weight_entries: weightEntries.slice(0, 10).map((w) => ({ weight_lb: w.weight_lb, measured_on: w.measured_on })),
+        conditions: tableConditions.map((c) => ({ name: c.name, kind: c.kind, severity: c.severity, is_active: c.is_active, diagnosed_on: c.diagnosed_on })),
+        vaccinations: vaccinations.map((v) => ({
+          name: v.vaccine, brand: v.brand, date: v.administered_on, next_due: v.next_due_on, dose: v.dose,
+        })),
+        lab_results: labRows.map((l) => ({
+          analyte: l.analyte || l.name, value: l.value ?? l.value_text ?? l.value_num, unit: l.unit, flag: l.flag, collected_on: l.collected_on || l.taken_on,
+        })),
+        visits: medicalRecords.map((m) => ({
+          date: m.record_date, reason: m.title, summary: m.details, type: m.record_type,
+        })),
+        document_clinical_summaries: documents.map((d) => {
+          const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary : {};
+          const visits = Array.isArray((ai as any).visits) ? (ai as any).visits : [];
+          return {
+            title: d.title,
+            clinic: d.clinic,
+            date: d.taken_on,
+            summaries: visits.map((v: any) => v.summary).filter(Boolean),
+            notes: d.notes,
+          };
+        }),
+        device_readings: deviceReadings,
+      };
+      console.log('[pet-health-analysis] payload', { weight_lb: record.weight_lb, conditions: record.conditions.length, entries: record.weight_entries.length });
+      const res = await fetch('/api/pet-health-analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ record }),
+      });
+      const json = await res.json();
+      console.log('[pet-health-analysis] response', json?.verdict, json?.findings?.length, json?.error);
+      if (!res.ok || json?.ok === false) throw new Error(json?.error || 'AI Health failed.');
+      setAiFindings(json);
+      setAiLastRun(json.ran_at || new Date().toISOString());
+      setAiShared(false);
+      const { data: saved } = await supabase.from('ai_health_analyses').insert({
+        pet_id: petId,
+        findings: json.findings || [],
+        inputs: { verdict: json.verdict, vet_summary: json.summary },
+        model: 'claude-haiku-4-5',
+      }).select('id').maybeSingle();
+      if (saved?.id) setAiFindings((cur: any) => ({ ...cur, id: saved.id }));
+    } catch (e: any) {
+      showBanner(e.message || 'AI Health failed.');
+    }
+    setAiBusy(false);
+  };
 
   const filteredBreeds = breeds.filter((b) => {
     if (pet.species === 'dog' || pet.species === 'Dog') return b.species === 'dog';
@@ -1613,7 +1715,7 @@ export default function PetRecordScreen() {
             <View style={styles.healthHero}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Text style={styles.healthKicker}>{(pet.name || 'PET').toUpperCase()} · HEALTH SUMMARY</Text>
-                <Text style={styles.healthStable}>{activeConditions.length ? 'MONITOR' : 'STABLE'}</Text>
+                <Text style={[styles.healthStable, healthVerdict === 'MONITOR' && { color: '#FCE9C8' }]}>{healthVerdict}</Text>
               </View>
               <View style={styles.healthStats}>
                 <View style={styles.healthStat}>
@@ -1626,10 +1728,10 @@ export default function PetRecordScreen() {
                 </View>
                 <View style={styles.healthStat}>
                   <Text style={styles.healthN}>{weightDisplay}</Text>
-                  <Text style={styles.healthL}>{pet.target_weight_kg != null ? 'Weight / target' : 'Weight'}</Text>
-                  {pet.target_weight_kg && pet.weight_kg ? (
+                  <Text style={styles.healthL}>{targetLb != null ? 'Weight / target' : 'Weight'}</Text>
+                  {targetLb && latestLb ? (
                     <View style={styles.weightBarTrack}>
-                      <View style={[styles.weightBarFill, { width: `${Math.min(100, Math.round((pet.weight_kg / pet.target_weight_kg) * 100))}%` }]} />
+                      <View style={[styles.weightBarFill, { width: `${Math.min(100, Math.round((latestLb / targetLb) * 100))}%` }]} />
                     </View>
                   ) : null}
                 </View>
@@ -1975,29 +2077,39 @@ export default function PetRecordScreen() {
           </View>
             )}
             {medicalHub === 'ai' && (
-              <View style={styles.aiBox}>
-                <Text style={styles.aiTitle}>AI is not a veterinarian</Text>
-                <Text style={styles.emptyText}>Findings are for the vet. No diagnosis. No treatment from Rescue Army.</Text>
-                <TouchableOpacity style={styles.historyUnlockBtn} disabled={aiBusy} onPress={async () => {
-                  setAiBusy(true);
-                  try {
-                    const res = await fetch('/api/pet-health-analysis', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ record: { vaccines: vaccinations, weight: pet.weight_kg } }) });
-                    setAiFindings(await res.json());
-                  } catch (e: any) { showBanner(e.message || 'AI Health failed.'); }
-                  setAiBusy(false);
-                }}>
-                  <Text style={styles.historyUnlockText}>{aiBusy ? 'Analyzing…' : 'Run AI Health'}</Text>
+              <View style={{ gap: 12 }}>
+                <View style={styles.aiDisclaimer}>
+                  <Text style={styles.aiDisclaimerTxt}>AI is not a veterinarian. Findings are for your vet — no diagnosis or treatment from Rescue Army.</Text>
+                </View>
+                {(aiFindings?.findings || []).map((f: any, i: number) => {
+                  const sev = String(f.severity || 'info').toLowerCase();
+                  const dot = sev === 'urgent' ? Colors.critical : sev === 'watch' ? Colors.accent : Colors.teal;
+                  return (
+                    <View key={i} style={styles.aiFinding}>
+                      <View style={[styles.aiDot, { backgroundColor: dot }]} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.aiFindingTitle}>{f.title}</Text>
+                        <Text style={styles.aiFindingBody}>{f.body || f.detail}</Text>
+                      </View>
+                    </View>
+                  );
+                })}
+                <TouchableOpacity style={[styles.aiPrimaryBtn, aiBusy && styles.btnDisabled]} disabled={aiBusy} onPress={runAiHealth} activeOpacity={0.85}>
+                  {aiBusy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.aiPrimaryTxt}>Run AI Health</Text>}
                 </TouchableOpacity>
-                {aiFindings?.summary ? <Text style={styles.timelineSummary}>{aiFindings.summary}</Text> : null}
-                {(aiFindings?.findings || []).map((f: any, i: number) => (
-                  <Text key={i} style={styles.emptyText}>{f.severity}: {f.title} — {f.detail}</Text>
-                ))}
+                <Text style={styles.aiLastRun}>
+                  {aiLastRun ? `Last run ${formatDate(aiLastRun)}` : 'Not run yet'}
+                </Text>
                 {aiFindings ? (
-                  <TouchableOpacity style={[styles.historyUnlockBtn, { marginTop: 10, backgroundColor: aiShared ? Colors.teal : Colors.navy }]} onPress={async () => {
-                    if (aiFindings.id) await supabase.from('ai_health_analyses').update({ shared_with_vet_at: new Date().toISOString() }).eq('id', aiFindings.id);
-                    setAiShared(true);
-                  }} activeOpacity={0.85}>
-                    <Text style={styles.historyUnlockText}>{aiShared ? 'Shared with vet ✓' : 'Share analysis with my vet'}</Text>
+                  <TouchableOpacity
+                    style={[styles.aiShareBtn, aiShared && { backgroundColor: Colors.teal }]}
+                    onPress={async () => {
+                      if (aiFindings.id) await supabase.from('ai_health_analyses').update({ shared_with_vet_at: new Date().toISOString() }).eq('id', aiFindings.id);
+                      setAiShared(true);
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.aiShareTxt}>{aiShared ? 'Shared with vet ✓' : 'Share analysis with my vet'}</Text>
                   </TouchableOpacity>
                 ) : null}
               </View>
@@ -2547,6 +2659,17 @@ const styles = StyleSheet.create({
   pillTabTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.text },
   pillTabTxtOn: { color: Colors.white },
   aiBox: { backgroundColor: Colors.criticalBg, borderRadius: 14, padding: 14, gap: 8 },
+  aiDisclaimer: { backgroundColor: Colors.criticalBg, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
+  aiDisclaimerTxt: { fontFamily: Fonts.medium, fontSize: 12, color: Colors.critical, lineHeight: 16 },
+  aiFinding: { flexDirection: 'row', gap: 10, backgroundColor: Colors.white, borderRadius: 12, padding: 12, borderWidth: 1, borderColor: Colors.border },
+  aiDot: { width: 8, height: 8, borderRadius: 4, marginTop: 6 },
+  aiFindingTitle: { fontFamily: Fonts.bold, fontSize: 14, color: Colors.navy },
+  aiFindingBody: { fontFamily: Fonts.regular, fontSize: 12.5, color: Colors.textSecondary, marginTop: 4, lineHeight: 18 },
+  aiPrimaryBtn: { backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+  aiPrimaryTxt: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.white },
+  aiLastRun: { fontFamily: Fonts.regular, fontSize: 12, color: Colors.textTertiary, textAlign: 'center' },
+  aiShareBtn: { backgroundColor: Colors.navy, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+  aiShareTxt: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.white },
   aiTitle: { fontFamily: Fonts.extrabold, color: Colors.critical, fontSize: FontSizes.md },
 
   tabContent: { paddingTop: 12, paddingHorizontal: 0 },

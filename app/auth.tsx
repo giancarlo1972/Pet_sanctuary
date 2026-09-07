@@ -9,9 +9,9 @@ import { isPlatformAdmin } from '@/lib/admin-access';
 
 function redirectTo() {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    return `${window.location.origin}/admin`;
+    return `${window.location.origin}/profile`;
   }
-  return 'https://rescue-army.com/admin';
+  return 'https://rescue-army.com/profile';
 }
 
 function friendly(raw: string) {
@@ -40,10 +40,10 @@ async function afterLogin(email: string) {
     }, { onConflict: 'id' });
   }
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    window.location.assign('/admin');
+    window.location.assign('/profile');
     return;
   }
-  router.replace('/admin');
+  router.replace('/profile');
 }
 
 export default function AuthScreen() {

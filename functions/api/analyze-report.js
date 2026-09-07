@@ -26,6 +26,15 @@ function fallback(reason) {
   };
 }
 
+
+function decodedBytes(b64) {
+  const raw = String(b64 || '').replace(/^data:[^;]+;base64,/, '');
+  return Math.floor(raw.length * 0.75);
+}
+function tooLarge(b64, max) {
+  return decodedBytes(b64) > max;
+}
+
 function getKey(env) {
   if (!env) return null;
   if (env.ANTHROPIC_API_KEY) return env.ANTHROPIC_API_KEY;
@@ -61,6 +70,9 @@ export async function onRequestPost(context) {
         fallback('AI key not found. Add ANTHROPIC_API_KEY on the Pages project, then Retry deployment. Env names: ' + envNames),
         { headers }
       );
+    }
+    if (tooLarge(imageBase64, 9_500_000)) {
+      return Response.json(fallback('Image too large — please re-upload (max 10 MB)'), { headers, status: 413 });
     }
 
     const s = String(imageBase64);

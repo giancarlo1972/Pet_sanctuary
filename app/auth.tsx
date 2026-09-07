@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Image, Platform, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Image, Platform, ScrollView, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Colors } from '@/constants/Colors';
@@ -47,6 +47,8 @@ async function afterLogin(email: string) {
 }
 
 export default function AuthScreen() {
+  const { width } = useWindowDimensions();
+  const wide = Platform.OS === 'web' && width >= 900;
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -95,7 +97,17 @@ export default function AuthScreen() {
 
   return (
     <SafeAreaView style={styles.wrap}>
-      <ScrollView contentContainerStyle={styles.inner} keyboardShouldPersistTaps="handled">
+      <View style={[styles.split, wide && styles.splitWide]}>
+        {wide && (
+          <View style={styles.brandPanel}>
+            <Image source={require('../assets/icon.png')} style={styles.brandLogo} />
+            <Text style={styles.brandTitle}>Rescue Army</Text>
+            <Text style={styles.brandSub}>Helping animals get rescued faster</Text>
+            <Text style={styles.brandFoot}>Report · Adopt · Foster · Donate</Text>
+          </View>
+        )}
+      <ScrollView contentContainerStyle={[styles.inner, wide && styles.innerWide]} keyboardShouldPersistTaps="handled">
+        {!wide && (
         <View style={styles.brandRow}>
           <Image source={require('../assets/icon.png')} style={styles.logo} />
           <View>
@@ -103,6 +115,8 @@ export default function AuthScreen() {
             <Text style={styles.h1}>Sign in</Text>
           </View>
         </View>
+        )}
+        {wide && <Text style={styles.h1}>Sign in</Text>}
         <Text style={styles.lead}>
           The first person to sign in becomes <Text style={styles.leadEm}>Administrator</Text> and can approve orgs, IDs, and reports.
         </Text>
@@ -138,13 +152,22 @@ export default function AuthScreen() {
           <Text style={styles.home}>Back to Home</Text>
         </TouchableOpacity>
       </ScrollView>
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: Colors.white },
+  split: { flex: 1 },
+  splitWide: { flexDirection: 'row' },
+  brandPanel: { flex: 1, backgroundColor: Colors.navy, justifyContent: 'center', paddingHorizontal: 64 },
+  brandLogo: { width: 72, height: 72, borderRadius: 20, marginBottom: 24 },
+  brandTitle: { fontSize: 40, fontFamily: Fonts.extrabold, color: Colors.white },
+  brandSub: { fontSize: 20, fontFamily: Fonts.medium, color: '#B9BCE0', marginTop: 8 },
+  brandFoot: { fontSize: 14, fontFamily: Fonts.semibold, color: '#8A8FBF', marginTop: 40 },
   inner: { paddingHorizontal: 24, paddingTop: 36, paddingBottom: 48, maxWidth: 480, width: '100%', alignSelf: 'center' },
+  innerWide: { justifyContent: 'center', flexGrow: 1, paddingTop: 0 },
   brandRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
   logo: { width: 48, height: 48, borderRadius: 14 },
   brandKicker: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.navy },

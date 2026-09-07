@@ -14,7 +14,7 @@ function redirectAfterLogin() {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
     return `${window.location.origin}/admin`;
   }
-  return 'https://rescue-army.com/profile';
+  return 'https://rescue-army.com/admin';
 }
 
 export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
@@ -24,30 +24,56 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  const goAfterAuth = async (fallbackEmail: string) => {
+    const { data: sess } = await supabase.auth.getUser();
+    const loginEmail = sess.user?.email || fallbackEmail;
+    let role = '';
+    if (sess.user?.id) {
+      const { data: profile } = await supabase.from('profiles').select('role').eq('id', sess.user.id).maybeSingle();
+      role = profile?.role || '';
+    }
+    if (!sess.user) {
+      setInfo('Account saved. Tap Sign In.');
+      setMode('signin');
+      return;
+    }
+    router.replace(isPlatformAdmin(role, loginEmail) ? '/admin' : '/(tabs)');
+  };
 
   const handleSubmit = async () => {
-    if (!email.trim() || !password.trim()) {
+    const em = email.trim();
+    const pw = password;
+    if (!em || !pw) {
       setError('Please enter your email and password.');
       return;
     }
     setLoading(true);
     setError(null);
+    setInfo(null);
     try {
+      const attemptSignIn = async () => {
+        const { error: signErr } = await supabase.auth.signInWithPassword({ email: em, password: pw });
+        if (signErr) throw signErr;
+        await goAfterAuth(em);
+      };
+
       if (mode === 'signin') {
-        const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.auth.signUp({ email: email.trim(), password });
-        if (error) throw error;
+        await attemptSignIn();
+        return;
       }
-      const { data: sess } = await supabase.auth.getUser();
-      const loginEmail = sess.user?.email || email.trim();
-      let role = '';
-      if (sess.user?.id) {
-        const { data: profile } = await supabase.from('profiles').select('role').eq('id', sess.user.id).maybeSingle();
-        role = profile?.role || '';
+
+      const { error: upErr } = await supabase.auth.signUp({ email: em, password: pw });
+      if (upErr) {
+        const msg = (upErr.message || '').toLowerCase();
+        if (msg.includes('already') || msg.includes('registered') || msg.includes('exists')) {
+          await attemptSignIn();
+          return;
+        }
+        throw upErr;
       }
-      router.replace(isPlatformAdmin(role, loginEmail) ? '/admin' : '/(tabs)');
+      await goAfterAuth(em);
     } catch (err: any) {
       setError(err.message || 'Authentication failed.');
     } finally {
@@ -59,11 +85,11 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
     setLoading(true);
     setError(null);
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
+      const { error: gErr } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: { redirectTo: redirectAfterLogin() },
       });
-      if (error) throw error;
+      if (gErr) throw gErr;
     } catch (err: any) {
       setError(err.message || 'Google sign-in failed.');
       setLoading(false);
@@ -72,11 +98,16 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
 
   return (
     <View style={styles.container}>
-      {error && (
+      {error ? (
         <View style={styles.errorBox}>
           <Text style={styles.errorText}>{error}</Text>
         </View>
-      )}
+      ) : null}
+      {info ? (
+        <View style={styles.infoBox}>
+          <Text style={styles.infoText}>{info}</Text>
+        </View>
+      ) : null}
       <TextInput
         style={styles.input}
         value={email}
@@ -85,6 +116,7 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
         placeholderTextColor={Colors.textTertiary}
         keyboardType="email-address"
         autoCapitalize="none"
+        autoComplete="email"
       />
       <TextInput
         style={styles.input}
@@ -93,6 +125,8 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
         placeholder="Password"
         placeholderTextColor={Colors.textTertiary}
         secureTextEntry
+        autoComplete="password"
+        onSubmitEditing={handleSubmit}
       />
       <TouchableOpacity style={[styles.submitBtn, loading && styles.btnDisabled]} onPress={handleSubmit} disabled={loading} activeOpacity={0.85}>
         {loading ? <ActivityIndicator color={Colors.white} size="small" /> : (
@@ -102,7 +136,7 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
       <TouchableOpacity style={styles.googleBtn} onPress={handleGoogle} disabled={loading} activeOpacity={0.85}>
         <Text style={styles.googleText}>Continue with Google</Text>
       </TouchableOpacity>
-      <TouchableOpacity style={styles.switchRow} onPress={() => setMode(mode === 'signin' ? 'signup' : 'signin')} activeOpacity={0.7}>
+      <TouchableOpacity style={styles.switchRow} onPress={() => { setMode(mode === 'signin' ? 'signup' : 'signin'); setError(null); setInfo(null); }} activeOpacity={0.7}>
         <Text style={styles.switchText}>
           {mode === 'signin' ? "Don't have an account? " : 'Already have an account? '}
           <Text style={styles.switchLink}>{mode === 'signin' ? 'Sign up' : 'Sign in'}</Text>
@@ -147,6 +181,17 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.sm,
     fontFamily: Fonts.medium,
     color: Colors.critical,
+  },
+  infoBox: {
+    backgroundColor: Colors.tealBg || '#E6F4F1',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  infoText: {
+    fontSize: FontSizes.sm,
+    fontFamily: Fonts.medium,
+    color: Colors.tealDark || Colors.navy,
   },
   switchRow: {
     alignItems: 'center',

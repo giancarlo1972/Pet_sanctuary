@@ -59,6 +59,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
+import { WeightLineChart, LabSparkline } from '@/components/PetCharts';
 
 function blobTypeFromName(path: string) {
   if (/\.pdf$/i.test(path)) return 'application/pdf';
@@ -174,6 +175,10 @@ interface PetCondition {
   resolved_on: string | null;
   notes: string | null;
   is_active: boolean;
+  status?: string | null;
+  onset_date?: string | null;
+  resolved_date?: string | null;
+  source_document_id?: string | null;
 }
 
 interface PetDiet {
@@ -387,9 +392,9 @@ export default function PetRecordScreen() {
   const [aiShared, setAiShared] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiLastRun, setAiLastRun] = useState<string | null>(null);
-  const [weightEntries, setWeightEntries] = useState<{ weight_lb: number; measured_on: string | null }[]>([]);
+  const [weightEntries, setWeightEntries] = useState<{ weight_lb: number; measured_on: string | null; source?: string | null }[]>([]);
   const [labRows, setLabRows] = useState<any[]>([]);
-  const [deviceReadings, setDeviceReadings] = useState<any[]>([]);
+  const [labSpark, setLabSpark] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -552,7 +557,7 @@ export default function PetRecordScreen() {
         .eq('pet_id', petId)
         .order('occurred_on', { ascending: false }),
       supabase.from('pet_conditions')
-        .select('id, pet_id, kind, name, severity, diagnosed_on, resolved_on, notes, is_active')
+        .select('id, pet_id, kind, name, severity, diagnosed_on, resolved_on, notes, is_active, status, onset_date, resolved_date, source_document_id')
         .eq('pet_id', petId)
         .order('is_active', { ascending: false }),
       supabase.from('pet_diet')
@@ -647,12 +652,13 @@ export default function PetRecordScreen() {
       const st = d.ai_status;
       if (parsedAttempted.current.has(d.id)) return false;
       if (!d.file_path && !(d as any).storage_path) return false;
-      if (st === 'confirmed') return false;
+      if (st === 'confirmed' || st === 'missing_file') return false;
+      if (st === 'failed' && (d.ai_summary as any)?.reason === 'no_file') return false;
       const ver = d.ai_summary && typeof d.ai_summary === 'object' ? (d.ai_summary as any).schemaVersion : 0;
       if ((st === 'ready' || st === 'parsed') && ver >= 2) return false;
       return true;
     });
-    pending.slice(0, 4).forEach((d) => triggerExtraction(d.id, { path: d.file_path }));
+    pending.slice(0, 4).forEach((d) => triggerExtraction(d.id, { path: d.file_path }, true));
   }, [documents, canEdit]);
 
   // === Vaccination handlers ===
@@ -1135,10 +1141,10 @@ export default function PetRecordScreen() {
     });
   };
 
-  const triggerExtraction = async (documentId: string, extra?: { imageBase64?: string | null; mimeType?: string; path?: string }) => {
+  const triggerExtraction = async (documentId: string, extra?: { imageBase64?: string | null; mimeType?: string; path?: string }, silent = false) => {
     if (!user) return;
     parsedAttempted.current.add(documentId);
-    setExtracting(true);
+    if (!silent) setExtracting(true);
     await supabase.from('pet_documents').update({ ai_status: 'processing' }).eq('id', documentId);
     setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'processing' } : d));
     try {
@@ -1155,6 +1161,13 @@ export default function PetRecordScreen() {
           }
         }
       }
+      if (!imageBase64) {
+        console.log('[parse-pet-document] no_file locally', documentId, path);
+        await supabase.from('pet_documents').update({ ai_status: 'missing_file', ai_summary: { reason: 'no_file' } }).eq('id', documentId);
+        setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'missing_file', ai_summary: { reason: 'no_file' } } : d));
+        if (!silent) setExtracting(false);
+        return;
+      }
       const payload = { document_id: documentId, imageBase64, mimeType: extra?.mimeType, path };
       console.log('[parse-pet-document] POST /api/parse-pet-document', { documentId, hasImage: Boolean(imageBase64), path });
       const resp = await fetch('/api/parse-pet-document', {
@@ -1162,20 +1175,21 @@ export default function PetRecordScreen() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const result = await resp.json().catch(() => ({ parsed: false, error: 'bad json' }));
+      const result = await resp.json().catch(() => ({ parsed: false, error: 'bad json', reason: 'model_error' }));
       console.log('[parse-pet-document] response', resp.status, {
         parsed: result.parsed,
+        reason: result.reason,
         error: result.error,
         vax: result.vaccinations?.length,
         visits: result.visits?.length,
         labs: result.labs?.length,
       });
       if (!resp.ok || !result.parsed) {
-        const msg = result.error || "AI couldn't read this — retry or add manually";
-        await supabase.from('pet_documents').update({ ai_status: 'failed', ai_summary: { error: msg } }).eq('id', documentId);
-        setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'failed', ai_summary: { error: msg } } : d));
-        showBanner("AI couldn't read this — retry or add manually", 'info');
-        setExtracting(false);
+        const reason = result.reason || (result.error === 'too_large' ? 'too_large' : 'model_error');
+        const status = reason === 'no_file' ? 'missing_file' : 'failed';
+        await supabase.from('pet_documents').update({ ai_status: status, ai_summary: { reason, error: result.error } }).eq('id', documentId);
+        setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: status, ai_summary: { reason, error: result.error } } : d));
+        if (!silent) setExtracting(false);
         return;
       }
       const title = result.title || null;
@@ -1187,14 +1201,13 @@ export default function PetRecordScreen() {
         taken_on: result.date || undefined,
       }).eq('id', documentId);
       setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'ready', ai_summary: result, title: title || d.title, clinic: result.clinic || d.clinic } : d));
-      openConfirmFromParse(documentId, result);
+      if (!silent) openConfirmFromParse(documentId, result);
     } catch (err: any) {
       console.error('[parse-pet-document] extraction error:', err);
-      await supabase.from('pet_documents').update({ ai_status: 'failed', ai_summary: { error: String(err) } }).eq('id', documentId);
-      setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'failed' } : d));
-      showBanner("AI couldn't read this — retry or add manually", 'info');
+      await supabase.from('pet_documents').update({ ai_status: 'failed', ai_summary: { reason: 'model_error', error: String(err) } }).eq('id', documentId);
+      setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'failed', ai_summary: { reason: 'model_error' } } : d));
     }
-    setExtracting(false);
+    if (!silent) setExtracting(false);
   };
 
   const applyExtraction = async () => {
@@ -1317,11 +1330,37 @@ export default function PetRecordScreen() {
       }
       for (const c of extractionReview.conditions || []) {
         if (!c.name) continue;
-        const { error } = await supabase.from('pet_conditions').insert({
-          pet_id: petId, kind: c.kind || 'condition', name: c.name, notes: c.notes || null, is_active: true,
-        });
-        if (error) console.error('[pet-record] condition insert', error);
-        else appliedCount++;
+        const status = (c.status || 'active').toLowerCase();
+        const key = c.name.trim().toLowerCase();
+        const existing = conditions.find((x) => (x.name || '').trim().toLowerCase() === key);
+        if (existing) {
+          const { error } = await supabase.from('pet_conditions').update({
+            status,
+            is_active: status === 'active',
+            notes: c.notes || existing.notes,
+            onset_date: c.onset_date || existing.onset_date || existing.diagnosed_on,
+            resolved_date: status === 'resolved' ? (c.resolved_date || new Date().toISOString().slice(0, 10)) : existing.resolved_date,
+            resolved_on: status === 'resolved' ? (c.resolved_date || new Date().toISOString().slice(0, 10)) : existing.resolved_on,
+            source_document_id: sourceDocId,
+          }).eq('id', existing.id);
+          if (error) console.error('[pet-record] condition update', error);
+          else appliedCount++;
+        } else {
+          const { error } = await supabase.from('pet_conditions').insert({
+            pet_id: petId,
+            kind: c.kind || 'condition',
+            name: c.name,
+            notes: c.notes || null,
+            is_active: status === 'active',
+            status,
+            onset_date: c.onset_date || null,
+            diagnosed_on: c.onset_date || null,
+            resolved_date: c.resolved_date || null,
+            source_document_id: sourceDocId,
+          });
+          if (error) console.error('[pet-record] condition insert', error);
+          else appliedCount++;
+        }
       }
       for (const panel of editableLabs) {
         for (const result of panel.results || []) {
@@ -1432,9 +1471,18 @@ export default function PetRecordScreen() {
   const weightDisplay = latestLb != null ? `${latestLb} lb` : '—';
   const currentRels = relationships.filter((r) => !r.ended_on);
   const pastRels = relationships.filter((r) => r.ended_on);
-  const tableConditions = conditions.filter((c) => (c.kind || '').toLowerCase() === 'condition');
-  const activeConditions = tableConditions.filter((c) => c.is_active !== false && !c.resolved_on);
-  const resolvedConditions = tableConditions.filter((c) => c.is_active === false || c.resolved_on);
+  const tableConditions = (() => {
+    const map = new Map<string, PetCondition>();
+    for (const c of conditions) {
+      const key = (c.name || '').trim().toLowerCase();
+      if (!key) continue;
+      const status = (c.status || (c.is_active === false || c.resolved_on ? 'resolved' : 'active')).toLowerCase();
+      if (!map.has(key)) map.set(key, { ...c, status });
+    }
+    return [...map.values()];
+  })();
+  const activeConditions = tableConditions.filter((c) => (c.status || 'active') === 'active');
+  const resolvedConditions = tableConditions.filter((c) => (c.status || '') === 'resolved');
   const healthVerdict = (aiFindings?.verdict === 'MONITOR' || aiFindings?.verdict === 'WATCH')
     ? 'MONITOR'
     : 'STABLE';
@@ -1468,6 +1516,17 @@ export default function PetRecordScreen() {
         lab_results: labRows.map((l) => ({
           analyte: l.analyte || l.name, value: l.value ?? l.value_text ?? l.value_num, unit: l.unit, flag: l.flag, collected_on: l.collected_on || l.taken_on,
         })),
+        lab_series: (() => {
+          const g = new Map<string, any[]>();
+          for (const row of labRows) {
+            const name = (row.analyte || row.name || '').trim();
+            if (!name) continue;
+            const arr = g.get(name.toLowerCase()) || [];
+            arr.push({ value: row.value ?? row.value_text ?? row.value_num, unit: row.unit, flag: row.flag, date: row.collected_on || row.taken_on || row.created_at });
+            g.set(name.toLowerCase(), arr);
+          }
+          return [...g.entries()].map(([analyte, points]) => ({ analyte, points }));
+        })(),
         visits: medicalRecords.map((m) => ({
           date: m.record_date, reason: m.title, summary: m.details, type: m.record_type,
         })),
@@ -1729,13 +1788,13 @@ export default function PetRecordScreen() {
                 <View style={styles.healthStat}>
                   <Text style={styles.healthN}>{weightDisplay}</Text>
                   <Text style={styles.healthL}>{targetLb != null ? 'Weight / target' : 'Weight'}</Text>
-                  {targetLb && latestLb ? (
-                    <View style={styles.weightBarTrack}>
-                      <View style={[styles.weightBarFill, { width: `${Math.min(100, Math.round((latestLb / targetLb) * 100))}%` }]} />
-                    </View>
-                  ) : null}
                 </View>
               </View>
+              {weightEntries.length > 0 ? (
+                <View style={{ marginTop: 10 }}>
+                  <WeightLineChart points={weightEntries.slice().reverse()} targetLb={targetLb} height={72} compact />
+                </View>
+              ) : null}
             </View>
             {vaccinations.some((v) => v.confirmed === false) ? (
               <View style={styles.reviewBox}>
@@ -1984,6 +2043,16 @@ export default function PetRecordScreen() {
                 const clinic = doc.clinic || ai.clinic || ai.clinic_name || null;
                 const kindLabel = DOCUMENT_KINDS.find((d) => d.key === doc.kind)?.label || titleCase(doc.kind);
                 const status = doc.ai_status || (ai.error ? 'failed' : null);
+                const reason = ai.reason || (status === 'missing_file' ? 'no_file' : null);
+                const failLabel = reason === 'no_file' || status === 'missing_file'
+                  ? 'File missing — re-upload'
+                  : reason === 'too_large'
+                    ? 'File too large — re-upload'
+                    : reason === 'unsupported_type'
+                      ? 'Unsupported file type'
+                      : status === 'failed'
+                        ? "AI couldn't read this — retry or add manually"
+                        : null;
                 return (
                 <View key={doc.id} style={styles.docCard}>
                   <TouchableOpacity style={styles.docMain} onPress={() => {
@@ -1996,16 +2065,17 @@ export default function PetRecordScreen() {
                     <View style={styles.docInfo}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <Text style={styles.docTitle}>
-                          {status === 'processing' ? 'Reading with AI…' : status === 'failed' ? "AI couldn't read this — retry or add manually" : (title || kindLabel)}
+                          {status === 'processing' ? 'Reading with AI…' : (failLabel || title || kindLabel)}
                         </Text>
                         <View style={styles.docTypePill}><Text style={styles.docTypePillTxt}>{kindLabel}</Text></View>
                       </View>
+                      {failLabel ? <Text style={styles.docClinic}>{failLabel}</Text> : null}
                       {date ? <Text style={styles.docDate}>{formatDate(String(date))}</Text> : null}
                       {clinic ? <Text style={styles.docClinic}>{String(clinic)}</Text> : null}
                     </View>
                   </TouchableOpacity>
-                  {canEdit && status === 'failed' ? (
-                    <TouchableOpacity style={styles.docDeleteBtn} onPress={() => triggerExtraction(doc.id, { path: doc.file_path })} activeOpacity={0.85}>
+                  {canEdit && (status === 'failed' || status === 'missing_file') ? (
+                    <TouchableOpacity style={styles.docDeleteBtn} onPress={() => triggerExtraction(doc.id, { path: doc.file_path }, false)} activeOpacity={0.85}>
                       <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Retry</Text>
                     </TouchableOpacity>
                   ) : canEdit ? (
@@ -2043,10 +2113,58 @@ export default function PetRecordScreen() {
           </View>
             )}
             {medicalHub === 'labs' && (
-              <VetLabResults petId={petId} userId={user!.id} clinics={clinics} canEdit={canEdit} />
+              <View>
+                {(() => {
+                  const groups = new Map<string, any[]>();
+                  for (const row of labRows) {
+                    const name = (row.analyte || row.name || '').trim();
+                    if (!name) continue;
+                    const arr = groups.get(name.toLowerCase()) || [];
+                    arr.push(row);
+                    groups.set(name.toLowerCase(), arr);
+                  }
+                  const items = [...groups.entries()].map(([key, rows]) => {
+                    const sorted = [...rows].sort((a, b) => String(a.collected_on || a.created_at || '').localeCompare(String(b.collected_on || b.created_at || '')));
+                    const cur = sorted[sorted.length - 1];
+                    const prev = sorted[sorted.length - 2];
+                    const curN = parseFloat(cur.value ?? cur.value_num ?? cur.value_text);
+                    const prevN = prev ? parseFloat(prev.value ?? prev.value_num ?? prev.value_text) : NaN;
+                    const delta = !isNaN(curN) && !isNaN(prevN) ? curN - prevN : null;
+                    const flag = (cur.flag || '').toLowerCase();
+                    return { key, label: cur.analyte || cur.name, cur, prev, delta, flag, nums: sorted.map((r) => parseFloat(r.value ?? r.value_num ?? r.value_text)).filter((n) => !isNaN(n)) };
+                  });
+                  if (items.length === 0) return <VetLabResults petId={petId} userId={user!.id} clinics={clinics} canEdit={canEdit} />;
+                  return (
+                    <View style={{ gap: 8 }}>
+                      {items.map((it) => (
+                        <TouchableOpacity key={it.key} style={styles.labRow} onPress={() => setLabSpark(labSpark === it.key ? null : it.key)} activeOpacity={0.85}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.docTitle}>{it.label}</Text>
+                            <Text style={styles.docClinic}>
+                              {it.cur.value ?? it.cur.value_text ?? it.cur.value_num ?? '—'}{it.cur.unit ? ` ${it.cur.unit}` : ''}
+                              {it.delta != null ? `  ${it.delta > 0 ? '▲' : it.delta < 0 ? '▼' : '•'} ${Math.abs(it.delta)}` : ''}
+                            </Text>
+                          </View>
+                          <View style={[styles.docTypePill, it.flag === 'high' || it.flag === 'abnormal' ? { backgroundColor: Colors.criticalBg } : it.flag === 'low' ? { backgroundColor: Colors.standardBg } : { backgroundColor: Colors.tealBg }]}>
+                            <Text style={styles.docTypePillTxt}>{it.flag || 'normal'}</Text>
+                          </View>
+                          {labSpark === it.key && it.nums.length > 1 ? <LabSparkline values={it.nums} color={it.flag === 'high' || it.flag === 'abnormal' ? Colors.critical : Colors.navy} /> : null}
+                        </TouchableOpacity>
+                      ))}
+                      <VetLabResults petId={petId} userId={user!.id} clinics={clinics} canEdit={canEdit} />
+                    </View>
+                  );
+                })()}
+              </View>
             )}
             {medicalHub === 'history' && (
             <View>
+              {weightEntries.length > 0 ? (
+                <View style={{ backgroundColor: Colors.white, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: Colors.border, marginBottom: 14 }}>
+                  <Text style={styles.subHeaderText}>Weight (lb)</Text>
+                  <WeightLineChart points={weightEntries.slice().reverse()} targetLb={targetLb} height={180} />
+                </View>
+              ) : null}
               <VetClinics petId={petId} userId={user!.id} canEdit={canEdit} />
 
             {!historyVisible ? (
@@ -2851,6 +2969,7 @@ const styles = StyleSheet.create({
   docTitle: { fontSize: FontSizes.md, fontFamily: Fonts.semibold, color: Colors.text },
   docDate: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 2 },
   docClinic: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 1 },
+  labRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, backgroundColor: Colors.white, borderRadius: 12, padding: 12, borderWidth: 1, borderColor: Colors.border },
   docNotes: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textBody, marginTop: 2 },
   docDeleteBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: Colors.critical },
 

@@ -26,7 +26,7 @@ Return JSON only, no markdown:
   "clinic": "string or null",
   "date": "YYYY-MM-DD or null",
   "vaccinations": [{"brand": null, "name": "", "lot": null, "dose": null, "date": "YYYY-MM-DD or null", "next_due": "YYYY-MM-DD or null", "valid_until": "YYYY-MM-DD or null", "reactions": null, "clinic": null}],
-  "conditions": [{"name": "", "kind": "condition|allergy", "notes": null}],
+  "conditions": [{"name": "", "kind": "condition|allergy", "status": "active|resolved|monitoring", "onset_date": "YYYY-MM-DD or null", "resolved_date": "YYYY-MM-DD or null", "notes": null}],
   "medications": [{"name": "", "dose": null, "given_on": null}],
   "visits": [{"clinic": null, "date": "YYYY-MM-DD or null", "reason": null, "summary": null}],
   "labs": [{"analyte": "", "value": "", "unit": null, "flag": "normal|high|low|abnormal|unknown", "collected_on": null}],
@@ -35,7 +35,8 @@ Return JSON only, no markdown:
 Rules:
 - labs[].value MUST be a string or a number. Qualitative PCR (e.g. "Detected", "Not detected") stays as that string; unit null. If value is Detected (case-insensitive) flag=abnormal; if Not detected flag=normal. Numeric labs keep the printed number and unit.
 - vaccinations: extract EVERY vaccine administered or mentioned anywhere, including visit notes and discharge text. Capture product/brand, date given, next_due / valid_until when printed.
-- weight: return the printed {value, unit} as-is (do not convert). Empty arrays if unreadable. Never invent dates.`;
+- weight: return the printed {value, unit} as-is (do not convert). Empty arrays if unreadable. Never invent dates.
+- conditions: one row per distinct issue. If a visit notes an existing problem is better or gone, set status=resolved (or monitoring), do not duplicate the name. Use onset_date/resolved_date when printed.`;
 
 const MODELS = ['claude-haiku-4-5', 'claude-3-5-haiku-latest', 'claude-3-5-sonnet-20241022'];
 const SYSTEM = 'Respond with a single JSON object only, no markdown, no commentary';
@@ -127,6 +128,22 @@ async function callClaude(key, model, userContent, extraText) {
 }
 const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
 
+function fail(reason, extra = {}) {
+  const labels = {
+    no_file: 'File missing — re-upload',
+    too_large: 'File too large — re-upload',
+    unsupported_type: 'Unsupported file type',
+    model_error: "AI couldn't read this — retry or add manually",
+  };
+  console.log('[parse-pet-document] FAIL', reason, extra.error || extra);
+  return Response.json({
+    parsed: false,
+    reason,
+    error: extra.error || reason,
+    labeled: labels[reason] || labels.model_error,
+  }, { headers, status: extra.status || 200 });
+}
+
 export async function onRequestOptions() {
   return new Response(null, { headers: { ...headers, 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' } });
 }
@@ -191,8 +208,8 @@ export async function onRequestPost(context) {
     });
     if (!key) {
       console.log('[parse-pet-document] FAIL missing ANTHROPIC_API_KEY');
-      if (documentId) await updateDoc(env, documentId, { ai_status: 'failed', ai_summary: { error: 'AI key missing' } });
-      return Response.json({ parsed: false, error: 'AI key missing' }, { headers });
+      if (documentId) await updateDoc(env, documentId, { ai_status: 'failed', ai_summary: { reason: 'model_error', error: 'AI key missing' } });
+      return fail('model_error', { error: 'AI key missing' });
     }
 
     let imgs = Array.isArray(body.images) ? body.images : (body.imageBase64 ? [body.imageBase64] : []);
@@ -223,17 +240,25 @@ export async function onRequestPost(context) {
       }
     }
     if (imgs.length === 0) {
-      console.log('[parse-pet-document] FAIL no image');
-      if (documentId) await updateDoc(env, documentId, { ai_status: 'failed', ai_summary: { error: 'No file to read' } });
-      return Response.json({ parsed: false, error: 'No file to read' }, { headers });
+      console.log('[parse-pet-document] FAIL no_file', { documentId, path: body.path || null });
+      if (documentId) await updateDoc(env, documentId, { ai_status: 'missing_file', ai_summary: { reason: 'no_file' } });
+      return fail('no_file');
+    }
+
+    const mime = String(body.mimeType || '');
+    const looksPdf = isPdf || mime.includes('pdf');
+    const looksImg = mime.startsWith('image/') || !mime;
+    if (mime && !looksPdf && !looksImg) {
+      if (documentId) await updateDoc(env, documentId, { ai_status: 'failed', ai_summary: { reason: 'unsupported_type' } });
+      return fail('unsupported_type', { error: mime });
     }
 
     const content = [];
     for (const s0 of imgs) {
       const s = String(s0);
-      if (decodedBytes(s) > 9_500_000) {
-        if (documentId) await updateDoc(env, documentId, { ai_status: 'failed', ai_summary: { error: 'too_large' } });
-        return Response.json({ parsed: false, error: 'too_large' }, { headers, status: 413 });
+      if (decodedBytes(s) > (looksPdf ? 32_000_000 : 9_500_000)) {
+        if (documentId) await updateDoc(env, documentId, { ai_status: 'failed', ai_summary: { reason: 'too_large' } });
+        return fail('too_large', { status: 413 });
       }
       const raw = s.replace(/^data:[^;]+;base64,/, '');
       if (isPdf || s.includes('application/pdf')) {
@@ -319,11 +344,11 @@ export async function onRequestPost(context) {
       }
       return Response.json(out, { headers });
     }
-    console.log('[parse-pet-document] FAIL', lastErr);
-    if (documentId) await updateDoc(env, documentId, { ai_status: 'failed', ai_summary: { error: lastErr } });
-    return Response.json({ parsed: false, error: lastErr }, { headers });
+    console.log('[parse-pet-document] FAIL model_error', lastErr);
+    if (documentId) await updateDoc(env, documentId, { ai_status: 'failed', ai_summary: { reason: 'model_error', error: lastErr } });
+    return fail('model_error', { error: lastErr });
   } catch (err) {
     console.log('[parse-pet-document] exception', String(err));
-    return Response.json({ parsed: false, error: String(err) }, { headers });
+    return fail('model_error', { error: String(err) });
   }
 }

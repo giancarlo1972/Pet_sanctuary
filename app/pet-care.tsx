@@ -1,14 +1,14 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Linking, ActivityIndicator,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
 import AppHeader from '@/components/AppHeader';
+import SignedImage from '@/components/SignedImage';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
-import { GINA } from '@/lib/gina-record';
 import { prepareImageFile } from '@/lib/prepare-image';
 
 type Tab = 'overview' | 'insurance' | 'medical' | 'invoices';
@@ -22,27 +22,47 @@ const TABS: { id: Tab; label: string }[] = [
 export default function PetCareScreen() {
   const { petId } = useLocalSearchParams<{ petId?: string }>();
   const [tab, setTab] = useState<Tab>('overview');
-  const [name, setName] = useState(GINA.name);
-  const [photo, setPhoto] = useState(GINA.photo);
-  const [subtitle, setSubtitle] = useState(GINA.subtitle);
-  const [weightLb, setWeightLb] = useState<string>(GINA.weightLb);
+  const [pet, setPet] = useState<any>(null);
+  const [weight, setWeight] = useState<{ weight_lb: number; measured_on: string } | null>(null);
+  const [chip, setChip] = useState<string | null>(null);
+  const [devices, setDevices] = useState<any[]>([]);
+  const [readings, setReadings] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (!petId) return;
-    supabase
+  const load = useCallback(async () => {
+    if (!petId) { setLoading(false); return; }
+    setLoading(true);
+    const { data } = await supabase
       .from('pets')
-      .select('name, breed, species, gender, main_photo_url, spayed_neutered, weight_kg')
+      .select('id, name, breed, species, gender, main_photo_url, spayed_neutered, vaccinated, microchipped, weight_kg')
       .eq('id', petId)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (!data) return;
-        if (data.name) setName(data.name);
-        if (data.main_photo_url && String(data.main_photo_url).startsWith('http')) setPhoto(data.main_photo_url);
-        const bits = [data.breed, data.species, data.gender, data.spayed_neutered ? 'Spayed/Neutered' : null].filter(Boolean);
-        if (bits.length) setSubtitle(bits.join(' · '));
-        if (data.weight_kg) setWeightLb(`${Math.round(Number(data.weight_kg) * 2.20462 * 10) / 10} lb`);
-      });
+      .maybeSingle();
+    setPet(data);
+    const { data: w } = await supabase.from('weight_entries').select('weight_lb, measured_on').eq('pet_id', petId).order('measured_on', { ascending: false }).limit(1).maybeSingle();
+    if (w) setWeight(w);
+    else if (data?.weight_kg) setWeight({ weight_lb: Math.round(Number(data.weight_kg) * 2.20462 * 10) / 10, measured_on: '' });
+    else setWeight(null);
+    const chipVal = null;
+    setChip(chipVal || null);
+    const { data: ids } = await supabase.from('pet_identifiers').select('value, kind').eq('pet_id', petId);
+    const micro = (ids || []).find((i: any) => /chip/i.test(i.kind || ''))?.value;
+    if (micro) setChip(micro);
+    const { data: dev } = await supabase.from('pet_devices').select('id, vendor, name').eq('pet_id', petId);
+    setDevices(dev || []);
+    const { data: rd } = await supabase.from('device_readings').select('id, kind, value, unit, recorded_at, note').eq('pet_id', petId).order('recorded_at', { ascending: false }).limit(8);
+    setReadings(rd || []);
+    setLoading(false);
   }, [petId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const name = pet?.name || 'Pet';
+  const subtitle = [pet?.breed, pet?.species, pet?.gender, pet?.spayed_neutered ? 'Spayed/Neutered' : null].filter(Boolean).join(' · ');
+  const chips = [
+    pet?.vaccinated ? 'Vaccinated' : null,
+    pet?.spayed_neutered ? 'Spayed/Neutered' : null,
+    pet?.microchipped || chip ? 'Microchipped' : null,
+  ].filter(Boolean) as string[];
 
   return (
     <SafeAreaView style={styles.wrap} edges={['top']}>
@@ -55,79 +75,69 @@ export default function PetCareScreen() {
             </TouchableOpacity>
           ))}
         </View>
+        {loading ? <ActivityIndicator color={Colors.navy} style={{ marginTop: 40 }} /> : (
         <ScrollView contentContainerStyle={styles.scroll}>
-          {tab === 'overview' && <Overview name={name} photo={photo} subtitle={subtitle} weightLb={weightLb} />}
+          {tab === 'overview' && (
+            <Overview name={name} photo={pet?.main_photo_url} subtitle={subtitle} chips={chips} weight={weight} chip={chip} devices={devices} readings={readings} />
+          )}
           {tab === 'insurance' && <Insurance />}
           {tab === 'medical' && <Medical petId={petId} />}
           {tab === 'invoices' && <Invoices />}
         </ScrollView>
+        )}
       </View>
     </SafeAreaView>
   );
 }
 
-function Overview({ name, photo, subtitle, weightLb }: { name: string; photo: string; subtitle: string; weightLb: string }) {
+function Overview({ name, photo, subtitle, chips, weight, chip, devices, readings }: any) {
   return (
     <>
       <View style={styles.heroBox}>
-        <Image source={{ uri: photo }} style={styles.hero} resizeMode="contain" />
+        {photo ? (
+          String(photo).startsWith('http')
+            ? <Image source={{ uri: photo }} style={styles.hero} resizeMode="contain" />
+            : <SignedImage path={photo} style={styles.hero} />
+        ) : (
+          <Text style={styles.sub}>No photo</Text>
+        )}
       </View>
       <Text style={styles.h1}>{name}</Text>
-      <Text style={styles.sub}>{subtitle}</Text>
-      <View style={styles.chipRow}>
-        {GINA.chips.map((c) => (
-          <View key={c} style={styles.chip}><Text style={styles.chipTxt}>{c}</Text></View>
-        ))}
-      </View>
+      <Text style={styles.sub}>{subtitle || 'No breed/species on file'}</Text>
+      {chips.length ? (
+        <View style={styles.chipRow}>
+          {chips.map((c: string) => (
+            <View key={c} style={styles.chip}><Text style={styles.chipTxt}>{c}</Text></View>
+          ))}
+        </View>
+      ) : null}
       <View style={styles.card}>
         <Text style={styles.kicker}>WEIGHT · MICROCHIP</Text>
-        <Text style={styles.stat}>{weightLb}</Text>
-        <Text style={styles.body}>Chip {GINA.chip} · AAHA lookup is on the pet record.</Text>
+        <Text style={styles.stat}>{weight ? `${weight.weight_lb} lb` : 'No weight recorded'}</Text>
+        <Text style={styles.body}>{chip ? `Chip ${chip}` : 'No microchip on file'}</Text>
       </View>
       <View style={styles.card}>
-        <Text style={styles.kicker}>SIIPET · {GINA.device.name}</Text>
-        <Text style={styles.body}>{GINA.device.detail}</Text>
-        {GINA.device.stats.map((s) => (
-          <View key={s.label} style={styles.row}>
-            <Text style={styles.rowL}>{s.label}</Text>
-            <Text style={styles.rowR}>{s.value}</Text>
-          </View>
+        <Text style={styles.kicker}>DEVICES</Text>
+        {devices.length === 0 ? (
+          <Text style={styles.body}>No device connected</Text>
+        ) : devices.map((d: any) => (
+          <Text key={d.id} style={styles.h2}>{d.vendor} · {d.name}</Text>
         ))}
-        {GINA.device.events.map((e) => (
-          <Text key={e.at} style={styles.event}>{e.at} · {e.kind} · {e.note}</Text>
+        {readings.map((e: any) => (
+          <Text key={e.id} style={styles.event}>{e.recorded_at} · {e.kind} · {e.value}{e.unit || ''} {e.note || ''}</Text>
         ))}
-        <TouchableOpacity style={styles.btnGhost} onPress={() => Linking.openURL(GINA.device.shopUrl)}>
-          <Text style={styles.btnGhostTxt}>SiiPet LitterLens (partner access pending)</Text>
-        </TouchableOpacity>
-      </View>
-      <View style={styles.note}>
-        <Text style={styles.body}>{GINA.aiNote}</Text>
       </View>
     </>
   );
 }
 
 function Insurance() {
-  const i = GINA.insurance;
   return (
-    <>
-      <View style={styles.card}>
-        <Text style={styles.kicker}>CARRIER</Text>
-        <Text style={styles.h1}>{i.carrier}</Text>
-        <Text style={styles.sub}>{i.plan}</Text>
-        <Text style={styles.body}>{i.policy}</Text>
-        <TouchableOpacity style={styles.btn} onPress={() => Linking.openURL(i.fileClaimUrl)}>
-          <Text style={styles.btnTxt}>File / track claim in Lemonade</Text>
-        </TouchableOpacity>
-      </View>
-      {i.claims.map((c) => (
-        <View key={c.title} style={styles.card}>
-          <Text style={styles.rowR}>{c.amount}</Text>
-          <Text style={styles.h2}>{c.title}</Text>
-          <Text style={styles.body}>{c.meta}</Text>
-        </View>
-      ))}
-    </>
+    <View style={styles.card}>
+      <Text style={styles.kicker}>INSURANCE</Text>
+      <Text style={styles.h2}>No policy on file</Text>
+      <Text style={styles.body}>When a carrier is linked, claims stay in their app. Rescue Army does not store card or login data.</Text>
+    </View>
   );
 }
 
@@ -161,15 +171,21 @@ function Medical({ petId }: { petId?: string }) {
       const file = input.files?.[0];
       if (!file || !petId) return;
       setBusy(true); setMsg(null);
-      const prepared = file.type.startsWith('image/') ? await prepareImageFile(file) : { blob: file, dataUrl: await new Promise<string>((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = reject; r.readAsDataURL(file); }), mediaType: file.type };
-      const path = `${petId}/${Date.now()}.jpg`;
-      await supabase.storage.from('pet-documents').upload(path, prepared.blob, { contentType: prepared.mediaType || 'image/jpeg', upsert: true });
-      const res = await fetch('/api/parse-pet-document', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: prepared.dataUrl }) });
-      const json = await res.json();
-      await supabase.from('pet_documents').insert({ pet_id: petId, kind: json.kind || 'other', storage_path: path, extracted: json, confirmed: false });
-      setPending(json);
+      try {
+        const prepared = file.type.startsWith('image/')
+          ? await prepareImageFile(file)
+          : { blob: file, dataUrl: await new Promise<string>((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = reject; r.readAsDataURL(file); }), mediaType: file.type };
+        const path = `${petId}/${Date.now()}.jpg`;
+        await supabase.storage.from('pet-documents').upload(path, prepared.blob, { contentType: prepared.mediaType || 'image/jpeg', upsert: true });
+        const res = await fetch('/api/parse-pet-document', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: prepared.dataUrl }) });
+        const json = await res.json();
+        await supabase.from('pet_documents').insert({ pet_id: petId, kind: json.kind || 'other', storage_path: path, extracted: json, confirmed: false });
+        setPending(json);
+        if (!json.parsed) setMsg(json.error || 'Could not read document.');
+      } catch (e: any) {
+        setMsg(e.message || 'Upload failed.');
+      }
       setBusy(false);
-      if (!json.parsed) setMsg(json.error || 'Could not read document.');
     };
     input.click();
   };
@@ -210,7 +226,7 @@ function Medical({ petId }: { petId?: string }) {
     setBusy(false);
   };
 
-  const HUBS = [['records','Records'],['labs','Labs'],['history','History'],['ai','AI Health']] as const;
+  const HUBS = [['records', 'Records'], ['labs', 'Labs'], ['history', 'History'], ['ai', 'AI Health']] as const;
   return (
     <>
       <View style={styles.card}>
@@ -242,31 +258,22 @@ function Medical({ petId }: { petId?: string }) {
       {hub === 'records' && (vax.length ? vax.map((v) => (
         <View key={v.id} style={styles.card}>
           <Text style={styles.h2}>{v.brand || v.vaccine}</Text>
-          {v.source === 'ai_extracted' && !v.confirmed ? <Text style={styles.body}>Unconfirmed AI</Text> : <Text style={styles.ok}>On file</Text>}
+          <Text style={styles.ok}>{v.source === 'ai_extracted' && !v.confirmed ? 'Unconfirmed AI' : 'On file'}</Text>
           <Text style={styles.body}>Given {v.administered_on || '—'} · Next {v.next_due_on || '—'}</Text>
         </View>
-      )) : GINA.vaccines.map((v) => (
-        <View key={v.name} style={styles.card}><Text style={styles.h2}>{v.name}</Text><Text style={styles.ok}>{v.valid}</Text></View>
-      )))}
+      )) : <View style={styles.card}><Text style={styles.body}>No vaccine records yet.</Text></View>)}
       {hub === 'labs' && (labs.length ? labs.map((l) => (
         <View key={l.id} style={styles.card}>
           <Text style={styles.h2}>{l.name}</Text>
           <Text style={styles.ok}>{l.value} {l.unit} · {l.flag || ''}</Text>
         </View>
-      )) : GINA.labs.map((l) => (
-        <View key={l.name} style={styles.card}><Text style={styles.h2}>{l.name}</Text><Text style={styles.ok}>{l.result}</Text></View>
-      )))}
+      )) : <View style={styles.card}><Text style={styles.body}>No lab results yet.</Text></View>)}
       {hub === 'history' && (
-        <>
-          {weights.map((w) => (
+        weights.length
+          ? weights.map((w) => (
             <View key={w.id} style={styles.card}><Text style={styles.h2}>{w.weight_lb} lb</Text><Text style={styles.body}>{w.measured_on}</Text></View>
-          ))}
-          <View style={styles.card}>
-            <Text style={styles.kicker}>TELEHEALTH</Text>
-            <Text style={styles.h2}>{GINA.dutch.name}</Text>
-            <TouchableOpacity style={styles.btn} onPress={() => Linking.openURL(GINA.dutch.url)}><Text style={styles.btnTxt}>Open Dutch (they are the vet)</Text></TouchableOpacity>
-          </View>
-        </>
+          ))
+          : <View style={styles.card}><Text style={styles.body}>No weight recorded</Text></View>
       )}
       {hub === 'ai' && (
         <View style={styles.warn}>
@@ -280,7 +287,6 @@ function Medical({ petId }: { petId?: string }) {
             <Text key={i} style={styles.body}>{f.severity}: {f.title} — {f.detail}</Text>
           ))}
           {findings?.disclaimer ? <Text style={styles.body}>{findings.disclaimer}</Text> : null}
-          <TouchableOpacity style={styles.btnGhost}><Text style={styles.btnGhostTxt}>Share with my vet</Text></TouchableOpacity>
         </View>
       )}
     </>
@@ -289,22 +295,11 @@ function Medical({ petId }: { petId?: string }) {
 
 function Invoices() {
   return (
-    <>
-      <Text style={styles.body}>The invoice belongs to the pet. Rescue Army records the line. Payment stays with the clinic, Lemonade, or the pharmacy.</Text>
-      <View style={styles.card}>
-        <Text style={styles.kicker}>PHARMACY</Text>
-        <Text style={styles.h2}>Fill without paying us</Text>
-        <Text style={styles.body}>{GINA.pharmacy.detail}</Text>
-      </View>
-      {GINA.invoices.map((inv) => (
-        <View key={inv.desc} style={styles.card}>
-          <Text style={styles.rowR}>{inv.amount}</Text>
-          <Text style={styles.h2}>{inv.vendor}</Text>
-          <Text style={styles.body}>{inv.desc}</Text>
-          <Text style={styles.body}>{inv.date} · {inv.status}</Text>
-        </View>
-      ))}
-    </>
+    <View style={styles.card}>
+      <Text style={styles.kicker}>INVOICES</Text>
+      <Text style={styles.h2}>None on this pet yet</Text>
+      <Text style={styles.body}>The invoice belongs to the pet. Payment stays with the clinic, insurer, or pharmacy — never Rescue Army.</Text>
+    </View>
   );
 }
 
@@ -318,36 +313,26 @@ const styles = StyleSheet.create({
   tabTxtOn: { color: Colors.white },
   scroll: { padding: 16, paddingBottom: 48, gap: 12 },
   heroBox: {
-    width: '100%',
-    height: 320,
-    borderRadius: 16,
-    backgroundColor: '#1A1F3A',
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: '100%', height: 320, borderRadius: 16, backgroundColor: Colors.navy,
+    overflow: 'hidden', alignItems: 'center', justifyContent: 'center',
   },
   hero: { width: '100%', height: '100%' },
   h1: { fontFamily: Fonts.extrabold, fontSize: FontSizes.xl, color: Colors.navy },
   h2: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.navy, marginTop: 4 },
   sub: { fontFamily: Fonts.regular, fontSize: FontSizes.sm, color: Colors.textSecondary, marginTop: 4 },
   kicker: { fontFamily: Fonts.extrabold, fontSize: 10, color: Colors.coral, letterSpacing: 0.8 },
-  section: { fontFamily: Fonts.extrabold, fontSize: 11, color: Colors.textTertiary, letterSpacing: 0.8, marginTop: 8 },
   body: { fontFamily: Fonts.regular, fontSize: FontSizes.sm, color: Colors.textSecondary, lineHeight: 20, marginTop: 6 },
   stat: { fontFamily: Fonts.extrabold, fontSize: 28, color: Colors.navy, marginTop: 6 },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: { backgroundColor: Colors.tealBg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
   chipTxt: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.tealDark },
   card: { backgroundColor: Colors.white, borderRadius: 14, padding: 14 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
-  rowL: { fontFamily: Fonts.regular, color: Colors.textSecondary, fontSize: FontSizes.sm, flex: 1 },
-  rowR: { fontFamily: Fonts.extrabold, color: Colors.navy, fontSize: FontSizes.md },
   event: { fontFamily: Fonts.regular, fontSize: FontSizes.xs, color: Colors.textTertiary, marginTop: 6 },
   ok: { fontFamily: Fonts.bold, color: Colors.tealDark, marginTop: 4 },
   btn: { backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 12 },
   btnTxt: { color: Colors.white, fontFamily: Fonts.bold },
   btnGhost: { borderWidth: 1, borderColor: Colors.border, borderRadius: 14, paddingVertical: 12, alignItems: 'center', marginTop: 12 },
   btnGhostTxt: { fontFamily: Fonts.bold, color: Colors.navy, fontSize: FontSizes.sm },
-  note: { backgroundColor: Colors.white, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: Colors.border },
   warn: { backgroundColor: Colors.criticalBg, borderRadius: 14, padding: 14, gap: 8 },
   warnTitle: { fontFamily: Fonts.extrabold, color: Colors.critical, fontSize: FontSizes.md },
 });

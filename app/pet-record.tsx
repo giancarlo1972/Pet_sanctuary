@@ -67,6 +67,7 @@ import { extractPdfText } from '@/lib/pdf-text';
 import { SearchablePicker } from '@/components/SearchablePicker';
 import { DateField } from '@/components/DateField';
 import { matchCatalog, vaccineType, durationYearsFromProduct, addYearsLocal, type CatalogRow } from '@/lib/catalog';
+import { SourceBadge } from '@/components/SourceBadge';
 
 function blobTypeFromName(path: string) {
   if (/\.pdf$/i.test(path)) return 'application/pdf';
@@ -186,6 +187,7 @@ interface MedicalRecord {
   title: string | null;
   details: any;
   record_date: string | null;
+  source?: string | null;
 }
 
 interface HistoryEvent {
@@ -210,6 +212,8 @@ interface PetCondition {
   onset_date?: string | null;
   resolved_date?: string | null;
   source_document_id?: string | null;
+  source?: string | null;
+  author_id?: string | null;
 }
 
 interface PetDiet {
@@ -749,7 +753,7 @@ export default function PetRecordScreen() {
         .eq('pet_id', petId)
         .order('administered_on', { ascending: false }),
       supabase.from('medical_records')
-        .select('id, record_type, title, details, record_date')
+        .select('id, record_type, title, details, record_date, source, author_id')
         .eq('pet_id', petId)
         .order('record_date', { ascending: false }),
       supabase.from('pet_history_events')
@@ -757,7 +761,7 @@ export default function PetRecordScreen() {
         .eq('pet_id', petId)
         .order('occurred_on', { ascending: false }),
       supabase.from('pet_conditions')
-        .select('id, pet_id, kind, name, severity, diagnosed_on, resolved_on, notes, is_active, status, onset_date, resolved_date, source_document_id')
+        .select('id, pet_id, kind, name, severity, diagnosed_on, resolved_on, notes, is_active, status, onset_date, resolved_date, source_document_id, source, author_id')
         .eq('pet_id', petId)
         .order('is_active', { ascending: false }),
       supabase.from('pet_diet')
@@ -846,7 +850,7 @@ export default function PetRecordScreen() {
       setColors((c2 as ColorOption[]) || []);
     }
     const [wRes, labRes, devRes, aiRes, deviceRes, chipRes, examRes, medsRes, diagRes, vitRes] = await Promise.all([
-      supabase.from('weight_entries').select('weight_lb, measured_on, source, created_at').eq('pet_id', petId).order('measured_on', { ascending: false }).limit(40),
+      supabase.from('weight_entries').select('weight_lb, measured_on, source, created_at, author_id').eq('pet_id', petId).order('measured_on', { ascending: false }).limit(40),
       supabase.from('lab_results').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(400),
       supabase.from('device_readings').select('*').eq('pet_id', petId).order('recorded_at', { ascending: false }).limit(80),
       supabase.from('ai_health_analyses').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(20),
@@ -979,6 +983,8 @@ export default function PetRecordScreen() {
       resolved_on: conditionForm.is_active ? null : (conditionForm.resolved_on || null),
       notes: conditionForm.notes.trim() || null,
       is_active: conditionForm.is_active,
+      source: 'owner',
+      author_id: user.id,
     };
     if (editingCondition) {
       const { error } = await supabase.from('pet_conditions').update(payload).eq('id', editingCondition.id);
@@ -1092,6 +1098,13 @@ export default function PetRecordScreen() {
       })
       .eq('id', petId);
     if (petErr) { console.error('[pet-record] weight update:', petErr); showBanner(petErr.message || 'Could not save weight.'); setSavingWeight(false); return; }
+    await supabase.from('weight_entries').insert({
+      pet_id: petId,
+      weight_lb: weightUnitLocal === 'lb' ? num : kgToLb(kg),
+      measured_on: today,
+      source: 'owner',
+      author_id: user.id,
+    });
     await supabase.from('pet_care_events').insert({
       pet_id: petId,
       event_type: 'weight',
@@ -1617,6 +1630,8 @@ export default function PetRecordScreen() {
           vet_name: v.vet_name || null,
           vet_clinic: v.clinic_name || null,
           recorded_by: user.id,
+          author_id: user.id,
+          source: 'ai_extracted',
           superseded: false,
         };
         console.log('[apply] vax payload', payload);
@@ -1669,7 +1684,8 @@ export default function PetRecordScreen() {
           collected_on: row.collected_on,
           ref_low: row.ref_low ?? null,
           ref_high: row.ref_high ?? null,
-          source: 'ai',
+          source: 'ai_extracted',
+          author_id: user.id,
         };
         let res = await supabase.from('lab_results').insert(full).select('id').maybeSingle();
         if (res.error) {
@@ -1695,7 +1711,7 @@ export default function PetRecordScreen() {
         const key = `${measured}|${Math.round(lb * 10) / 10}`;
         if (seenWeight.has(key)) continue;
         seenWeight.add(key);
-        const payload: any = { pet_id: petId, weight_lb: lb, measured_on: measured || new Date().toISOString().slice(0, 10) };
+        const payload: any = { pet_id: petId, weight_lb: lb, measured_on: measured || new Date().toISOString().slice(0, 10), source: 'ai_extracted', author_id: user.id };
         console.log('[apply] weight payload', payload);
         let res = await supabase.from('weight_entries').insert(payload);
         if (res.error) {
@@ -1730,6 +1746,8 @@ export default function PetRecordScreen() {
           title: visit.title || 'Visit',
           details: visit.notes || null,
           record_date: visit.occurred_on || new Date().toISOString().slice(0, 10),
+          source: 'ai_extracted',
+          author_id: user.id,
         };
         console.log('[apply] visit payload', visitPayload);
         const vRes = await supabase.from('medical_records').insert(visitPayload).select('id').maybeSingle();
@@ -1771,6 +1789,8 @@ export default function PetRecordScreen() {
           vitals: ex.vitals || {},
           systems: ex.systems || [],
           source_document_id: sourceDocId,
+          source: 'ai_extracted',
+          author_id: user.id,
         };
         const { error, data } = await supabase.from('pet_exams').insert(payload).select('id').maybeSingle();
         if (error) {
@@ -1793,7 +1813,7 @@ export default function PetRecordScreen() {
         const { error } = await supabase.from('medications_given').insert({
           pet_id: petId, name: m.name, dose: m.dose || null, route: m.route || null,
           administered_on: m.given_on || m.administered_on || null, status: m.status || 'completed',
-          source_document_id: sourceDocId,
+          source_document_id: sourceDocId, source: 'ai_extracted', author_id: user.id,
         });
         if (error) console.log('[apply] med fail', m.name, error.message);
       }
@@ -1829,6 +1849,8 @@ export default function PetRecordScreen() {
             resolved_date: status === 'resolved' ? (c.resolved_date || new Date().toISOString().slice(0, 10)) : existing.resolved_date,
             resolved_on: status === 'resolved' ? (c.resolved_date || new Date().toISOString().slice(0, 10)) : existing.resolved_on,
             source_document_id: sourceDocId,
+            source: 'ai_extracted',
+            author_id: user.id,
           }).eq('id', existing.id));
         } else {
           await run(`Condition "${c.name}"`, () => supabase.from('pet_conditions').insert({
@@ -1842,6 +1864,8 @@ export default function PetRecordScreen() {
             diagnosed_on: c.onset_date || null,
             resolved_date: c.resolved_date || null,
             source_document_id: sourceDocId,
+            source: 'ai_extracted',
+            author_id: user.id,
           }));
         }
       }
@@ -2618,6 +2642,7 @@ export default function PetRecordScreen() {
                       <View style={[styles.condBadge, { backgroundColor: getCondBg(c.kind) }]}>
                         <Text style={[styles.condBadgeText, { color: getCondText(c.kind) }]}>{titleCase(c.kind)}</Text>
                       </View>
+                      <SourceBadge source={c.source} />
                       {c.severity && c.severity !== 'none' && (
                         <View style={[styles.sevPill, { backgroundColor: getSevBg(c.severity) }]}>
                           <Text style={[styles.sevText, { color: getSevText(c.severity) }]}>{titleCase(c.severity)}</Text>
@@ -2645,8 +2670,11 @@ export default function PetRecordScreen() {
                   <>
                     <Text style={[styles.sectionLabel, { marginTop: 12 }]}>Resolved</Text>
                     {resolvedConditions.map((c) => (
-                      <View key={c.id} style={[styles.condCard, { opacity: 0.65 }]}>
-                        <Text style={styles.condName}>{c.name}</Text>
+                      <View style={[styles.condCard, { opacity: 0.65 }]}>
+                        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                          <Text style={styles.condName}>{c.name}</Text>
+                          <SourceBadge source={c.source} />
+                        </View>
                         <Text style={styles.condDate}>Resolved: {formatDate(c.resolved_on)}</Text>
                         {canEdit && (
                           <View style={styles.condActions}>
@@ -2694,6 +2722,7 @@ export default function PetRecordScreen() {
                   ]}>
                     <View style={styles.vaxTopRow}>
                       <Text style={styles.vaxName}>{type}</Text>
+                      <SourceBadge source={current.source} />
                       {status === 'overdue' && (
                         <View style={[styles.vaxStatusPill, { backgroundColor: Colors.criticalBg }]}>
                           <CircleAlert color={Colors.critical} size={12} />
@@ -2876,6 +2905,7 @@ export default function PetRecordScreen() {
                     <View style={styles.medBadge}>
                       <Text style={styles.medBadgeText}>{titleCase(rec.record_type) || 'Record'}</Text>
                     </View>
+                    <SourceBadge source={rec.source} />
                     <Text style={styles.medDate}>{formatDate(rec.record_date)}</Text>
                   </View>
                   {rec.title ? <Text style={styles.medTitle}>{rec.title}</Text> : null}

@@ -279,6 +279,8 @@ export function VetVaccinationModal({
         notes: form.notes.trim() || null,
         document_url: certificateUrl,
         recorded_by: userId,
+        author_id: userId,
+        source: 'owner',
         superseded: false,
       };
       const { error } = await supabase.from('pet_vaccinations').update(payload).eq('id', editing.id);
@@ -311,6 +313,8 @@ export function VetVaccinationModal({
           notes: form.notes.trim() || null,
           document_url: certificateUrl,
           recorded_by: userId,
+          author_id: userId,
+          source: 'owner',
           superseded: false,
         });
         if (error) { console.error('[vax-modal] insert:', error); setBanner({ message: error.message || 'Could not add vaccination.', kind: 'error' }); setSaving(false); return; }

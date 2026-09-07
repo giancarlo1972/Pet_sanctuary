@@ -4,6 +4,7 @@ import { Colors } from '@/constants/Colors';
 import { Fonts } from '@/constants/Fonts';
 import { AreaChart, HealthRing, RefBand } from '@/components/MedicalCharts';
 import { LabSparkline as MiniSpark } from '@/components/PetCharts';
+import { SourceBadge } from '@/components/SourceBadge';
 
 export const EXAM_PILLS = [
   'Oral-Nasal-Throat', 'Ears', 'Eyes', 'Cardiovascular', 'Respiratory', 'Abdominal',
@@ -42,7 +43,7 @@ export default function MedicalDashboard(props: {
   vitals: { recorded_at: string; temp_f?: number | null; hr?: number | null; rr?: number | null; weight_lb?: number | null; bcs?: number | null }[];
   labRows: any[];
   labCatalog: { name: string; unit?: string | null; ref_low?: number | null; ref_high?: number | null }[];
-  meds: { id: string; name: string; dose?: string | null; route?: string | null; administered_on?: string | null; status?: string | null }[];
+  meds: { id: string; name: string; dose?: string | null; route?: string | null; administered_on?: string | null; status?: string | null; source?: string | null }[];
   diagnostics: { id: string; kind: string; name: string; result?: string | null; taken_on?: string | null }[];
   aiFindings: any;
   aiRuns: any[];
@@ -103,6 +104,7 @@ export default function MedicalDashboard(props: {
         first: sorted[0]?.collected_on || sorted[0]?.created_at,
         last: cur.collected_on || cur.created_at,
         abnormal: flag === 'high' || flag === 'low' || flag === 'abnormal',
+        source: cur.source,
       };
     }).sort((a, b) => Number(b.abnormal) - Number(a.abnormal) || a.label.localeCompare(b.label));
   }, [props.labRows, props.labCatalog]);
@@ -233,8 +235,9 @@ export default function MedicalDashboard(props: {
           </TouchableOpacity>
           {labOpen[g] !== false ? grouped[g].map((it) => (
             <View key={it.key} style={styles.labRow}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
                 <Text style={styles.labName}>{it.label}</Text>
+                <SourceBadge source={it.source} />
                 <Text style={[styles.labVal, { color: it.abnormal ? Colors.coral : Colors.navy }]}>
                   {it.value ?? '—'}{it.unit ? ` ${it.unit}` : ''}
                   {it.delta != null ? `  ${it.delta > 0 ? '▲' : it.delta < 0 ? '▼' : '•'}${Math.abs(Math.round(it.delta * 100) / 100)}` : ''}
@@ -256,7 +259,10 @@ export default function MedicalDashboard(props: {
         {props.meds.length === 0 ? <Text style={styles.foot}>No medications recorded.</Text> : props.meds.map((m) => (
           <View key={m.id} style={styles.medRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.labName}>{m.name}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Text style={styles.labName}>{m.name}</Text>
+                <SourceBadge source={m.source} />
+              </View>
               <Text style={styles.foot}>{[m.dose, m.route].filter(Boolean).join(' · ') || '—'}</Text>
             </View>
             <View style={{ alignItems: 'flex-end' }}>

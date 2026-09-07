@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import { isPlatformAdmin } from '@/lib/admin-access';
 import { SUPPORT_EMAIL, supportMailto } from '@/lib/contact';
+import { Page } from '@/components/Page';
 
 type QueueItem = {
   id: string;
@@ -26,7 +27,7 @@ export default function AdminScreen() {
   const wide = width >= 900;
   const [role, setRole] = useState<string | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [orgs, setOrgs] = useState<{ id: string; name: string; status: string | null; ein: string | null }[]>([]);
+  const [orgs, setOrgs] = useState<{ id: string; name: string; status: string | null }[]>([]);
   const [allOrgs, setAllOrgs] = useState<any[]>([]);
   const [editOrg, setEditOrg] = useState<any | null>(null);
   const [editName, setEditName] = useState('');
@@ -52,18 +53,20 @@ export default function AdminScreen() {
       .limit(40);
     setQueue((q as QueueItem[]) ?? []);
 
-    const { data: orgRows } = await supabase
+    const { data: orgRows, error: orgErr } = await supabase
       .from('organizations')
-      .select('id, name, status, ein')
-      .in('status', ['pending', 'submitted', 'review'])
+      .select('id, name, org_type, status, logo_url')
+      .in('status', ['pending', 'submitted', 'review', 'pending_review'])
       .order('name')
       .limit(40);
+    if (orgErr) setError(orgErr.message);
     setOrgs(orgRows ?? []);
-    const { data: allRows } = await supabase
+    const { data: allRows, error: allErr } = await supabase
       .from('organizations')
-      .select('id, name, org_type, status, website, contact_email, logo_url, ein')
+      .select('id, name, org_type, status, website, contact_email, logo_url')
       .order('name')
       .limit(80);
+    if (allErr) setError((orgErr?.message ? orgErr.message + ' · ' : '') + allErr.message);
     setAllOrgs(allRows ?? []);
     setLoading(false);
   }, [user]);
@@ -166,7 +169,8 @@ export default function AdminScreen() {
 
   return (
     <SafeAreaView style={styles.wrap} edges={['top']}>
-      <AppHeader title="Admin" showBack />
+      <AppHeader title="Admin" showBack maxWidth={880} />
+      <Page scroll={false} wideMax={880}>
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.col}>
           <View style={styles.hero}>
@@ -184,7 +188,7 @@ export default function AdminScreen() {
           {error ? <Text style={styles.err}>{error}</Text> : null}
 
           <Section title="Organizations · All entities">
-            {allOrgs.length === 0 ? <Empty /> : null}
+            {allOrgs.length === 0 ? <EmptyOrgs /> : null}
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
             {allOrgs.map((o) => (
               <View key={o.id} style={{ width: wide ? '48.5%' : '100%' }}>
@@ -204,7 +208,11 @@ export default function AdminScreen() {
                 ) : (
                   <TouchableOpacity onPress={() => assignAdmin(o.id)}><Text style={styles.reassign}>Assign admin</Text></TouchableOpacity>
                 )}
-                <TouchableOpacity onPress={() => { setEditOrg(o); setEditName(o.name || ''); }}><Text style={styles.meta}>⋮</Text></TouchableOpacity>
+                <TouchableOpacity onPress={async () => {
+                  setEditOrg(o); setEditName(o.name || '');
+                  const { data: priv } = await supabase.from('organization_private').select('ein').eq('organization_id', o.id).maybeSingle();
+                  setEditOrg({ ...o, ein: priv?.ein || null });
+                }}><Text style={styles.meta}>⋮</Text></TouchableOpacity>
               </View>
               </View>
             ))}
@@ -214,7 +222,7 @@ export default function AdminScreen() {
           <Section title="Org verifications">
             {orgs.length === 0 && orgsQ.length === 0 ? <Empty /> : null}
             {orgs.map((o) => (
-              <Card key={o.id} title={o.name} meta={maskEin(o.ein)} pill={o.ein ? 'EIN on file' : 'Missing EIN'} pillOk={Boolean(o.ein)}
+              <Card key={o.id} title={o.name} meta={o.org_type || 'Organization'} pill={o.status || 'pending'} pillOk={(o.status || '') === 'approved'}
                 busy={busyId === o.id} okLabel="Verify org" onOk={() => decideOrg(o.id, 'approved')} onNo={() => decideOrg(o.id, 'rejected')} />
             ))}
             {orgsQ.map((q) => (
@@ -274,12 +282,16 @@ export default function AdminScreen() {
           </View>
         </View>
       ) : null}
+      </Page>
     </SafeAreaView>
   );
 }
 
 function Empty() {
   return <View style={styles.empty}><Text style={styles.muted}>Queue clear — nothing pending.</Text></View>;
+}
+function EmptyOrgs() {
+  return <View style={styles.empty}><Text style={styles.muted}>No organizations yet</Text></View>;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -319,7 +331,7 @@ const styles = StyleSheet.create({
   entityAvTxt: { color: Colors.white, fontFamily: Fonts.bold },
   reassign: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy },
   scroll: { paddingBottom: 48 },
-  col: { width: '100%', maxWidth: 720, alignSelf: 'center', padding: 24, gap: 18 },
+  col: { width: '100%', maxWidth: 880, alignSelf: 'center', padding: 16, gap: 18 },
   hero: { backgroundColor: Colors.navy, borderRadius: 18, padding: 18 },
   heroTitle: { fontFamily: Fonts.extrabold, fontSize: 18, color: Colors.white },
   heroSub: { fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 2 },

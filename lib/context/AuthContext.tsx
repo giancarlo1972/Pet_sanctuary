@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
+import { Platform } from 'react-native';
 import { supabase } from '@/lib/supabase';
 
 interface AuthContextValue {
@@ -38,7 +39,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: 'local' });
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.location.assign('/');
+    }
   }, []);
 
   return (

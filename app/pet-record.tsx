@@ -60,6 +60,23 @@ import { useAuth } from '@/lib/context/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 
+function blobTypeFromName(path: string) {
+  if (/\.pdf$/i.test(path)) return 'application/pdf';
+  if (/\.png$/i.test(path)) return 'image/png';
+  return 'image/jpeg';
+}
+
+async function fileToDataUrl(uri: string): Promise<string> {
+  const resp = await fetch(uri);
+  const blob = await resp.blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
 type Tab = 'overview' | 'insurance' | 'medical';
 type MedicalHub = 'records' | 'labs' | 'history' | 'ai';
 
@@ -426,7 +443,11 @@ export default function PetRecordScreen() {
     data: ExtractedData;
     extractionId: string;
     vaxDuplicates: Set<number>;
+    conditions: { name: string; kind?: string; notes?: string }[];
+    visitsCount: number;
+    labsCount: number;
   } | null>(null);
+  const parsedAttempted = useRef<Set<string>>(new Set());
   const [editableVax, setEditableVax] = useState<ExtractedVaccination[]>([]);
   const [editableLabs, setEditableLabs] = useState<ExtractedLabPanel[]>([]);
   const [editableWeight, setEditableWeight] = useState<ExtractedWeight>({ value: null, unit: null, measured_on: null });
@@ -581,6 +602,16 @@ export default function PetRecordScreen() {
   }, [petId, user]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!canEdit) return;
+    const pending = documents.filter((d) => {
+      const st = d.ai_status;
+      if (parsedAttempted.current.has(d.id)) return false;
+      return Boolean(d.file_path) && st !== 'ready' && st !== 'confirmed' && st !== 'parsed';
+    });
+    pending.slice(0, 4).forEach((d) => triggerExtraction(d.id, { path: d.file_path }));
+  }, [documents, canEdit]);
 
   // === Vaccination handlers ===
   const openAddVax = () => {
@@ -969,90 +1000,141 @@ export default function PetRecordScreen() {
       clinic: docForm.clinic.trim() || null,
       notes: docForm.notes.trim() || null,
       uploaded_by: user.id,
+      ai_status: 'processing',
     }).select().single();
     if (insErr) { console.error('[pet-record] doc insert:', insErr); showBanner(insErr.message || 'Could not save document.'); setSavingDoc(false); return; }
-    setSavingDoc(false);
-    if (!docForm.title.trim()) {
-      setDocModalVisible(false);
-      showBanner('Untitled upload — confirm the title and details in Documents.');
-    } else {
-      setDocModalVisible(false);
+    if (docData?.id) {
+      await supabase.from('pet_documents').update({ ai_status: 'processing' }).eq('id', docData.id);
     }
+    setSavingDoc(false);
+    setDocModalVisible(false);
     load();
-
-    // Trigger AI extraction for vet record types
-    const vetDocKinds = ['vaccination_record', 'medical_record', 'lab_result'];
-    if (vetDocKinds.includes(docForm.kind) && docData?.id) {
-      triggerExtraction(docData.id);
+    if (docData?.id) {
+      const dataUrl = await fileToDataUrl(docFile.uri).catch(() => null);
+      triggerExtraction(docData.id, {
+        imageBase64: dataUrl,
+        mimeType: (docFile as any).mimeType || blobTypeFromName(filePath),
+        path: filePath,
+      });
     }
   };
 
-  const triggerExtraction = async (documentId: string) => {
+  const openConfirmFromParse = (documentId: string, parsed: any) => {
+    const vax = (parsed.vaccinations || []).map((v: any) => ({
+      vaccine: v.name || v.vaccine || '',
+      brand: v.brand || null,
+      dose: v.dose || null,
+      administered_on: v.date || v.given_on || v.administered_on || null,
+      next_due_on: v.valid_until || v.expires_on || v.next_due_on || null,
+      duration_years: null,
+      manufacturer: v.brand || v.manufacturer || null,
+      lot_number: v.lot || v.lot_number || null,
+      lot_expires_on: null,
+      injection_site: null,
+      vaccine_type: null,
+      tag_number: null,
+      vet_name: null,
+      vet_license: null,
+      clinic_name: v.clinic || parsed.clinic || null,
+      reactions: v.reactions || null,
+    }));
+    const labs = (parsed.labs || []).map((l: any) => ({
+      analyte: l.analyte || l.name || '',
+      value_num: typeof l.value === 'number' ? l.value : (parseFloat(l.value) || null),
+      value_text: l.value != null ? String(l.value) : null,
+      unit: l.unit || null,
+      ref_low: null,
+      ref_high: null,
+      flag: l.flag || null,
+    }));
+    const visits = (parsed.visits || []).map((v: any) => ({
+      event_type: 'visit',
+      occurred_on: v.date || null,
+      title: v.reason || v.clinic || 'Visit',
+      notes: v.summary || null,
+      cost_cents: null,
+    }));
+    const vaxDuplicates = new Set<number>();
+    vax.forEach((v: any, i: number) => {
+      if (!v.vaccine || !v.administered_on) return;
+      if (vaccinations.some((e) => e.vaccine === v.vaccine && e.administered_on === v.administered_on)) vaxDuplicates.add(i);
+    });
+    const wt = parsed.weight && parsed.weight.value != null
+      ? { value: Number(parsed.weight.value), unit: parsed.weight.unit || 'lb', measured_on: parsed.weight.measured_on || parsed.date || null }
+      : { value: null, unit: null, measured_on: null };
+    setEditableVax(vax);
+    setEditableLabs(labs.length ? [{ panel_name: 'Labs', collected_on: parsed.date || null, clinic_name: parsed.clinic || null, vet_name: null, results: labs }] : []);
+    setEditableWeight(wt);
+    setEditableProcedures(visits);
+    setExtractionReview({
+      documentId,
+      data: { vaccinations: vax, lab_panels: [], weight: wt, procedures: visits, identity: { microchip: null, date_of_birth: null, sex: null, breed: null, colors: null } },
+      extractionId: documentId,
+      vaxDuplicates,
+      conditions: parsed.conditions || [],
+      visitsCount: visits.length,
+      labsCount: labs.length,
+    });
+  };
+
+  const triggerExtraction = async (documentId: string, extra?: { imageBase64?: string | null; mimeType?: string; path?: string }) => {
     if (!user) return;
+    parsedAttempted.current.add(documentId);
     setExtracting(true);
+    await supabase.from('pet_documents').update({ ai_status: 'processing' }).eq('id', documentId);
+    setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'processing' } : d));
     try {
-      const { data: session } = await supabase.auth.getSession();
-      const resp = await fetch(
-        `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/extract-vet-record`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.session?.access_token}`,
-            'apikey': process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '',
-          },
-          body: JSON.stringify({ document_id: documentId }),
+      let imageBase64 = extra?.imageBase64 || null;
+      let path = extra?.path;
+      if (!imageBase64) {
+        const { data: row } = await supabase.from('pet_documents').select('*').eq('id', documentId).maybeSingle();
+        path = path || row?.file_path || row?.storage_path;
+        if (path) {
+          const { data: signed, error: signErr } = await supabase.storage.from('pet-documents').createSignedUrl(path, 120);
+          console.log('[parse-pet-document] signed', documentId, signErr?.message || Boolean(signed?.signedUrl));
+          if (signed?.signedUrl) {
+            imageBase64 = await fileToDataUrl(signed.signedUrl).catch((e) => { console.log('[parse-pet-document] fileToDataUrl', e); return null; });
+          }
         }
-      );
-      const result = await resp.json();
-      if (!resp.ok) {
-        console.error('[pet-record] extraction failed:', result.error);
-        showBanner(result.error || 'AI extraction failed. The document was saved — you can enter details manually.', 'info');
-        setExtracting(false);
-        return;
       }
-
-      // Fetch the extraction record to get the ID
-      const { data: extData } = await supabase
-        .from('document_extractions')
-        .select('id, extracted')
-        .eq('document_id', documentId)
-        .maybeSingle();
-
-      if (!extData || !extData.extracted || (extData.extracted as any) === '{}') {
-        showBanner('AI could not extract data from this document. You can enter details manually.', 'info');
-        setExtracting(false);
-        return;
-      }
-
-      const extracted = extData.extracted as ExtractedData;
-
-      // Check for vaccination duplicates
-      const vaxDuplicates = new Set<number>();
-      for (let i = 0; i < (extracted.vaccinations || []).length; i++) {
-        const v = extracted.vaccinations[i];
-        if (!v.vaccine || !v.administered_on) continue;
-        const exists = vaccinations.some(
-          (existing) => existing.vaccine === v.vaccine && existing.administered_on === v.administered_on
-        );
-        if (exists) vaxDuplicates.add(i);
-      }
-
-      // Populate editable state
-      setEditableVax((extracted.vaccinations || []).map((v) => ({ ...v })));
-      setEditableLabs((extracted.lab_panels || []).map((p) => ({ ...p, results: (p.results || []).map((r) => ({ ...r })) })));
-      setEditableWeight(extracted.weight || { value: null, unit: null, measured_on: null });
-      setEditableProcedures((extracted.procedures || []).map((p) => ({ ...p })));
-
-      setExtractionReview({
-        documentId,
-        data: extracted,
-        extractionId: extData.id,
-        vaxDuplicates,
+      const payload = { document_id: documentId, imageBase64, mimeType: extra?.mimeType, path };
+      console.log('[parse-pet-document] POST /api/parse-pet-document', { documentId, hasImage: Boolean(imageBase64), path });
+      const resp = await fetch('/api/parse-pet-document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
-    } catch (err) {
-      console.error('[pet-record] extraction error:', err);
-      showBanner('AI extraction failed. The document was saved — you can enter details manually.', 'info');
+      const result = await resp.json().catch(() => ({ parsed: false, error: 'bad json' }));
+      console.log('[parse-pet-document] response', resp.status, {
+        parsed: result.parsed,
+        error: result.error,
+        vax: result.vaccinations?.length,
+        visits: result.visits?.length,
+        labs: result.labs?.length,
+      });
+      if (!resp.ok || !result.parsed) {
+        const msg = result.error || "AI couldn't read this — retry or add manually";
+        await supabase.from('pet_documents').update({ ai_status: 'failed', ai_summary: { error: msg } }).eq('id', documentId);
+        setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'failed', ai_summary: { error: msg } } : d));
+        showBanner("AI couldn't read this — retry or add manually", 'info');
+        setExtracting(false);
+        return;
+      }
+      const title = result.title || null;
+      await supabase.from('pet_documents').update({
+        ai_status: 'ready',
+        ai_summary: result,
+        title: title || undefined,
+        clinic: result.clinic || undefined,
+        taken_on: result.date || undefined,
+      }).eq('id', documentId);
+      setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'ready', ai_summary: result, title: title || d.title, clinic: result.clinic || d.clinic } : d));
+      openConfirmFromParse(documentId, result);
+    } catch (err: any) {
+      console.error('[parse-pet-document] extraction error:', err);
+      await supabase.from('pet_documents').update({ ai_status: 'failed', ai_summary: { error: String(err) } }).eq('id', documentId);
+      setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'failed' } : d));
+      showBanner("AI couldn't read this — retry or add manually", 'info');
     }
     setExtracting(false);
   };
@@ -1164,7 +1246,49 @@ export default function PetRecordScreen() {
         else appliedCount++;
       }
 
-      // Mark extraction as applied
+      for (const visit of editableProcedures) {
+        const { error } = await supabase.from('medical_records').insert({
+          pet_id: petId,
+          record_type: visit.event_type || 'visit',
+          title: visit.title || 'Visit',
+          details: visit.notes || null,
+          record_date: visit.occurred_on || new Date().toISOString().slice(0, 10),
+        });
+        if (error) console.error('[pet-record] visit insert', error);
+        else appliedCount++;
+      }
+      for (const c of extractionReview.conditions || []) {
+        if (!c.name) continue;
+        const { error } = await supabase.from('pet_conditions').insert({
+          pet_id: petId, kind: c.kind || 'condition', name: c.name, notes: c.notes || null, is_active: true,
+        });
+        if (error) console.error('[pet-record] condition insert', error);
+        else appliedCount++;
+      }
+      for (const panel of editableLabs) {
+        for (const result of panel.results || []) {
+          if (!result.analyte) continue;
+          const { error } = await supabase.from('lab_results').insert({
+            pet_id: petId,
+            name: result.analyte,
+            value: result.value_text || (result.value_num != null ? String(result.value_num) : null),
+            unit: result.unit,
+            flag: result.flag,
+            collected_on: panel.collected_on,
+            source: 'ai_extracted',
+            confirmed: true,
+          });
+          if (error) console.error('[pet-record] lab_results insert', error);
+        }
+      }
+      if (editableWeight.value != null) {
+        const lb = (editableWeight.unit || 'lb').toLowerCase() === 'kg' ? editableWeight.value * 2.20462 : editableWeight.value;
+        const { error } = await supabase.from('weight_entries').insert({
+          pet_id: petId, weight_lb: lb, measured_on: editableWeight.measured_on || new Date().toISOString().slice(0, 10), source: 'ai_extracted',
+        });
+        if (error) console.error('[pet-record] weight_entries insert', error);
+      }
+      await supabase.from('pet_documents').update({ ai_status: 'confirmed' }).eq('id', sourceDocId);
       await supabase.from('document_extractions').update({
         status: 'applied',
         reviewed_by: user.id,
@@ -1733,27 +1857,36 @@ export default function PetRecordScreen() {
                 const date = doc.taken_on || ai.date || ai.taken_on || null;
                 const clinic = doc.clinic || ai.clinic || ai.clinic_name || null;
                 const kindLabel = DOCUMENT_KINDS.find((d) => d.key === doc.kind)?.label || titleCase(doc.kind);
-                const untitled = !title;
+                const status = doc.ai_status || (ai.error ? 'failed' : null);
                 return (
                 <View key={doc.id} style={styles.docCard}>
-                  <TouchableOpacity style={styles.docMain} onPress={() => untitled && canEdit ? openAddDoc() : openDocUrl(doc)} activeOpacity={0.85}>
+                  <TouchableOpacity style={styles.docMain} onPress={() => {
+                    if (status === 'ready' && canEdit) openConfirmFromParse(doc.id, ai);
+                    else openDocUrl(doc);
+                  }} activeOpacity={0.85}>
                     <View style={styles.docIcon}>
-                      <FileText color={Colors.navy} size={18} />
+                      {status === 'processing' ? <ActivityIndicator color={Colors.navy} size="small" /> : <FileText color={Colors.navy} size={18} />}
                     </View>
                     <View style={styles.docInfo}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <Text style={styles.docTitle}>{title || 'Untitled — confirm'}</Text>
+                        <Text style={styles.docTitle}>
+                          {status === 'processing' ? 'Reading with AI…' : status === 'failed' ? "AI couldn't read this — retry or add manually" : (title || kindLabel)}
+                        </Text>
                         <View style={styles.docTypePill}><Text style={styles.docTypePillTxt}>{kindLabel}</Text></View>
                       </View>
                       {date ? <Text style={styles.docDate}>{formatDate(String(date))}</Text> : null}
                       {clinic ? <Text style={styles.docClinic}>{String(clinic)}</Text> : null}
                     </View>
                   </TouchableOpacity>
-                  {canEdit && (
+                  {canEdit && status === 'failed' ? (
+                    <TouchableOpacity style={styles.docDeleteBtn} onPress={() => triggerExtraction(doc.id, { path: doc.file_path })} activeOpacity={0.85}>
+                      <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Retry</Text>
+                    </TouchableOpacity>
+                  ) : canEdit ? (
                     <TouchableOpacity style={styles.docDeleteBtn} onPress={() => deleteDoc(doc)} activeOpacity={0.85}>
                       <Trash2 color={Colors.critical} size={14} />
                     </TouchableOpacity>
-                  )}
+                  ) : null}
                 </View>
                 );
               })
@@ -2196,10 +2329,8 @@ export default function PetRecordScreen() {
                 </View>
 
                 <Text style={styles.extractionSummary}>
-                  We found {editableVax.length} vaccination{editableVax.length !== 1 ? 's' : ''},
-                  {' '}{editableLabs.length} lab panel{editableLabs.length !== 1 ? 's' : ''}
-                  {editableWeight.value != null ? ' and a weight' : ''}
-                  {' '}— check these before saving.
+                  AI found {editableVax.length} vaccination{editableVax.length !== 1 ? 's' : ''}, {extractionReview.visitsCount} visit{extractionReview.visitsCount !== 1 ? 's' : ''}, {extractionReview.labsCount} lab value{extractionReview.labsCount !== 1 ? 's' : ''}
+                  {editableWeight.value != null ? ' and a weight' : ''} — confirm to add them to the record.
                 </Text>
 
                 {/* Vaccinations */}
@@ -2288,7 +2419,7 @@ export default function PetRecordScreen() {
                 )}
 
                 <TouchableOpacity style={[styles.modalSubmitBtn, applyingExtraction && styles.btnDisabled]} onPress={applyExtraction} disabled={applyingExtraction} activeOpacity={0.85}>
-                  {applyingExtraction ? <ActivityIndicator size="small" color={Colors.white} /> : <Text style={styles.modalSubmitText}>Save Confirmed Items</Text>}
+                  {applyingExtraction ? <ActivityIndicator size="small" color={Colors.white} /> : <Text style={styles.modalSubmitText}>Confirm</Text>}
                 </TouchableOpacity>
               </View>
             </ScrollView>

@@ -1,10 +1,6 @@
-
 function decodedBytes(b64) {
   const raw = String(b64 || '').replace(/^data:[^;]+;base64,/, '');
   return Math.floor(raw.length * 0.75);
-}
-function tooLarge(b64, max) {
-  return decodedBytes(b64) > max;
 }
 
 function getKey(env) {
@@ -16,18 +12,27 @@ function getKey(env) {
   return null;
 }
 
-const PROMPT = `Extract structured veterinary data from this document (vaccine record, lab, invoice, or insurance letter).
-Return JSON only:
+function getSupabase(env) {
+  const url = env?.SUPABASE_URL || env?.EXPO_PUBLIC_SUPABASE_URL;
+  const key = env?.SUPABASE_SERVICE_ROLE_KEY || env?.SUPABASE_SERVICE_KEY;
+  return { url, key };
+}
+
+const PROMPT = `Extract structured veterinary data from this document (vaccine card, lab report, invoice, wellness visit, or insurance letter).
+Return JSON only, no markdown:
 {
-  "kind": "vaccination|lab|invoice|insurance|other",
+  "title": "short document title",
+  "kind": "vaccination|lab|visit|invoice|insurance|other",
   "clinic": "string or null",
   "date": "YYYY-MM-DD or null",
-  "vaccinations": [{"brand": "", "name": "", "dose": "", "given_on": "", "expires_on": ""}],
-  "labs": [{"name": "", "value": "", "unit": "", "flag": "normal|high|low|unknown"}],
-  "invoices": [{"description": "", "amount": null, "currency": "USD"}],
-  "notes": "short"
+  "vaccinations": [{"brand": null, "name": "", "lot": null, "dose": null, "date": "YYYY-MM-DD or null", "valid_until": "YYYY-MM-DD or null", "reactions": null, "clinic": null}],
+  "conditions": [{"name": "", "kind": "condition|allergy", "notes": null}],
+  "medications": [{"name": "", "dose": null, "given_on": null}],
+  "visits": [{"clinic": null, "date": "YYYY-MM-DD or null", "reason": null, "summary": null}],
+  "labs": [{"analyte": "", "value": null, "unit": null, "flag": "normal|high|low|unknown", "collected_on": null}],
+  "weight": {"value": null, "unit": "lb|kg", "measured_on": null}
 }
-If unreadable, empty arrays. Flag every extracted row as AI until a human confirms.`;
+Extract only what is printed. Empty arrays if unreadable. Never invent dates.`;
 
 const MODELS = ['claude-haiku-4-5', 'claude-3-5-haiku-latest', 'claude-3-5-sonnet-20241022'];
 const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
@@ -36,39 +41,182 @@ export async function onRequestOptions() {
   return new Response(null, { headers: { ...headers, 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' } });
 }
 
+async function fetchDocBytes(env, path) {
+  const { url, key } = getSupabase(env);
+  if (!url || !key || !path) return null;
+  const sign = await fetch(`${url}/storage/v1/object/sign/pet-documents/${encodeURI(path)}`, {
+    method: 'POST',
+    headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expiresIn: 120 }),
+  });
+  const signed = await sign.json();
+  const signedUrl = signed?.signedURL || signed?.signedUrl;
+  if (!signedUrl) {
+    console.log('[parse-pet-document] sign failed', path, JSON.stringify(signed).slice(0, 200));
+    return null;
+  }
+  const abs = signedUrl.startsWith('http') ? signedUrl : `${url}${signedUrl}`;
+  const file = await fetch(abs);
+  if (!file.ok) {
+    console.log('[parse-pet-document] download failed', file.status);
+    return null;
+  }
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return { b64: btoa(binary), isPdf: /\.pdf$/i.test(path), byteLength: bytes.length };
+}
+
+async function updateDoc(env, documentId, patch) {
+  const { url, key } = getSupabase(env);
+  if (!url || !key || !documentId) return;
+  const resp = await fetch(`${url}/rest/v1/pet_documents?id=eq.${documentId}`, {
+    method: 'PATCH',
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify(patch),
+  });
+  console.log('[parse-pet-document] patch', documentId, resp.status, Object.keys(patch).join(','));
+}
+
 export async function onRequestPost(context) {
+  const env = context.env || {};
   try {
     const body = await context.request.json();
-    const key = getKey(context.env);
-    if (!key) return Response.json({ parsed: false, error: 'AI key missing' }, { headers });
+    const documentId = body.document_id || body.documentId || null;
+    const key = getKey(env);
+    const sb = getSupabase(env);
+    console.log('[parse-pet-document] start', {
+      documentId,
+      hasAnthropic: Boolean(key),
+      hasSupabase: Boolean(sb.url && sb.key),
+      hasImage: Boolean(body.imageBase64),
+      hasImages: Array.isArray(body.images) && body.images.length,
+      mime: body.mimeType || null,
+    });
+    if (!key) {
+      console.log('[parse-pet-document] FAIL missing ANTHROPIC_API_KEY');
+      if (documentId) await updateDoc(env, documentId, { ai_status: 'failed', ai_summary: { error: 'AI key missing' } });
+      return Response.json({ parsed: false, error: 'AI key missing' }, { headers });
+    }
+
+    let imgs = Array.isArray(body.images) ? body.images : (body.imageBase64 ? [body.imageBase64] : []);
+    let isPdf = String(body.mimeType || '').includes('pdf') || String(body.path || '').toLowerCase().endsWith('.pdf');
+    if (imgs.length === 0 && documentId && body.path) {
+      const fetched = await fetchDocBytes(env, body.path);
+      if (fetched) {
+        imgs = [fetched.b64];
+        isPdf = fetched.isPdf;
+        console.log('[parse-pet-document] fetched storage', fetched.byteLength, 'pdf=', isPdf);
+      }
+    }
+    if (imgs.length === 0 && documentId) {
+      // try storage_path / file_path from row
+      const { url, key: sk } = sb;
+      if (url && sk) {
+        const row = await fetch(`${url}/rest/v1/pet_documents?id=eq.${documentId}&select=file_path,storage_path`, {
+          headers: { apikey: sk, Authorization: `Bearer ${sk}` },
+        });
+        const rows = await row.json();
+        const path = rows?.[0]?.file_path || rows?.[0]?.storage_path;
+        console.log('[parse-pet-document] row path', path);
+        const fetched = await fetchDocBytes(env, path);
+        if (fetched) {
+          imgs = [fetched.b64];
+          isPdf = fetched.isPdf;
+        }
+      }
+    }
+    if (imgs.length === 0) {
+      console.log('[parse-pet-document] FAIL no image');
+      if (documentId) await updateDoc(env, documentId, { ai_status: 'failed', ai_summary: { error: 'No file to read' } });
+      return Response.json({ parsed: false, error: 'No file to read' }, { headers });
+    }
+
     const content = [];
-    const imgs = Array.isArray(body.images) ? body.images : (body.imageBase64 ? [body.imageBase64] : []);
     for (const s0 of imgs) {
       const s = String(s0);
-      if (tooLarge(s, 9_500_000)) {
-        return Response.json({ parsed: false, error: 'too_large', labeled: 'Image too large — please re-upload (max 10 MB)' }, { headers, status: 413 });
+      if (decodedBytes(s) > 9_500_000) {
+        if (documentId) await updateDoc(env, documentId, { ai_status: 'failed', ai_summary: { error: 'too_large' } });
+        return Response.json({ parsed: false, error: 'too_large' }, { headers, status: 413 });
       }
-      const raw = s.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
-      let mediaType = 'image/jpeg';
-      if (s.includes('image/png') || raw.startsWith('iVBORw0')) mediaType = 'image/png';
-      content.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: raw } });
+      const raw = s.replace(/^data:[^;]+;base64,/, '');
+      if (isPdf || s.includes('application/pdf')) {
+        content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: raw } });
+      } else {
+        let mediaType = 'image/jpeg';
+        if (s.includes('image/png') || raw.startsWith('iVBORw0')) mediaType = 'image/png';
+        content.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: raw } });
+      }
     }
-    content.push({ type: 'text', text: (body.text ? `Document text:\n${String(body.text).slice(0, 12000)}\n\n` : '') + PROMPT });
+    content.push({ type: 'text', text: PROMPT });
+
     let lastErr = 'Claude did not respond.';
     for (const model of MODELS) {
+      console.log('[parse-pet-document] trying', model);
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({ model, max_tokens: 1200, messages: [{ role: 'user', content }] }),
+        body: JSON.stringify({ model, max_tokens: 2000, messages: [{ role: 'user', content }] }),
       });
       const json = await resp.json();
-      if (!resp.ok) { lastErr = json?.error?.message || 'model error'; continue; }
+      if (!resp.ok) {
+        lastErr = json?.error?.message || 'model error';
+        console.log('[parse-pet-document] model fail', model, resp.status, lastErr);
+        continue;
+      }
       const text = json.content?.find((b) => b.type === 'text')?.text || '{}';
-      const parsed = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
-      return Response.json({ parsed: true, source: 'ai_extracted', labeled: 'AI extracted — confirm before treating as medical fact', ...parsed }, { headers });
+      const sliced = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1);
+      const parsed = JSON.parse(sliced || '{}');
+      const vaccinations = Array.isArray(parsed.vaccinations) ? parsed.vaccinations : [];
+      const conditions = Array.isArray(parsed.conditions) ? parsed.conditions : [];
+      const medications = Array.isArray(parsed.medications) ? parsed.medications : [];
+      const visits = Array.isArray(parsed.visits) ? parsed.visits : [];
+      const labs = Array.isArray(parsed.labs) ? parsed.labs : [];
+      const weight = parsed.weight && typeof parsed.weight === 'object' ? parsed.weight : null;
+      const out = {
+        parsed: true,
+        source: 'ai_extracted',
+        title: parsed.title || null,
+        kind: parsed.kind || null,
+        clinic: parsed.clinic || null,
+        date: parsed.date || null,
+        vaccinations,
+        conditions,
+        medications,
+        visits,
+        labs,
+        weight,
+      };
+      console.log('[parse-pet-document] OK', model, {
+        documentId,
+        vax: vaccinations.length,
+        visits: visits.length,
+        labs: labs.length,
+        conditions: conditions.length,
+        hasWeight: Boolean(weight?.value),
+      });
+      if (documentId) {
+        await updateDoc(env, documentId, {
+          ai_status: 'ready',
+          ai_summary: out,
+          title: parsed.title || undefined,
+          clinic: parsed.clinic || undefined,
+          taken_on: parsed.date || undefined,
+        });
+      }
+      return Response.json(out, { headers });
     }
+    console.log('[parse-pet-document] FAIL', lastErr);
+    if (documentId) await updateDoc(env, documentId, { ai_status: 'failed', ai_summary: { error: lastErr } });
     return Response.json({ parsed: false, error: lastErr }, { headers });
   } catch (err) {
+    console.log('[parse-pet-document] exception', String(err));
     return Response.json({ parsed: false, error: String(err) }, { headers });
   }
 }

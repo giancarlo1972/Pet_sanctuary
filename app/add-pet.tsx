@@ -93,7 +93,7 @@ export default function AddPetScreen() {
         relationship,
         started_on: new Date().toISOString().slice(0, 10),
       });
-      router.replace(`/pet-care?petId=${data.id}`);
+      router.replace(`/pet-record?petId=${data.id}`);
     } catch (err: any) {
       setBanner({ message: err.message || 'Could not add pet. Please try again.', kind: 'error' });
     }

@@ -660,7 +660,7 @@ const styles = StyleSheet.create({
   },
   segmentTextActive: { color: Colors.white },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  scrollContent: { paddingHorizontal: 20, paddingBottom: 100 },
+  scrollContent: { paddingHorizontal: 20, paddingBottom: 100, maxWidth: 720, width: '100%', alignSelf: 'center' },
   apiBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: Colors.surface, borderRadius: 14, padding: 14, marginBottom: 16,

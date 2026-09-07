@@ -114,8 +114,9 @@ interface HomeStory {
 
 export default function HomeScreen() {
   const { user, session } = useAuth();
-  const { width } = useWindowDimensions();
-  const wide = Platform.OS === 'web' && width >= 900;
+  const dim = useWindowDimensions();
+  const width = Platform.OS === 'web' && typeof window !== 'undefined' ? window.innerWidth : dim.width;
+  const wide = width >= 900;
   const [loginToast, setLoginToast] = useState<string | null>(null);
   useEffect(() => {
     if (Platform.OS === 'web' && typeof sessionStorage !== 'undefined') {
@@ -268,7 +269,7 @@ export default function HomeScreen() {
   const renderFeaturedCard = (pet: Pet) => (
     <TouchableOpacity
       key={pet.id}
-      style={styles.featuredCard}
+      style={[styles.featuredCard, { width: wide ? 190 : 170 }]}
       onPress={() => router.push(`/pet-details?id=${pet.id}`)}
       activeOpacity={0.85}
     >
@@ -425,12 +426,14 @@ export default function HomeScreen() {
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Featured pets</Text>
               {wide ? (
-                <View style={styles.featuredGrid}>{featured.map(renderFeaturedCard)}</View>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+                  {featured.map(renderFeaturedCard)}
+                </View>
               ) : (
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.featuredRow}
+                contentContainerStyle={{ gap: 12, paddingRight: 16 }}
               >
                 {featured.map(renderFeaturedCard)}
               </ScrollView>

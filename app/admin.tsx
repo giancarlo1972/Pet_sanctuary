@@ -188,7 +188,7 @@ export default function AdminScreen() {
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
             {allOrgs.map((o) => (
               <View key={o.id} style={{ width: wide ? '48.5%' : '100%' }}>
-              <TouchableOpacity style={styles.entity} onPress={() => { setEditOrg(o); setEditName(o.name || ''); }} activeOpacity={0.85}>
+              <View style={styles.entity}>
                 <View style={[styles.entityAv, { backgroundColor: Colors.navy }]}>
                   <Text style={styles.entityAvTxt}>{(o.name || '?').charAt(0).toUpperCase()}</Text>
                 </View>
@@ -196,8 +196,16 @@ export default function AdminScreen() {
                   <Text style={styles.cardTitle}>{o.name}</Text>
                   <Text style={styles.meta}>{(o.org_type || 'Organization')} · {o.status || 'unknown'}</Text>
                 </View>
-                <Text style={styles.reassign}>Edit</Text>
-              </TouchableOpacity>
+                {['pending','submitted','review','pending_review'].includes((o.status || '').toLowerCase()) ? (
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    <TouchableOpacity onPress={() => decideOrg(o.id, 'approved')}><Text style={styles.reassign}>Verify</Text></TouchableOpacity>
+                    <TouchableOpacity onPress={() => decideOrg(o.id, 'rejected')}><Text style={styles.rejectTxt}>Reject</Text></TouchableOpacity>
+                  </View>
+                ) : (
+                  <TouchableOpacity onPress={() => assignAdmin(o.id)}><Text style={styles.reassign}>Assign admin</Text></TouchableOpacity>
+                )}
+                <TouchableOpacity onPress={() => { setEditOrg(o); setEditName(o.name || ''); }}><Text style={styles.meta}>⋮</Text></TouchableOpacity>
+              </View>
               </View>
             ))}
             </View>

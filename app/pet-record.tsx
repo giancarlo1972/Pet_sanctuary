@@ -358,6 +358,7 @@ export default function PetRecordScreen() {
   const [tab, setTab] = useState<Tab>('overview');
   const [medicalHub, setMedicalHub] = useState<MedicalHub>('records');
   const [aiFindings, setAiFindings] = useState<any>(null);
+  const [aiShared, setAiShared] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1425,9 +1426,23 @@ export default function PetRecordScreen() {
 
         {tab === 'insurance' && (
           <View style={styles.tabContent}>
-            <View style={styles.infoCard}>
-              <Text style={styles.sectionLabel}>INSURANCE</Text>
-              <Text style={styles.emptyText}>No policy on file. When a carrier is linked, claims stay in their app. Rescue Army does not store card or login data.</Text>
+            <View style={[styles.infoCard, { backgroundColor: Colors.navy, borderColor: Colors.navy }]}>
+              <Text style={styles.healthKicker}>PET INSURANCE</Text>
+              <Text style={{ fontFamily: Fonts.extrabold, fontSize: 17, color: Colors.white, marginTop: 8 }}>No policy on file</Text>
+              <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4, lineHeight: 18 }}>
+                Connect a carrier, upload a declarations PDF, or forward the policy email. Claims stay with the insurer — Rescue Army does not store card or login data.
+              </Text>
+              <TouchableOpacity style={{ backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 14 }} onPress={() => Linking.openURL('https://www.lemonade.com/pet')} activeOpacity={0.85}>
+                <Text style={{ color: Colors.white, fontFamily: Fonts.bold }}>Connect Lemonade</Text>
+              </TouchableOpacity>
+              {canEdit ? (
+                <TouchableOpacity style={{ borderWidth: 1.5, borderColor: Colors.white, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 10 }} onPress={openAddDoc} activeOpacity={0.85}>
+                  <Text style={{ color: Colors.white, fontFamily: Fonts.bold }}>Upload PDF</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity style={{ paddingVertical: 12, alignItems: 'center', marginTop: 4 }} onPress={() => Linking.openURL('mailto:support.animals@rescue-army.com?subject=' + encodeURIComponent('Forward insurance policy — ' + (pet.name || 'pet')))} activeOpacity={0.85}>
+                <Text style={{ color: '#B9BCE0', fontFamily: Fonts.semibold }}>Forward email</Text>
+              </TouchableOpacity>
             </View>
           </View>
         )}
@@ -1784,6 +1799,14 @@ export default function PetRecordScreen() {
                 {(aiFindings?.findings || []).map((f: any, i: number) => (
                   <Text key={i} style={styles.emptyText}>{f.severity}: {f.title} — {f.detail}</Text>
                 ))}
+                {aiFindings ? (
+                  <TouchableOpacity style={[styles.historyUnlockBtn, { marginTop: 10, backgroundColor: aiShared ? Colors.teal : Colors.navy }]} onPress={async () => {
+                    if (aiFindings.id) await supabase.from('ai_health_analyses').update({ shared_with_vet_at: new Date().toISOString() }).eq('id', aiFindings.id);
+                    setAiShared(true);
+                  }} activeOpacity={0.85}>
+                    <Text style={styles.historyUnlockText}>{aiShared ? 'Shared with vet ✓' : 'Share analysis with my vet'}</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
             )}
           </View>

@@ -12,70 +12,57 @@ interface AuthFormProps {
 
 function redirectAfterLogin() {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    return `${window.location.origin}/admin`;
+    return `${window.location.origin}/`;
   }
-  return 'https://rescue-army.com/admin';
+  return 'https://rescue-army.com/';
 }
 
-export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
+function friendlyError(raw: string) {
+  const m = (raw || '').toLowerCase();
+  if (m.includes('rate limit')) return 'Too many signup emails. Wait 30 minutes, then Sign In — do not Sign Up. Or use Continue with Google.';
+  if (m.includes('not confirmed')) return 'This email is not confirmed yet. In Supabase: Authentication → Users → that email → Confirm. Or use Google.';
+  if (m.includes('invalid login')) return 'Wrong email or password. If you just created this Microsoft mailbox, the app user may not exist yet — use Google (the Gmail that already worked).';
+  if (m.includes('already') || m.includes('registered')) return 'That email is already registered. Use Sign In or Google.';
+  return raw || 'Sign in failed.';
+}
+
+export default function AuthForm(_props: AuthFormProps) {
   const router = useRouter();
-  const [mode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
 
-  const goAfterAuth = async (fallbackEmail: string) => {
+  const finish = async (loginEmail: string) => {
     const { data: sess } = await supabase.auth.getUser();
-    const loginEmail = sess.user?.email || fallbackEmail;
     let role = '';
     if (sess.user?.id) {
       const { data: profile } = await supabase.from('profiles').select('role').eq('id', sess.user.id).maybeSingle();
       role = profile?.role || '';
     }
-    if (!sess.user) {
-      setInfo('Account saved. Tap Sign In.');
-      setMode('signin');
+    const dest = isPlatformAdmin(role, sess.user?.email || loginEmail) ? '/admin' : '/(tabs)';
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.location.assign(dest.replace('/(tabs)', '/'));
       return;
     }
-    router.replace(isPlatformAdmin(role, loginEmail) ? '/admin' : '/(tabs)');
+    router.replace(dest);
   };
 
   const handleSubmit = async () => {
     const em = email.trim();
     const pw = password;
     if (!em || !pw) {
-      setError('Please enter your email and password.');
+      setError('Enter email and password.');
       return;
     }
     setLoading(true);
     setError(null);
-    setInfo(null);
     try {
-      const attemptSignIn = async () => {
-        const { error: signErr } = await supabase.auth.signInWithPassword({ email: em, password: pw });
-        if (signErr) throw signErr;
-        await goAfterAuth(em);
-      };
-
-      if (mode === 'signin') {
-        await attemptSignIn();
-        return;
-      }
-
-      const { error: upErr } = await supabase.auth.signUp({ email: em, password: pw });
-      if (upErr) {
-        const msg = (upErr.message || '').toLowerCase();
-        if (msg.includes('already') || msg.includes('registered') || msg.includes('exists')) {
-          await attemptSignIn();
-          return;
-        }
-        throw upErr;
-      }
-      await goAfterAuth(em);
+      const { error: signErr } = await supabase.auth.signInWithPassword({ email: em, password: pw });
+      if (signErr) throw signErr;
+      await finish(em);
     } catch (err: any) {
-      setError(err.message || 'Authentication failed.');
+      setError(friendlyError(err.message));
     } finally {
       setLoading(false);
     }
@@ -91,7 +78,7 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
       });
       if (gErr) throw gErr;
     } catch (err: any) {
-      setError(err.message || 'Google sign-in failed.');
+      setError(friendlyError(err.message));
       setLoading(false);
     }
   };
@@ -101,11 +88,6 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
       {error ? (
         <View style={styles.errorBox}>
           <Text style={styles.errorText}>{error}</Text>
-        </View>
-      ) : null}
-      {info ? (
-        <View style={styles.infoBox}>
-          <Text style={styles.infoText}>{info}</Text>
         </View>
       ) : null}
       <TextInput
@@ -130,7 +112,7 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
       />
       <TouchableOpacity style={[styles.submitBtn, loading && styles.btnDisabled]} onPress={handleSubmit} disabled={loading} activeOpacity={0.85}>
         {loading ? <ActivityIndicator color={Colors.white} size="small" /> : (
-          <Text style={styles.submitText}>{mode === 'signin' ? 'Sign In' : 'Sign Up'}</Text>
+          <Text style={styles.submitText}>Sign In</Text>
         )}
       </TouchableOpacity>
       <TouchableOpacity style={styles.googleBtn} onPress={handleGoogle} disabled={loading} activeOpacity={0.85}>
@@ -175,30 +157,6 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.sm,
     fontFamily: Fonts.medium,
     color: Colors.critical,
-  },
-  infoBox: {
-    backgroundColor: Colors.tealBg || '#E6F4F1',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  infoText: {
-    fontSize: FontSizes.sm,
-    fontFamily: Fonts.medium,
-    color: Colors.tealDark || Colors.navy,
-  },
-  switchRow: {
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  switchText: {
-    fontSize: FontSizes.md,
-    fontFamily: Fonts.regular,
-    color: Colors.textSecondary,
-  },
-  switchLink: {
-    fontFamily: Fonts.bold,
-    color: Colors.coral,
   },
   googleBtn: {
     backgroundColor: Colors.white,

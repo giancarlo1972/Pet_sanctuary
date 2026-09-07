@@ -9,6 +9,7 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { GINA } from '@/lib/gina-record';
+import { prepareImageFile } from '@/lib/prepare-image';
 
 type Tab = 'overview' | 'insurance' | 'medical' | 'invoices';
 const TABS: { id: Tab; label: string }[] = [
@@ -160,15 +161,10 @@ function Medical({ petId }: { petId?: string }) {
       const file = input.files?.[0];
       if (!file || !petId) return;
       setBusy(true); setMsg(null);
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(String(r.result));
-        r.onerror = reject;
-        r.readAsDataURL(file);
-      });
-      const path = `${petId}/${Date.now()}-${file.name}`;
-      await supabase.storage.from('pet-documents').upload(path, file, { upsert: true });
-      const res = await fetch('/api/parse-pet-document', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: dataUrl }) });
+      const prepared = file.type.startsWith('image/') ? await prepareImageFile(file) : { blob: file, dataUrl: await new Promise<string>((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = reject; r.readAsDataURL(file); }), mediaType: file.type };
+      const path = `${petId}/${Date.now()}.jpg`;
+      await supabase.storage.from('pet-documents').upload(path, prepared.blob, { contentType: prepared.mediaType || 'image/jpeg', upsert: true });
+      const res = await fetch('/api/parse-pet-document', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: prepared.dataUrl }) });
       const json = await res.json();
       await supabase.from('pet_documents').insert({ pet_id: petId, kind: json.kind || 'other', storage_path: path, extracted: json, confirmed: false });
       setPending(json);

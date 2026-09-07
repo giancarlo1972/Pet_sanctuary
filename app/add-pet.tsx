@@ -79,7 +79,7 @@ export default function AddPetScreen() {
         description: description.trim() || null,
         location: location.trim() || null,
         is_public: false,
-        availability: relationship === 'foster' ? 'foster' : 'private',
+        availability: relationship === 'foster' ? 'foster' : 'none',
         status: 'private',
         listing_type: 'private',
         owner_id: user.id,

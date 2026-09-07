@@ -12,9 +12,9 @@ interface AuthFormProps {
 
 function redirectAfterLogin() {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    return `${window.location.origin}/`;
+    return `${window.location.origin}/admin`;
   }
-  return 'https://rescue-army.com/';
+  return 'https://rescue-army.com/admin';
 }
 
 function friendlyError(raw: string) {

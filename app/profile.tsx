@@ -83,27 +83,10 @@ export default function ProfileScreen() {
   }
 
   if (!user) {
+    router.replace('/auth');
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.topNav}>
-          <TouchableOpacity onPress={() => router.push('/(tabs)')} activeOpacity={0.75}>
-            <Text style={styles.topNavLink}>Home</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => router.push('/(tabs)/pets')} activeOpacity={0.75}>
-            <Text style={styles.topNavLink}>Browse Pets</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => router.push('/about')} activeOpacity={0.75}>
-            <Text style={styles.topNavLink}>About</Text>
-          </TouchableOpacity>
-          <Text style={[styles.topNavLink, styles.topNavLinkActive]}>Sign In</Text>
-        </View>
-        <ScrollView contentContainerStyle={styles.authScroll} showsVerticalScrollIndicator={false}>
-          <View style={styles.authHeader}>
-            <Text style={styles.authTitle}>Sign in</Text>
-            <Text style={styles.authSubtitle}>Use Continue with Google (your personal account) to open Admin and your pets.</Text>
-          </View>
-          <AuthForm variant="plain" />
-        </ScrollView>
+        <ActivityIndicator size="large" color={Colors.coral} style={{ marginTop: 40 }} />
       </SafeAreaView>
     );
   }

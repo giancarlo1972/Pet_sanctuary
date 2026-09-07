@@ -19,7 +19,7 @@ function redirectAfterLogin() {
 
 export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
   const router = useRouter();
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [mode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -135,12 +135,6 @@ export default function AuthForm({ variant = 'plain' }: AuthFormProps) {
       </TouchableOpacity>
       <TouchableOpacity style={styles.googleBtn} onPress={handleGoogle} disabled={loading} activeOpacity={0.85}>
         <Text style={styles.googleText}>Continue with Google</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={styles.switchRow} onPress={() => { setMode(mode === 'signin' ? 'signup' : 'signin'); setError(null); setInfo(null); }} activeOpacity={0.7}>
-        <Text style={styles.switchText}>
-          {mode === 'signin' ? "Don't have an account? " : 'Already have an account? '}
-          <Text style={styles.switchLink}>{mode === 'signin' ? 'Sign up' : 'Sign in'}</Text>
-        </Text>
       </TouchableOpacity>
     </View>
   );

@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '@/lib/context/AuthContext';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
+import { CONTENT_MAX } from '@/components/Page';
 
 interface AppHeaderProps {
   title: string;
@@ -50,7 +51,7 @@ export default function AppHeader({ title, showBack = false, rightAction }: AppH
 
 const styles = StyleSheet.create({
   container: { backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  inner: { width: '100%', maxWidth: 880, alignSelf: 'center' },
+  inner: { width: '100%', maxWidth: CONTENT_MAX, alignSelf: 'center' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

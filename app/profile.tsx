@@ -927,7 +927,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                       <TouchableOpacity
                         key={`${r.pet_id}-${i}`}
                         style={[styles.reminderChip, { backgroundColor: bg, borderColor: `${color}33` }]}
-                        onPress={() => { closeDrawer(); router.push(`/my-pet?petId=${r.pet_id}`); }}
+                        onPress={() => { closeDrawer(); router.push(`/pet-care?petId=${r.pet_id}`); }}
                         activeOpacity={0.85}
                       >
                         <Text style={styles.reminderPetName} numberOfLines={1}>{r.pet_name}</Text>
@@ -958,7 +958,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                     <TouchableOpacity
                       key={p.id}
                       style={styles.petRelCard}
-                      onPress={() => { closeDrawer(); router.push(`/my-pet?petId=${p.pet_id}`); }}
+                      onPress={() => { closeDrawer(); router.push(`/pet-care?petId=${p.pet_id}`); }}
                       activeOpacity={0.85}
                     >
                       {p.pet_photo ? (
@@ -992,7 +992,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                     <TouchableOpacity
                       key={p.id}
                       style={[styles.petRelCard, styles.petRelCardPast]}
-                      onPress={() => { closeDrawer(); router.push(`/my-pet?petId=${p.pet_id}`); }}
+                      onPress={() => { closeDrawer(); router.push(`/pet-care?petId=${p.pet_id}`); }}
                       activeOpacity={0.85}
                     >
                       {p.pet_photo ? (

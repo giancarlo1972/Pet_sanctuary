@@ -12,7 +12,12 @@ import { InlineBanner } from '@/components/InlineBanner';
 import { PROVIDER_SERVICES } from '@/lib/role-categories';
 import SignInPrompt from '@/components/SignInPrompt';
 
-const PET_SERVICES = new Set(['sitter', 'walker', 'groomer', 'trainer', 'boarding']);
+const SPECIES = ['dog', 'cat', 'rabbit', 'bird', 'other'] as const;
+type Species = (typeof SPECIES)[number];
+
+function speciesLabel(k: string) {
+  return k ? k.charAt(0).toUpperCase() + k.slice(1) : 'Pet';
+}
 
 export default function BookService() {
   const { user, loading: authLoading } = useAuth();
@@ -20,15 +25,15 @@ export default function BookService() {
   const [name, setName] = useState('Provider');
   const [offered, setOffered] = useState<string[]>(['sitter']);
   const [svc, setSvc] = useState(service || 'sitter');
-  const [pets, setPets] = useState<{ id: string; name: string }[]>([]);
-  const [petId, setPetId] = useState<string | null>(null);
+  const [pets, setPets] = useState<{ id: string; name: string; species: string | null }[]>([]);
+  const [species, setSpecies] = useState<Species>('dog');
+  const [sharePetId, setSharePetId] = useState<string | null>(null);
   const [when, setWhen] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
 
   const isOwn = Boolean(user?.id && providerId && providerId === user.id);
-  const needsPet = PET_SERVICES.has(svc);
 
   const load = useCallback(async () => {
     if (!providerId) return;
@@ -43,32 +48,59 @@ export default function BookService() {
       setSvc((prev) => (list.includes(prev) ? prev : list[0]));
     }
     if (user && providerId !== user.id) {
-      const { data: owned } = await supabase.from('pets').select('id, name').eq('owner_id', user.id).limit(20);
+      const { data: owned } = await supabase.from('pets').select('id, name, species').eq('owner_id', user.id).limit(20);
       setPets((owned as any[]) || []);
     } else {
       setPets([]);
-      setPetId(null);
+      setSharePetId(null);
     }
   }, [providerId, user]);
   useEffect(() => { load(); }, [load]);
+
+  const pickShare = (id: string | null) => {
+    setSharePetId(id);
+    if (id) {
+      const pet = pets.find((x) => x.id === id);
+      const sp = (pet?.species || '').toLowerCase();
+      if (SPECIES.includes(sp as Species)) setSpecies(sp as Species);
+    }
+  };
 
   const send = async () => {
     if (!user) { router.push('/auth'); return; }
     if (!providerId) { setBanner({ kind: 'error', message: 'Missing provider.' }); return; }
     if (providerId === user.id) { setBanner({ kind: 'error', message: 'This is your listing — others request you from here.' }); return; }
-    if (needsPet && !petId) { setBanner({ kind: 'error', message: 'Pick which pet this is for.' }); return; }
     const start = when.trim() ? new Date(when.trim()) : new Date(Date.now() + 864e5);
     if (Number.isNaN(start.getTime())) { setBanner({ kind: 'error', message: 'Use a date like 2026-09-12 10:00.' }); return; }
+    const body = note.trim() || null;
     setBusy(true);
-    const { error } = await supabase.from('service_bookings').insert({
+    const row: Record<string, unknown> = {
       provider_id: providerId,
       client_id: user.id,
-      pet_id: needsPet ? petId : null,
+      pet_id: sharePetId,
       service: svc,
+      species,
       starts_at: start.toISOString(),
-      note: note.trim() || null,
+      note: body,
       status: 'requested',
-    });
+    };
+    let { error } = await supabase.from('service_bookings').insert(row);
+    if (error && /species/.test(error.message || '')) {
+      const { species: _drop, ...rest } = row;
+      const retry = await supabase.from('service_bookings').insert({
+        ...rest,
+        note: [speciesLabel(species), body].filter(Boolean).join(' · ') || null,
+      });
+      error = retry.error;
+    }
+    if (!error && sharePetId) {
+      await supabase.from('pet_relationships').insert({
+        pet_id: sharePetId,
+        user_id: providerId,
+        relationship: 'caretaker',
+        started_on: new Date().toISOString().slice(0, 10),
+      });
+    }
     setBusy(false);
     if (error) { setBanner({ kind: 'error', message: error.message || 'Could not request booking.' }); return; }
     router.replace('/(tabs)/profile');
@@ -91,7 +123,7 @@ export default function BookService() {
         <AppHeader title="Your listing" showBack />
         <Page>
           <Text style={s.h}>{name}</Text>
-          <Text style={s.meta}>This is the listing others use to request you. Your pets stay on Me — they are not part of a volunteer transport request.</Text>
+          <Text style={s.meta}>This is the listing others use to request you. Your pets stay private on Me.</Text>
           <Text style={s.label}>You offer</Text>
           <View style={s.chips}>
             {offered.map((k) => (
@@ -117,26 +149,35 @@ export default function BookService() {
         <Text style={s.label}>Service</Text>
         <View style={s.chips}>
           {offered.map((k) => (
-            <TouchableOpacity key={k} style={[s.chip, svc === k && s.chipOn]} onPress={() => { setSvc(k); if (!PET_SERVICES.has(k)) setPetId(null); }} activeOpacity={0.85}>
+            <TouchableOpacity key={k} style={[s.chip, svc === k && s.chipOn]} onPress={() => setSvc(k)} activeOpacity={0.85}>
               <Text style={[s.chipTxt, svc === k && s.chipTxtOn]}>{PROVIDER_SERVICES.find((x) => x.key === k)?.label || k}</Text>
             </TouchableOpacity>
           ))}
         </View>
-        {needsPet ? (
-          <>
-            <Text style={s.label}>Pet</Text>
-            <View style={s.chips}>
-              {pets.map((p) => (
-                <TouchableOpacity key={p.id} style={[s.chip, petId === p.id && s.chipOn]} onPress={() => setPetId(p.id)}>
-                  <Text style={[s.chipTxt, petId === p.id && s.chipTxtOn]}>{p.name}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            {pets.length === 0 ? <Text style={s.meta}>Add a pet first so the sitter knows who they are booking for.</Text> : null}
-          </>
-        ) : (
-          <Text style={s.meta}>Transport and rescue help are for the animal in the note — not your household pets.</Text>
-        )}
+
+        <Text style={s.label}>Animal</Text>
+        <Text style={s.meta}>Your pets stay private. Share Dog or Cat for the request — names stay off this listing until you share a profile.</Text>
+        <View style={s.chips}>
+          {SPECIES.map((k) => (
+            <TouchableOpacity key={k} style={[s.chip, species === k && s.chipOn]} onPress={() => setSpecies(k)} activeOpacity={0.85}>
+              <Text style={[s.chipTxt, species === k && s.chipTxtOn]}>{speciesLabel(k)}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <Text style={s.label}>Share a pet profile (optional)</Text>
+        <Text style={s.meta}>Only if this person should see the record — meds, notes, photos.</Text>
+        <View style={s.chips}>
+          <TouchableOpacity style={[s.chip, !sharePetId && s.chipOn]} onPress={() => pickShare(null)} activeOpacity={0.85}>
+            <Text style={[s.chipTxt, !sharePetId && s.chipTxtOn]}>{speciesLabel(species)} only</Text>
+          </TouchableOpacity>
+          {pets.map((p) => (
+            <TouchableOpacity key={p.id} style={[s.chip, sharePetId === p.id && s.chipOn]} onPress={() => pickShare(p.id)} activeOpacity={0.85}>
+              <Text style={[s.chipTxt, sharePetId === p.id && s.chipTxtOn]}>{p.name}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
         <Text style={s.label}>When</Text>
         <TextInput style={s.input} value={when} onChangeText={setWhen} placeholder="2026-09-12 10:00" placeholderTextColor={Colors.textTertiary} />
         <Text style={s.label}>Note</Text>
@@ -144,7 +185,7 @@ export default function BookService() {
           style={s.input}
           value={note}
           onChangeText={setNote}
-          placeholder={needsPet ? 'House notes, meds, gate code…' : 'Pickup, drop-off, rescue name, crate, medical notes…'}
+          placeholder={sharePetId ? 'House notes, meds, gate code…' : 'Pickup, drop-off, crate, medical notes…'}
           placeholderTextColor={Colors.textTertiary}
           multiline
         />

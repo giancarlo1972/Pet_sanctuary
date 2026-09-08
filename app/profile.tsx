@@ -388,7 +388,11 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
     }));
     if (tab === 'bookings') return bookingRows.map((b) => ({
       key: b.id, title: PROVIDER_SERVICES.find((x) => x.key === b.service)?.label || b.service,
-      sub: new Date(b.starts_at).toLocaleString(), status: b.status, href: null, color: Colors.teal, booking: b,
+      sub: [
+        b.pet_id ? 'Pet profile shared' : (b.species ? String(b.species).charAt(0).toUpperCase() + String(b.species).slice(1) : 'Animal'),
+        new Date(b.starts_at).toLocaleString(),
+      ].join(' · '),
+      status: b.status, href: null, color: Colors.teal, booking: b,
     }));
     if (tab === 'reviews') return reviews.map((r) => ({
       key: r.id, title: `${r.rating}★`, sub: r.body || 'Review', status: 'Published', href: null, color: Colors.accent,

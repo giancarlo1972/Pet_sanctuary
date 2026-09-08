@@ -1,9 +1,21 @@
-import { Tabs } from 'expo-router';
+import { useEffect } from 'react';
+import { Tabs, router } from 'expo-router';
 import { Home, PawPrint, MapPin, Users, Siren } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { CONTENT_MAX } from '@/components/Page';
+import { useAuth } from '@/lib/context/AuthContext';
+import { supabase } from '@/lib/supabase';
 
 export default function TabLayout() {
+  const { user } = useAuth();
+  useEffect(() => {
+    if (!user) return;
+    supabase.from('profiles').select('onboarding_done').eq('id', user.id).maybeSingle().then(({ data, error }) => {
+      if (error) return;
+      if (data && data.onboarding_done === false) router.replace('/onboarding');
+    });
+  }, [user]);
+
   return (
     <Tabs
       screenOptions={{

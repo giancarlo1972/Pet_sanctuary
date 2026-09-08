@@ -1,4 +1,4 @@
-export type NearbyLayer = 'reports' | 'pets' | 'clinics';
+export type NearbyLayer = 'reports' | 'pets' | 'clinics' | 'providers';
 
 export type NearbyPin = {
   id: string;

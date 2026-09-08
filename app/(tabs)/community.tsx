@@ -11,7 +11,7 @@ import {
   RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import {
   ChevronRight,
   Building2,
@@ -22,6 +22,7 @@ import {
   Pencil,
   Trash2,
   Flag,
+  Sparkles,
 } from 'lucide-react-native';
 import { InlineBanner } from '@/components/InlineBanner';
 import { ConfirmDialog, type ConfirmConfig } from '@/components/ConfirmDialog';
@@ -32,9 +33,10 @@ import { useAuth } from '@/lib/context/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 import SignedImage from '@/components/SignedImage';
+import { PROVIDER_SERVICES } from '@/lib/role-categories';
 import type { Story } from '@/types';
 
-type Segment = 'orgs' | 'fosters' | 'stories';
+type Segment = 'orgs' | 'fosters' | 'stories' | 'services';
 
 interface OrgRow {
   id: string;
@@ -64,6 +66,19 @@ interface FosterPet {
   vaccinated: boolean | null;
   spayed_neutered: boolean | null;
   shelter_name: string | null;
+}
+
+interface ProviderRow {
+  user_id: string;
+  name: string;
+  services: string[];
+  rating: number | null;
+  reviews_count: number;
+  radius_mi: number;
+  rate_text: string | null;
+  bio: string | null;
+  city: string;
+  verified: boolean;
 }
 
 const TYPE_FILTERS = ['All', 'Shelters', 'Rescue groups', 'Clinics', 'Sponsors'] as const;
@@ -130,7 +145,8 @@ function timeAgo(dateString: string | null): string {
 
 export default function CommunityScreen() {
   const { user } = useAuth();
-  const [activeSegment, setActiveSegment] = useState<Segment>('orgs');
+  const params = useLocalSearchParams<{ seg?: string }>();
+  const [activeSegment, setActiveSegment] = useState<Segment>(params.seg === 'services' ? 'services' : 'orgs');
   const [orgQuery, setOrgQuery] = useState('');
   const [orgs, setOrgs] = useState<OrgRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -144,6 +160,12 @@ export default function CommunityScreen() {
   const [menuStoryId, setMenuStoryId] = useState<string | null>(null);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
   const [confirmConfig, setConfirmConfig] = useState<ConfirmConfig | null>(null);
+  const [providers, setProviders] = useState<ProviderRow[]>([]);
+  const [providersLoading, setProvidersLoading] = useState(false);
+
+  useEffect(() => {
+    if (params.seg === 'services') setActiveSegment('services');
+  }, [params.seg]);
 
   const loadFosters = useCallback(async () => {
     setFostersLoading(true);
@@ -251,8 +273,43 @@ export default function CommunityScreen() {
     setStoriesLoading(false);
   }, []);
 
-  useEffect(() => { loadOrgs(); loadFosters(); loadStories(); }, [loadOrgs, loadFosters, loadStories]);
-  useFocusEffect(useCallback(() => { loadOrgs(); loadFosters(); loadStories(); }, [loadOrgs, loadFosters, loadStories]));
+  const loadProviders = useCallback(async () => {
+    setProvidersLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('service_provider_profiles')
+        .select('user_id, services, bio, rate_text, radius_mi, rating, reviews_count, verified')
+        .limit(80);
+      if (error || !data) { setProviders([]); setProvidersLoading(false); return; }
+      const ids = data.map((d: any) => d.user_id);
+      const { data: profs } = ids.length
+        ? await supabase.from('profiles').select('id, full_name, address_city, address_state').in('id', ids)
+        : { data: [] as any[] };
+      const pmap: Record<string, any> = {};
+      (profs || []).forEach((p: any) => { pmap[p.id] = p; });
+      setProviders(data.map((d: any) => {
+        const p = pmap[d.user_id] || {};
+        return {
+          user_id: d.user_id,
+          name: p.full_name || 'Provider',
+          services: d.services || [],
+          rating: d.rating != null ? Number(d.rating) : null,
+          reviews_count: d.reviews_count || 0,
+          radius_mi: d.radius_mi || 10,
+          rate_text: d.rate_text,
+          bio: d.bio,
+          city: [p.address_city, p.address_state].filter(Boolean).join(', '),
+          verified: Boolean(d.verified),
+        } as ProviderRow;
+      }));
+    } catch {
+      setProviders([]);
+    }
+    setProvidersLoading(false);
+  }, []);
+
+  useEffect(() => { loadOrgs(); loadFosters(); loadStories(); loadProviders(); }, [loadOrgs, loadFosters, loadStories, loadProviders]);
+  useFocusEffect(useCallback(() => { loadOrgs(); loadFosters(); loadStories(); loadProviders(); }, [loadOrgs, loadFosters, loadStories, loadProviders]));
 
   const getSection = (org: OrgRow) => {
     const raw = (org.org_type || 'shelter').toLowerCase();
@@ -462,11 +519,13 @@ export default function CommunityScreen() {
             setRefreshing(true);
             loadOrgs();
             loadStories();
+            loadFosters();
+            loadProviders();
           }} />
         }
       >
       <View style={styles.segmentContainer}>
-        {(['orgs', 'fosters', 'stories'] as Segment[]).map((seg) => (
+        {(['orgs', 'fosters', 'stories', 'services'] as Segment[]).map((seg) => (
           <TouchableOpacity
             key={seg}
             style={[styles.segment, activeSegment === seg && styles.segmentActive]}
@@ -474,7 +533,7 @@ export default function CommunityScreen() {
             activeOpacity={0.85}
           >
             <Text style={[styles.segmentText, activeSegment === seg && styles.segmentTextActive]}>
-              {seg === 'orgs' ? 'Orgs' : seg === 'fosters' ? 'Fosters' : 'Stories'}
+              {seg === 'orgs' ? 'Orgs' : seg === 'fosters' ? 'Fosters' : seg === 'stories' ? 'Stories' : 'Services'}
             </Text>
           </TouchableOpacity>
         ))}
@@ -596,6 +655,73 @@ export default function CommunityScreen() {
               )}
             </>
           )}
+          {activeSegment === 'services' && (
+            <>
+              {user ? (
+                <TouchableOpacity
+                  style={styles.registerCTA}
+                  onPress={() => router.push('/service-provider')}
+                  activeOpacity={0.85}
+                >
+                  <View style={styles.registerCTAIcon}>
+                    <Plus color={Colors.coral} size={20} />
+                  </View>
+                  <View style={styles.registerCTAInfo}>
+                    <Text style={styles.registerCTATitle}>Offer a service</Text>
+                    <Text style={styles.registerCTASub}>Sit, walk, groom, train, or transport — owners and shelters book you here</Text>
+                  </View>
+                  <ChevronRight color={Colors.coral} size={18} />
+                </TouchableOpacity>
+              ) : null}
+              {providersLoading ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator size="large" color={Colors.coral} />
+                </View>
+              ) : providers.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <Sparkles color={Colors.textTertiary} size={40} />
+                  <Text style={styles.emptyTitle}>No sitters or walkers listed yet</Text>
+                  <Text style={styles.emptyDesc}>
+                    {user ? 'Be the first to offer a service near you.' : 'Sign in to book a sitter, walker, or trainer.'}
+                  </Text>
+                </View>
+              ) : (
+                providers.map((p) => {
+                  const rating = p.rating != null ? `${p.rating.toFixed(1)}★ · ${p.reviews_count} review${p.reviews_count === 1 ? '' : 's'}` : 'New';
+                  return (
+                    <View key={p.user_id} style={styles.orgRow}>
+                      <View style={[styles.orgInitialTile, { backgroundColor: Colors.teal }]}>
+                        <Text style={styles.orgInitialText}>✦</Text>
+                      </View>
+                      <View style={styles.orgInfo}>
+                        <View style={styles.orgNameRow}>
+                          <Text style={styles.orgName} numberOfLines={1}>{p.name}</Text>
+                          {p.verified ? <ShieldCheck color={Colors.teal} size={15} /> : null}
+                        </View>
+                        <Text style={styles.orgMeta} numberOfLines={1}>
+                          {[rating, p.city, `${p.radius_mi} mi`, p.rate_text].filter(Boolean).join(' · ')}
+                        </Text>
+                        <View style={styles.fosterChipsRow}>
+                          {(p.services || []).slice(0, 4).map((k) => (
+                            <View key={k} style={styles.fosterChip}>
+                              <Text style={styles.fosterChipText}>{PROVIDER_SERVICES.find((x) => x.key === k)?.label || k}</Text>
+                            </View>
+                          ))}
+                        </View>
+                        <TouchableOpacity
+                          style={styles.bookBtn}
+                          onPress={() => router.push(user ? `/book-service?providerId=${p.user_id}` : '/auth')}
+                          activeOpacity={0.85}
+                        >
+                          <Text style={styles.bookBtnTxt}>Request booking</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+            </>
+          )}
         </>
       )}
       {menuStory && (
@@ -652,12 +778,12 @@ const styles = StyleSheet.create({
   segment: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 8,
     borderRadius: 999,
   },
   segmentActive: { backgroundColor: Colors.navy },
   segmentText: {
-    fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.textSecondary,
+    fontSize: 12, fontFamily: Fonts.semibold, color: Colors.textSecondary,
   },
   segmentTextActive: { color: Colors.white },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
@@ -849,4 +975,9 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.textSecondary,
     textAlign: 'center', marginTop: 8,
   },
+  bookBtn: {
+    alignSelf: 'flex-start', marginTop: 8, backgroundColor: Colors.teal,
+    borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,
+  },
+  bookBtnTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.white },
 });

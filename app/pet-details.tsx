@@ -868,6 +868,15 @@ export default function PetDetailsScreen() {
             </TouchableOpacity>
           )
         )}
+        {user ? (
+          <TouchableOpacity
+            style={styles.messageBtn}
+            onPress={() => router.push('/(tabs)/community?seg=services')}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.messageBtnText}>Find a sitter/walker</Text>
+          </TouchableOpacity>
+        ) : null}
         {pet.availability === 'none' && (
           <View style={styles.unavailablePill}>
             <Text style={styles.unavailablePillText}>Not available for foster or adoption</Text>

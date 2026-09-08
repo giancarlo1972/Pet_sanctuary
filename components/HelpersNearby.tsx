@@ -72,7 +72,7 @@ export default function HelpersNearby({ userId }: { userId: string | null }) {
 
   return (
     <View style={styles.wrap}>
-      <Text style={styles.title}>Helpers on duty near you</Text>
+      <Text style={styles.title}>Helpers on duty</Text>
       {note ? <Text style={styles.note}>{note}</Text> : null}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingRight: 8 }}>
         {rows.map((h) => {

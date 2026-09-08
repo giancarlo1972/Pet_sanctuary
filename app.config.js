@@ -26,6 +26,18 @@ export default {
     plugins: [
       ["expo-router", { origin: "https://rescue-army.com" }],
       "expo-font",
+      "expo-image-picker",
+      [
+        "expo-build-properties",
+        {
+          android: {
+            compileSdkVersion: 35,
+            targetSdkVersion: 35,
+            buildToolsVersion: "35.0.0",
+            kotlinVersion: "1.9.25",
+          },
+        },
+      ],
     ],
     experiments: { tsconfigPaths: true },
     extra: {

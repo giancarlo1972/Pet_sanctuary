@@ -46,9 +46,13 @@ export default function MedicalDashboard(props: {
   aiRuns: any[];
   aiBusy: boolean;
   aiShared: boolean;
+  aiReady?: boolean;
   onRunAi: () => void;
   onShareAi: () => void;
   onSelectRun: (r: any) => void;
+  onAddWeight?: () => void;
+  onAddDob?: () => void;
+  onUploadRecord?: () => void;
 }) {
   const [labOpen, setLabOpen] = useState<Record<string, boolean>>({ Hematology: true, Chemistry: true, Endocrinology: true, Urinalysis: true });
 
@@ -286,9 +290,25 @@ export default function MedicalDashboard(props: {
             <Text style={styles.link}>Run {r.run_number || r.run_no} · {formatDate(r.created_at)} ▾</Text>
           </TouchableOpacity>
         ))}
-        <TouchableOpacity style={styles.primary} onPress={props.onRunAi} disabled={props.aiBusy}>
-          {props.aiBusy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryTxt}>Run AI Health</Text>}
-        </TouchableOpacity>
+        {props.aiReady === false ? (
+          <View style={styles.started}>
+            <Text style={styles.kicker}>GET STARTED</Text>
+            <Text style={styles.body}>Add a few basics so AI Health has something to read.</Text>
+            <TouchableOpacity style={styles.checkRow} onPress={props.onAddWeight} activeOpacity={0.85}>
+              <Text style={styles.checkTxt}>Add weight</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.checkRow} onPress={props.onAddDob} activeOpacity={0.85}>
+              <Text style={styles.checkTxt}>Add date of birth</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.checkRow, styles.checkPrimary]} onPress={props.onUploadRecord} activeOpacity={0.85}>
+              <Text style={styles.checkPrimaryTxt}>Upload a vet record</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity style={styles.primary} onPress={props.onRunAi} disabled={props.aiBusy}>
+            {props.aiBusy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryTxt}>Run AI Health</Text>}
+          </TouchableOpacity>
+        )}
         {props.aiFindings ? (
           <TouchableOpacity style={styles.navyBtn} onPress={props.onShareAi}>
             <Text style={styles.primaryTxt}>{props.aiShared ? 'Shared with vet ✓' : 'Share with vet'}</Text>
@@ -334,4 +354,9 @@ const styles = StyleSheet.create({
   primary: { backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
   navyBtn: { backgroundColor: Colors.navy, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
   primaryTxt: { fontFamily: Fonts.bold, fontSize: 15, color: Colors.white },
+  started: { gap: 8, marginTop: 4 },
+  checkRow: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 12, paddingVertical: 12, paddingHorizontal: 14, backgroundColor: Colors.white },
+  checkTxt: { fontFamily: Fonts.bold, fontSize: 14, color: Colors.navy },
+  checkPrimary: { backgroundColor: Colors.coral, borderColor: Colors.coral },
+  checkPrimaryTxt: { fontFamily: Fonts.bold, fontSize: 14, color: Colors.white },
 });

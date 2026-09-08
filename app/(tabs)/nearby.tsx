@@ -183,7 +183,9 @@ export default function NearbyScreen() {
         fetch(`/api/rescuegroups?pets=1&state=${encodeURIComponent(state)}`).then((r) => r.ok ? r.json() : { pets: [] }).catch(() => ({ pets: [] })),
         fetch(`/api/rescuegroups?state=${encodeURIComponent(state)}`).then((r) => r.ok ? r.json() : { orgs: [] }).catch(() => ({ orgs: [] })),
         fetch(`/api/nearby-clinics?kind=clinic&lat=${here.lat}&lng=${here.lng}`).then((r) => r.json()).catch(() => ({ clinics: [] })),
-        supabase.from('service_provider_profiles').select('user_id, services, radius_mi, rating, show_on_map').eq('show_on_map', true).limit(80),
+        user
+          ? supabase.from('service_provider_profiles').select('user_id, services, radius_mi, rating, show_on_map').eq('show_on_map', true).limit(80)
+          : Promise.resolve({ data: [] as any[], error: null }),
       ]);
 
       const localOrgs = (orgsRes.data || []) as any[];

@@ -23,10 +23,14 @@ import {
   Check,
   Share as ShareIcon,
   Link as LinkIcon,
+  Phone,
+  Mail,
+  Globe,
 } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/lib/context/AuthContext';
 import SignedImage from '@/components/SignedImage';
 
 const BRAND_COLORS = [Colors.coral, Colors.teal, Colors.navy, Colors.accent, Colors.coralDark, Colors.tealDark];
@@ -62,6 +66,7 @@ interface OrgData {
   tax_deductible: boolean;
   address: string;
   website: string;
+  phone: string;
   donation_url: string;
   contact_email: string;
   data_source: string;
@@ -83,6 +88,7 @@ const MOCK_ORG: OrgData = {
   tax_deductible: false,
   address: '',
   website: '',
+  phone: '',
   donation_url: '',
   contact_email: '',
   data_source: 'Unknown',
@@ -126,6 +132,7 @@ function mapDbOrg(dbOrg: any): OrgData {
     tax_deductible: Boolean(dbOrg.tax_deductible),
     address: dbOrg.address || [dbOrg.city, dbOrg.state].filter(Boolean).join(', '),
     website: dbOrg.website || '',
+    phone: dbOrg.phone || '',
     donation_url: dbOrg.donate_url || '',
     contact_email: dbOrg.contact_email || '',
     data_source: fromRg ? 'RescueGroups.org API' : 'User registered',
@@ -134,6 +141,25 @@ function mapDbOrg(dbOrg: any): OrgData {
     followers: 0,
     pets: [],
   };
+}
+
+function openHref(href: string) {
+  if (!href) return;
+  Linking.openURL(href).catch(() => {
+    if (typeof window !== 'undefined') window.location.href = href;
+  });
+}
+
+function websiteHref(url: string) {
+  const t = String(url || '').trim();
+  if (!t) return '';
+  return /^https?:\/\//i.test(t) ? t : `https://${t}`;
+}
+
+function phoneHref(phone: string) {
+  const t = String(phone || '').trim();
+  if (!t) return '';
+  return `tel:${t.replace(/[^\d+]/g, '')}`;
 }
 
 async function loadOrgRow(rawId: string) {
@@ -152,11 +178,12 @@ function openDonate(org: OrgData) {
       ? `https://www.paypal.com/donate/?business=${encodeURIComponent(org.contact_email)}&currency_code=USD`
       : org.website);
   if (!url) return;
-  Linking.openURL(url.startsWith('http') ? url : `https://${url}`);
+  openHref(url.startsWith('http') ? url : `https://${url}`);
 }
 
 export default function OrganizationDetailsScreen() {
   const safeBack = useSafeBack('/(tabs)/community');
+  const { user } = useAuth();
   const { id, story } = useLocalSearchParams();
   const [org, setOrg] = useState<OrgData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -344,6 +371,29 @@ export default function OrganizationDetailsScreen() {
             </View>
           </View>
 
+          {(org.phone || org.contact_email || org.website) ? (
+            <View style={styles.contactRow}>
+              {org.phone ? (
+                <TouchableOpacity style={styles.contactBtn} onPress={() => openHref(phoneHref(org.phone))} activeOpacity={0.85}>
+                  <Phone color={Colors.coral} size={16} />
+                  <Text style={styles.contactBtnText}>Call</Text>
+                </TouchableOpacity>
+              ) : null}
+              {org.contact_email ? (
+                <TouchableOpacity style={styles.contactBtn} onPress={() => openHref(`mailto:${org.contact_email}`)} activeOpacity={0.85}>
+                  <Mail color={Colors.coral} size={16} />
+                  <Text style={styles.contactBtnText}>Email</Text>
+                </TouchableOpacity>
+              ) : null}
+              {org.website ? (
+                <TouchableOpacity style={styles.contactBtn} onPress={() => openHref(websiteHref(org.website))} activeOpacity={0.85}>
+                  <Globe color={Colors.coral} size={16} />
+                  <Text style={styles.contactBtnText}>Website</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
+
           {org.pets.length > 0 && (
             <View style={styles.petStripSection}>
               <Text style={styles.sectionTitle}>Available pets</Text>
@@ -416,17 +466,17 @@ export default function OrganizationDetailsScreen() {
           {(org.donation_url || org.contact_email || org.website) ? (
             <View style={styles.donateOptions}>
               {org.donation_url ? (
-                <TouchableOpacity style={styles.donateOption} onPress={() => Linking.openURL(org.donation_url.startsWith('http') ? org.donation_url : `https://${org.donation_url}`)}>
+                <TouchableOpacity style={styles.donateOption} onPress={() => openHref(websiteHref(org.donation_url))}>
                   <Text style={styles.donateOptionText}>Donate on their page</Text>
                 </TouchableOpacity>
               ) : null}
               {org.contact_email ? (
-                <TouchableOpacity style={styles.donateOption} onPress={() => Linking.openURL(`https://www.paypal.com/donate/?business=${encodeURIComponent(org.contact_email)}&currency_code=USD`)}>
+                <TouchableOpacity style={styles.donateOption} onPress={() => openHref(`https://www.paypal.com/donate/?business=${encodeURIComponent(org.contact_email)}&currency_code=USD`)}>
                   <Text style={styles.donateOptionText}>PayPal</Text>
                 </TouchableOpacity>
               ) : null}
               {org.website ? (
-                <TouchableOpacity style={styles.donateOption} onPress={() => Linking.openURL(org.website.startsWith('http') ? org.website : `https://${org.website}`)}>
+                <TouchableOpacity style={styles.donateOption} onPress={() => openHref(websiteHref(org.website))}>
                   <Text style={styles.donateOptionText}>Shelter website</Text>
                 </TouchableOpacity>
               ) : null}
@@ -437,7 +487,10 @@ export default function OrganizationDetailsScreen() {
           <View style={styles.actionRow}>
             <TouchableOpacity
               style={[styles.followBtn, following && styles.followingBtn]}
-              onPress={() => setFollowing(!following)}
+              onPress={() => {
+                if (!user) { router.push('/auth'); return; }
+                setFollowing(!following);
+              }}
               activeOpacity={0.85}
             >
               {following ? (
@@ -541,6 +594,13 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.md, fontFamily: Fonts.semibold, color: Colors.text, flexShrink: 1, textAlign: 'right',
   },
   infoDivider: { height: 1, backgroundColor: Colors.border },
+  contactRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 24 },
+  contactBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border,
+    borderRadius: 14, paddingHorizontal: 16, paddingVertical: 12,
+  },
+  contactBtnText: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.navy },
   einRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   einValueMono: { fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.text, letterSpacing: 1 },
   einPill: { backgroundColor: Colors.surface, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },

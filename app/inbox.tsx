@@ -23,6 +23,7 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import AppHeader from '@/components/AppHeader';
+import SignInPrompt from '@/components/SignInPrompt';
 import SignedImage from '@/components/SignedImage';
 
 interface ConversationRow {
@@ -91,7 +92,7 @@ function subjectRoute(row: ConversationRow): string {
 }
 
 export default function InboxScreen() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
@@ -253,26 +254,21 @@ export default function InboxScreen() {
     );
   };
 
+  if (!user) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <AppHeader title="Inbox" showBack />
+        {authLoading ? null : <SignInPrompt title="Sign in to message" message="Conversations with shelters, sitters, and other members stay private." />}
+      </SafeAreaView>
+    );
+  }
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
         <AppHeader title="Inbox" showBack />
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={Colors.coral} />
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  if (!user) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <AppHeader title="Inbox" showBack />
-        <View style={styles.centered}>
-          <Text style={styles.emptyText}>Please sign in to view your messages.</Text>
-          <TouchableOpacity style={styles.signInBtn} onPress={() => router.push('/auth')}>
-            <Text style={styles.signInBtnText}>Sign in</Text>
-          </TouchableOpacity>
         </View>
       </SafeAreaView>
     );

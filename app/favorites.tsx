@@ -18,6 +18,7 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import AppHeader from '@/components/AppHeader';
+import SignInPrompt from '@/components/SignInPrompt';
 import SignedImage from '@/components/SignedImage';
 
 type ViewMode = 'grid' | 'list';
@@ -37,7 +38,7 @@ interface FavoriteItem {
 }
 
 export default function FavoritesScreen() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
@@ -402,9 +403,19 @@ export default function FavoritesScreen() {
     );
   };
 
+  if (!user) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <AppHeader title="Favorites" showBack />
+        {authLoading ? null : (
+          <SignInPrompt title="Sign in to see favorites" message="Saved pets, shelters, and people live on your account." />
+        )}
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
       <AppHeader title="Favorites" showBack rightAction={
         <View style={styles.headerActions}>
           <TouchableOpacity style={[styles.viewButton, viewMode === 'grid' && styles.viewButtonActive]} onPress={() => setViewMode('grid')}>

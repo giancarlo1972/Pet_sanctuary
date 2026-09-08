@@ -13,6 +13,7 @@ import { Colors } from '@/constants/Colors';
 import { Fonts } from '@/constants/Fonts';
 import { router, useFocusEffect } from 'expo-router';
 import { useAuth } from '@/lib/context/AuthContext';
+import SignInPrompt from '@/components/SignInPrompt';
 import { isPlatformAdmin } from '@/lib/admin-access';
 import { supabase } from '@/lib/supabase';
 import { Page } from '@/components/Page';
@@ -44,12 +45,17 @@ export default function ProfileScreen() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
 
+  if (!user) {
+    return (
+      <SafeAreaView style={s.wrap}>
+        {(!mounted || authLoading) ? null : (
+          <SignInPrompt title="Sign in to see your profile" message="Pets, applications, favorites, and on-duty settings stay on your account." />
+        )}
+      </SafeAreaView>
+    );
+  }
   if (!mounted || authLoading) {
     return <SafeAreaView style={[s.wrap, s.center]}><ActivityIndicator color={Colors.coral} /></SafeAreaView>;
-  }
-  if (!user) {
-    router.replace('/auth');
-    return <SafeAreaView style={s.wrap}><ActivityIndicator color={Colors.coral} style={{ marginTop: 40 }} /></SafeAreaView>;
   }
   return <Me userId={user.id} email={user.email || ''} signOut={signOut} actingIsPlatform={actingIsPlatform} />;
 }

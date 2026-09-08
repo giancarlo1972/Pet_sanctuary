@@ -10,9 +10,10 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import { InlineBanner } from '@/components/InlineBanner';
+import SignInPrompt from '@/components/SignInPrompt';
 
 export default function EditProfileScreen() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [fullName, setFullName] = useState('');
   const [location, setLocation] = useState('');
   const [phone, setPhone] = useState('');
@@ -73,6 +74,21 @@ export default function EditProfileScreen() {
     }
     setSaving(false);
   };
+
+  if (!user) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.topBar}>
+          <TouchableOpacity style={styles.topBtn} onPress={() => router.back()} activeOpacity={0.75}>
+            <ChevronLeft color={Colors.text} size={22} />
+          </TouchableOpacity>
+          <Text style={styles.topTitle}>Edit Profile</Text>
+          <View style={styles.topBtn} />
+        </View>
+        {authLoading ? null : <SignInPrompt title="Sign in to edit your profile" />}
+      </SafeAreaView>
+    );
+  }
 
   if (loading) {
     return (

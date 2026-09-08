@@ -10,9 +10,10 @@ import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 import { InlineBanner } from '@/components/InlineBanner';
 import { PROVIDER_SERVICES } from '@/lib/role-categories';
+import SignInPrompt from '@/components/SignInPrompt';
 
 export default function BookService() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const { providerId, service } = useLocalSearchParams<{ providerId?: string; service?: string }>();
   const [name, setName] = useState('Provider');
   const [offered, setOffered] = useState<string[]>(['sitter']);
@@ -60,6 +61,17 @@ export default function BookService() {
     if (error) { setBanner({ kind: 'error', message: error.message || 'Could not request booking.' }); return; }
     router.replace('/(tabs)/profile');
   };
+
+  if (!user) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: Colors.screen }} edges={['top']}>
+        <AppHeader title="Request booking" showBack />
+        {authLoading ? null : (
+          <SignInPrompt title="Sign in to book" message="Sitters, walkers, and trainers take requests from signed-in members." />
+        )}
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors.screen }} edges={['top']}>

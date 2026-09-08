@@ -72,6 +72,7 @@ import { matchCatalog, vaccineType, durationYearsFromProduct, addYearsLocal, typ
 import { SourceBadge } from '@/components/SourceBadge';
 import SharePetSheet from '@/components/SharePetSheet';
 import { PET_TRAITS, normalizeTraits, type PetTrait } from '@/lib/pet-traits';
+import SignInPrompt from '@/components/SignInPrompt';
 
 function blobTypeFromName(path: string) {
   if (/\.pdf$/i.test(path)) return 'application/pdf';
@@ -660,7 +661,7 @@ function StatusTile({
 export default function PetRecordScreen() {
   const params = useLocalSearchParams<{ petId?: string; id?: string }>();
   const petId = params.petId || params.id || '';
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const insets = useSafeAreaInsets();
 
   const [pet, setPet] = useState<Pet | null>(null);
@@ -2276,6 +2277,17 @@ export default function PetRecordScreen() {
       }
     }
   };
+
+  if (!user) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <AppHeader title="Records" showBack />
+        {authLoading ? null : (
+          <SignInPrompt title="Sign in to see records" message="Medical history, documents, and care notes stay with the pet's people." />
+        )}
+      </SafeAreaView>
+    );
+  }
 
   if (loading) {
     return (

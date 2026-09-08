@@ -10,10 +10,11 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import { InlineBanner } from '@/components/InlineBanner';
+import SignInPrompt from '@/components/SignInPrompt';
 
 export default function ApplicationScreen() {
   const { petId, type } = useLocalSearchParams<{ petId: string; type: string }>();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [pet, setPet] = useState<{ name: string; breed: string | null; species: string; main_photo_url: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
@@ -61,6 +62,21 @@ export default function ApplicationScreen() {
     }
     setSubmitting(false);
   };
+
+  if (!user) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.topBar}>
+          <TouchableOpacity style={styles.topBtn} onPress={() => router.back()} activeOpacity={0.75}>
+            <ChevronLeft color={Colors.text} size={22} />
+          </TouchableOpacity>
+          <Text style={styles.topTitle}>Application</Text>
+          <View style={styles.topBtn} />
+        </View>
+        {authLoading ? null : <SignInPrompt title="Sign in to apply" message="Adoption and foster applications are saved to your account." />}
+      </SafeAreaView>
+    );
+  }
 
   if (loading) {
     return (

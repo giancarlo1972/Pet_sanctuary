@@ -207,7 +207,7 @@ export default function LostStrayReportScreen() {
         pet_id: prefillPetId || null,
         photo_url: photoUrl,
         extra_notes: extra || null,
-        status: 'active',
+        status: 'pending_moderation',
       }).select('id').single();
       if (error) throw error;
       router.replace(`/report-details?id=${data.id}`);

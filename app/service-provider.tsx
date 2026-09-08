@@ -10,9 +10,10 @@ import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 import { InlineBanner } from '@/components/InlineBanner';
 import { PROVIDER_SERVICES } from '@/lib/role-categories';
+import SignInPrompt from '@/components/SignInPrompt';
 
 export default function ServiceProviderSetup() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [services, setServices] = useState<string[]>(['sitter']);
   const [bio, setBio] = useState('');
   const [rate, setRate] = useState('');
@@ -55,6 +56,17 @@ export default function ServiceProviderSetup() {
     if (error) { setBanner({ kind: 'error', message: error.message || 'Could not save.' }); return; }
     router.replace('/(tabs)/profile');
   };
+
+  if (!user) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: Colors.screen }} edges={['top']}>
+        <AppHeader title="Offer a service" showBack />
+        {authLoading ? null : (
+          <SignInPrompt title="Sign in to offer services" message="Sitters, walkers, and trainers list from a signed-in profile." />
+        )}
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors.screen }} edges={['top']}>

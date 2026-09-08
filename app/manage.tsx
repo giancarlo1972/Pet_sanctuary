@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import { PawPrint } from 'lucide-react-native';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
+import SignInPrompt from '@/components/SignInPrompt';
 import { InlineBanner } from '@/components/InlineBanner';
 import { Colors } from '@/constants/Colors';
 import { Fonts } from '@/constants/Fonts';
@@ -62,6 +63,17 @@ export default function ManageScreen() {
 
   useEffect(() => { if (!authLoading) load(); }, [authLoading, load]);
 
+  if (!user) {
+    return (
+      <SafeAreaView style={styles.wrap} edges={['top']}>
+        <AppHeader title="Manage" showBack />
+        {authLoading ? null : (
+          <SignInPrompt title="Sign in to manage" message="Pets, applications, and on-duty settings are on your account." />
+        )}
+      </SafeAreaView>
+    );
+  }
+
   if (authLoading || loading) {
     return (
       <SafeAreaView style={styles.wrap} edges={['top']}>
@@ -69,11 +81,6 @@ export default function ManageScreen() {
         <ActivityIndicator color={Colors.coral} style={{ marginTop: 40 }} />
       </SafeAreaView>
     );
-  }
-
-  if (!user) {
-    router.replace('/auth');
-    return null;
   }
 
   return (

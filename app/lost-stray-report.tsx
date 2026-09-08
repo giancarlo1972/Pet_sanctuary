@@ -1,17 +1,19 @@
 import React, { useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
-  ActivityIndicator, KeyboardAvoidingView, Platform, Image,
+  View, Text, StyleSheet, TouchableOpacity, TextInput,
+  ActivityIndicator, KeyboardAvoidingView, Platform, Image, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ChevronLeft, MapPin } from 'lucide-react-native';
+import { ChevronLeft, MapPin, Camera, Image as ImageIcon } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import { InlineBanner } from '@/components/InlineBanner';
+import { Page, CONTENT_MAX } from '@/components/Page';
+import { prepareImageFile } from '@/lib/prepare-image';
 
 const REPORT_TYPES = [
   { value: 'lost', label: 'Lost' },
@@ -60,6 +62,7 @@ export default function LostStrayReportScreen() {
   const [lng, setLng] = useState<number | null>(null);
   const [locating, setLocating] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [cameraDenied, setCameraDenied] = useState(false);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
 
   const applyDraft = (d: Draft) => {
@@ -70,23 +73,83 @@ export default function LostStrayReportScreen() {
     setDescription(d.short_description || '');
   };
 
-  const pickPhoto = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images', quality: 0.6, exif: true,
+  const applyPickedPhoto = async (uri: string, file?: File, exif?: Record<string, any> | null) => {
+    try {
+      let preview = uri;
+      if (file) {
+        const prepared = await prepareImageFile(file);
+        preview = prepared.dataUrl;
+      } else if (typeof document !== 'undefined') {
+        const blob = await (await fetch(uri)).blob();
+        const f = new File([blob], 'photo.jpg', { type: blob.type || 'image/jpeg' });
+        const prepared = await prepareImageFile(f);
+        preview = prepared.dataUrl;
+      }
+      setPhotoUri(preview);
+      const gpsLat = exif?.GPSLatitude ?? exif?.gpsLatitude;
+      const gpsLng = exif?.GPSLongitude ?? exif?.gpsLongitude;
+      if (typeof gpsLat === 'number' && typeof gpsLng === 'number') {
+        setLat(gpsLat);
+        setLng(gpsLng);
+        setLocation(`Photo location (${gpsLat.toFixed(5)}, ${gpsLng.toFixed(5)})`);
+      }
+      setStep(2);
+      runAnalyze(preview);
+    } catch (e: any) {
+      setBanner({ message: e?.message || 'Could not read that photo.', kind: 'error' });
+    }
+  };
+
+  const pickWebFile = (capture: boolean) => {
+    if (typeof document === 'undefined') return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    if (capture) input.setAttribute('capture', 'environment');
+    input.style.display = 'none';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      input.remove();
+      if (!file) return;
+      await applyPickedPhoto(URL.createObjectURL(file), file);
+    };
+    document.body.appendChild(input);
+    input.click();
+  };
+
+  const takePhoto = async () => {
+    if (Platform.OS === 'web') {
+      pickWebFile(true);
+      return;
+    }
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      setCameraDenied(true);
+      return;
+    }
+    setCameraDenied(false);
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: 'images', quality: 0.8, exif: true,
     });
     if (result.canceled || !result.assets?.[0]) return;
-    const asset = result.assets[0];
-    setPhotoUri(asset.uri);
-    const ex = asset.exif as Record<string, any> | null;
-    const gpsLat = ex?.GPSLatitude ?? ex?.gpsLatitude;
-    const gpsLng = ex?.GPSLongitude ?? ex?.gpsLongitude;
-    if (typeof gpsLat === 'number' && typeof gpsLng === 'number') {
-      setLat(gpsLat);
-      setLng(gpsLng);
-      setLocation(`Photo location (${gpsLat.toFixed(5)}, ${gpsLng.toFixed(5)})`);
+    await applyPickedPhoto(result.assets[0].uri, undefined, result.assets[0].exif as Record<string, any> | null);
+  };
+
+  const chooseFromLibrary = async () => {
+    if (Platform.OS === 'web') {
+      pickWebFile(false);
+      return;
     }
-    setStep(2);
-    runAnalyze(asset.uri);
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      setBanner({ message: 'Photo library access is needed to choose a picture.', kind: 'error' });
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images', quality: 0.8, exif: true,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    await applyPickedPhoto(result.assets[0].uri, undefined, result.assets[0].exif as Record<string, any> | null);
   };
 
   const skipPhoto = () => {
@@ -95,7 +158,7 @@ export default function LostStrayReportScreen() {
     setStep(3);
   };
 
-    const toJpegBase64 = async (uri: string) => {
+  const toJpegBase64 = async (uri: string) => {
     const blob = await (await fetch(uri)).blob();
     if (typeof createImageBitmap === 'function' && typeof document !== 'undefined') {
       const bmp = await createImageBitmap(blob);
@@ -219,31 +282,57 @@ export default function LostStrayReportScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.topBar}>
-        <TouchableOpacity style={styles.topBtn} onPress={() => (step > 1 ? setStep(step - 1) : router.back())} activeOpacity={0.75}>
-          <ChevronLeft color={Colors.text} size={22} />
-        </TouchableOpacity>
-        <Text style={styles.topTitle}>Report an Animal</Text>
-        <Text style={styles.stepHint}>{step}/4</Text>
-      </View>
-      <View style={styles.tracker}>
-        {STEPS.map((s) => (
-          <View key={s.n} style={styles.trackerItem}>
-            <View style={[styles.trackerDot, step >= s.n && styles.trackerDotOn]} />
-            <Text style={[styles.trackerLabel, step === s.n && styles.trackerLabelOn]}>{s.label}</Text>
+      <View style={styles.chrome}>
+        <View style={styles.chromeInner}>
+          <View style={styles.topBar}>
+            <TouchableOpacity style={styles.topBtn} onPress={() => (step > 1 ? setStep(step - 1) : router.back())} activeOpacity={0.75}>
+              <ChevronLeft color={Colors.text} size={22} />
+            </TouchableOpacity>
+            <Text style={styles.topTitle}>Report an Animal</Text>
+            <Text style={styles.stepHint}>{step}/4</Text>
           </View>
-        ))}
+          <View style={styles.progressRow}>
+            {STEPS.map((s) => (
+              <View key={s.n} style={styles.progressCol}>
+                <View
+                  style={[
+                    styles.progressBar,
+                    s.n < step && styles.progressBarDone,
+                    s.n === step && styles.progressBarCurrent,
+                    s.n > step && styles.progressBarTodo,
+                  ]}
+                />
+                <Text style={[styles.progressLabel, s.n === step && styles.progressLabelOn]}>{s.label}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
       </View>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        <Page>
           {step === 1 && (
             <>
               <Text style={styles.heroTitle}>Start with a photo</Text>
               <Text style={styles.heroSub}>We’ll suggest type, species, and a short description. You confirm before anything is saved.</Text>
               {photoUri ? <Image source={{ uri: photoUri }} style={styles.preview} resizeMode="cover" /> : null}
-              <TouchableOpacity style={styles.submitBtn} onPress={pickPhoto} activeOpacity={0.85}>
-                <Text style={styles.submitText}>{photoUri ? 'Choose a different photo' : 'Add a photo'}</Text>
-              </TouchableOpacity>
+              <View style={styles.photoActions}>
+                <TouchableOpacity style={[styles.submitBtn, styles.photoAction]} onPress={takePhoto} activeOpacity={0.85}>
+                  <Camera color={Colors.white} size={18} />
+                  <Text style={styles.submitText}>Take photo</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.outlineBtn, styles.photoAction]} onPress={chooseFromLibrary} activeOpacity={0.85}>
+                  <ImageIcon color={Colors.navy} size={18} />
+                  <Text style={styles.outlineText}>Choose from library</Text>
+                </TouchableOpacity>
+              </View>
+              {cameraDenied ? (
+                <View style={styles.permNote}>
+                  <Text style={styles.permText}>Camera access is off. You can still choose a photo from your library.</Text>
+                  <TouchableOpacity onPress={() => Linking.openSettings()} activeOpacity={0.85}>
+                    <Text style={styles.permLink}>Open settings</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
               <TouchableOpacity style={styles.secondaryBtn} onPress={skipPhoto} activeOpacity={0.85}>
                 <Text style={styles.secondaryText}>Skip — I’ll type it</Text>
               </TouchableOpacity>
@@ -348,7 +437,7 @@ export default function LostStrayReportScreen() {
               </TouchableOpacity>
             </>
           )}
-        </ScrollView>
+        </Page>
       </KeyboardAvoidingView>
       {banner && <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />}
     </SafeAreaView>
@@ -357,21 +446,36 @@ export default function LostStrayReportScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
-  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  chrome: { backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border, alignItems: 'center' },
+  chromeInner: { width: '100%', maxWidth: CONTENT_MAX },
+  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10 },
   topBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
   topTitle: { flex: 1, fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.text, textAlign: 'center' },
   stepHint: { width: 40, textAlign: 'right', fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.textSecondary },
-  tracker: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 10, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  trackerItem: { flex: 1, alignItems: 'center' },
-  trackerDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.border, marginBottom: 4 },
-  trackerDotOn: { backgroundColor: Colors.coral },
-  trackerLabel: { fontSize: FontSizes.xs, fontFamily: Fonts.medium, color: Colors.textTertiary },
-  trackerLabelOn: { color: Colors.coral, fontFamily: Fonts.bold },
-  scrollContent: { paddingHorizontal: 20, paddingVertical: 16, paddingBottom: 60 },
+  progressRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingBottom: 12 },
+  progressCol: { flex: 1, alignItems: 'center', gap: 6 },
+  progressBar: { height: 4, width: '100%', borderRadius: 999 },
+  progressBarDone: { backgroundColor: Colors.teal },
+  progressBarCurrent: { backgroundColor: Colors.coral },
+  progressBarTodo: { backgroundColor: '#E8EAF0' },
+  progressLabel: { fontSize: FontSizes.xs, fontFamily: Fonts.medium, color: Colors.textTertiary },
+  progressLabelOn: { color: Colors.coral, fontFamily: Fonts.bold },
   heroTitle: { fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.text, marginBottom: 8, textAlign: 'center' },
   heroSub: { fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.textSecondary, textAlign: 'center', marginBottom: 16 },
   body: { fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.text, marginBottom: 16, lineHeight: 22 },
   preview: { width: '100%', height: 220, borderRadius: 12, marginBottom: 16, backgroundColor: Colors.surface },
+  photoActions: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  photoAction: { flex: 1, marginTop: 0, flexDirection: 'row', justifyContent: 'center', gap: 8 },
+  outlineBtn: {
+    backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.navy, borderRadius: 14,
+    paddingVertical: 16, alignItems: 'center',
+  },
+  outlineText: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.navy },
+  permNote: {
+    backgroundColor: Colors.surface, borderRadius: 12, padding: 12, gap: 6, marginTop: 8,
+  },
+  permText: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, lineHeight: 18 },
+  permLink: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.coral },
   sectionLabel: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8, marginTop: 8 },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
   chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.border },

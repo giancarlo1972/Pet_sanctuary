@@ -6,11 +6,16 @@ export function placeKey(q) {
 
 async function photon(q) {
   const res = await fetch(
-    'https://photon.komoot.io/api/?limit=1&lang=en&lat=39&lon=-77&q=' + encodeURIComponent(q),
+    'https://photon.komoot.io/api/?limit=5&lang=en&q=' + encodeURIComponent(q),
     UA,
   );
   const json = await res.json();
-  const c = json?.features?.[0]?.geometry?.coordinates;
+  const feats = Array.isArray(json?.features) ? json.features : [];
+  const city = feats.find((f) => {
+    const p = f?.properties || {};
+    return p.type === 'city' || ['city', 'town', 'village', 'hamlet'].includes(p.osm_value);
+  }) || feats[0];
+  const c = city?.geometry?.coordinates;
   if (!Array.isArray(c) || c.length < 2) return null;
   const lng = Number(c[0]);
   const lat = Number(c[1]);

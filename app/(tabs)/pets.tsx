@@ -9,7 +9,6 @@ import {
   FlatList,
   ActivityIndicator,
   StatusBar,
-  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
@@ -23,7 +22,6 @@ import { Page } from '@/components/Page';
 import SignedImage from '@/components/SignedImage';
 
 const CARD_GAP = 12;
-const SIDE_PADDING = 20;
 
 interface Pet {
   id: string;
@@ -52,15 +50,12 @@ const FILTER_CHIPS: { id: FilterId; label: string }[] = [
 
 export default function PetsScreen() {
   const { user } = useAuth();
-  const { width } = useWindowDimensions();
   const [pets, setPets] = useState<Pet[]>([]);
   const [loading, setLoading] = useState(true);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [activeFilter, setActiveFilter] = useState<FilterId>('all');
 
-  const availableWidth = width - SIDE_PADDING * 2;
   const numColumns = 2;
-  const cardWidth = (availableWidth - CARD_GAP) / numColumns;
 
   const loadPets = useCallback(async () => {
     setLoading(true);
@@ -154,7 +149,7 @@ export default function PetsScreen() {
     const photo = item.main_photo_url;
     return (
       <TouchableOpacity
-        style={[styles.petCard, { width: cardWidth }]}
+        style={styles.petCard}
         onPress={() => router.push(`/pet-details?id=${item.id}`)}
         activeOpacity={0.85}
       >
@@ -260,7 +255,7 @@ export default function PetsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
   filterBar: { paddingBottom: 8 },
-  filterBarContent: { paddingHorizontal: 20, gap: 8 },
+  filterBarContent: { gap: 8 },
   filterChip: {
     paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999,
     backgroundColor: Colors.white, borderWidth: 1, borderColor: '#E8EAF0',
@@ -272,7 +267,7 @@ const styles = StyleSheet.create({
   filterChipTextActive: { color: Colors.white },
   galleryHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 20, marginBottom: 12,
+    marginBottom: 12,
   },
   galleryLabel: {
     fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.text,
@@ -281,19 +276,21 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.sm, fontFamily: Fonts.medium, color: Colors.textSecondary,
   },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  listContent: { paddingHorizontal: 20, paddingBottom: 100 },
+  listContent: { paddingBottom: 100 },
   row: { gap: CARD_GAP, marginBottom: CARD_GAP },
   petCard: {
+    flex: 1,
+    maxWidth: '48%',
     backgroundColor: Colors.white, borderRadius: 16, overflow: 'hidden',
     elevation: 2, shadowColor: Colors.shadow, shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08, shadowRadius: 4,
   },
   petCardImageWrap: {
-    position: 'relative', width: '100%', height: 180,
+    position: 'relative', width: '100%', height: 130,
     backgroundColor: Colors.navy, overflow: 'hidden',
     borderTopLeftRadius: 16, borderTopRightRadius: 16,
   },
-  petCardImage: { width: '100%', height: '100%' },
+  petCardImage: { width: '100%', height: 130 },
   heartButton: {
     position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 15,
     backgroundColor: 'rgba(255,255,255,0.9)', justifyContent: 'center', alignItems: 'center',

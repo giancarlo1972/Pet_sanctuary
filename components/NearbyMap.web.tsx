@@ -1,6 +1,18 @@
 import React, { createElement, useEffect, useRef } from 'react';
 import { View, StyleSheet } from 'react-native';
-import type { NearbyMapProps } from './NearbyMapProps';
+import type { NearbyMapProps, NearbyPin } from './NearbyMapProps';
+
+function esc(s: string) {
+  return String(s).replace(/&/g, '&').replace(/</g, '<').replace(/"/g, '"');
+}
+
+function pinHtml(pin: NearbyPin, selected: boolean) {
+  const label = pin.count != null ? String(pin.count) : (pin.initial || '');
+  if (!label) return null;
+  const size = selected ? 32 : 28;
+  const font = pin.count != null && pin.count > 9 ? 10 : 11;
+  return `<div style="width:${size}px;height:${size}px;border-radius:${size / 2}px;background:${esc(pin.color)};color:#fff;font:700 ${font}px/${size}px Inter,system-ui,sans-serif;text-align:center;border:${selected ? 3 : 2}px solid #fff;box-shadow:0 1px 4px rgba(38,38,94,.35)">${esc(label)}</div>`;
+}
 
 export default function NearbyMap(props: NearbyMapProps) {
   const host = useRef<HTMLDivElement | null>(null);
@@ -19,6 +31,12 @@ export default function NearbyMap(props: NearbyMapProps) {
         link.rel = 'stylesheet';
         link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
         document.head.appendChild(link);
+      }
+      if (!document.getElementById('ra-pin-css')) {
+        const s = document.createElement('style');
+        s.id = 'ra-pin-css';
+        s.textContent = '.ra-pin{background:none!important;border:none!important}';
+        document.head.appendChild(s);
       }
       const mod = await import('leaflet');
       const L = (mod as any).default || mod;
@@ -57,13 +75,23 @@ export default function NearbyMap(props: NearbyMapProps) {
 
       for (const pin of props.pins) {
         const selected = pin.id === props.selectedId;
-        const marker = L.circleMarker([pin.lat, pin.lng], {
-          radius: selected ? 12 : 9,
-          color: '#ffffff',
-          weight: selected ? 3 : 2,
-          fillColor: pin.color,
-          fillOpacity: 1,
-        });
+        const html = pinHtml(pin, selected);
+        const marker = html
+          ? L.marker([pin.lat, pin.lng], {
+              icon: L.divIcon({
+                className: 'ra-pin',
+                html,
+                iconSize: selected ? [32, 32] : [28, 28],
+                iconAnchor: selected ? [16, 16] : [14, 14],
+              }),
+            })
+          : L.circleMarker([pin.lat, pin.lng], {
+              radius: selected ? 12 : 9,
+              color: '#ffffff',
+              weight: selected ? 3 : 2,
+              fillColor: pin.color,
+              fillOpacity: 1,
+            });
         marker.bindTooltip(pin.title);
         marker.on('click', () => onSelectRef.current(pin));
         marker.addTo(group);

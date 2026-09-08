@@ -9,6 +9,8 @@ export type NearbyPin = {
   subtitle?: string;
   color: string;
   href: string;
+  initial?: string;
+  count?: number;
 };
 
 export type NearbyMapProps = {

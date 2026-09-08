@@ -13,6 +13,7 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import { loadHelpFlags } from '@/lib/help-alerts';
+import { geocodeMany, geocodePlace, reverseGeocode } from '@/lib/geocode';
 
 const FALLBACK = { lat: 40.758, lng: -73.985 };
 const RADII = [5, 10, 25];
@@ -46,6 +47,29 @@ function reportTitle(r: { pet_name?: string | null; location_address?: string; r
   return TYPE_LABEL[r.report_type || ''] || 'Animal report';
 }
 
+function coords(lat: unknown, lng: unknown): { lat: number; lng: number } | null {
+  const a = Number(lat);
+  const b = Number(lng);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || !a) return null;
+  return { lat: a, lng: b };
+}
+
+function orgPlace(o: { address?: string | null; city?: string | null; state?: string | null; location?: string | null }) {
+  const cityState = [o.city, o.state].filter(Boolean).join(', ');
+  if (o.address && cityState) return `${o.address}, ${cityState}`;
+  if (cityState) return cityState;
+  if (o.location) return String(o.location).trim();
+  if (o.address) return String(o.address).trim();
+  return '';
+}
+
+function orgInitial(name: string) {
+  const words = String(name || '').trim().split(/\s+/).filter((w) => w && !/^(the|of|and|for|a)$/i.test(w));
+  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+  const t = (words[0] || name || '?').replace(/[^A-Za-z0-9]/g, '');
+  return (t.slice(0, 2) || '•').toUpperCase();
+}
+
 async function deviceLocation(): Promise<{ lat: number; lng: number } | null> {
   try {
     if (typeof navigator === 'undefined' || !navigator.geolocation) return null;
@@ -56,6 +80,11 @@ async function deviceLocation(): Promise<{ lat: number; lng: number } | null> {
   } catch {
     return null;
   }
+}
+
+function persistOrgCoords(id: string, loc: { lat: number; lng: number }) {
+  if (!id || id.startsWith('rg-')) return;
+  supabase.rpc('store_org_coords', { p_id: id, p_lat: loc.lat, p_lng: loc.lng }).then(() => {}, () => {});
 }
 
 export default function NearbyScreen() {
@@ -76,11 +105,23 @@ export default function NearbyScreen() {
       const flags = user?.id ? await loadHelpFlags(user.id) : null;
       if (flags?.alert_radius_mi) setRadiusMi(flags.alert_radius_mi);
       const loc = (await deviceLocation()) || FALLBACK;
+      const didLocate = !!loc && loc !== FALLBACK;
       setCenter(loc);
-      setLocated(!!loc && loc !== FALLBACK);
+      setLocated(didLocate);
 
-      const q = `lat=${loc.lat}&lng=${loc.lng}`;
-      const [reportsRes, petsLocal, petsRemote, clinicsJson, sheltersJson] = await Promise.all([
+      const rev = didLocate ? await reverseGeocode(loc.lat, loc.lng) : null;
+      const state = (rev?.stateCode || 'NY').slice(0, 2).toUpperCase();
+
+      const orgsFull = await supabase
+        .from('organizations')
+        .select('id, name, org_type, city, state, address, latitude, longitude')
+        .eq('status', 'approved')
+        .limit(200);
+      const orgsRes = orgsFull.error
+        ? await supabase.from('organizations').select('id, name, org_type, city, state, address').eq('status', 'approved').limit(200)
+        : orgsFull;
+
+      const [reportsRes, petsLocal, petsRemote, rgOrgs, clinicsJson] = await Promise.all([
         supabase
           .from('reports')
           .select('id, report_type, severity, status, pet_name, location_address, description, created_at, latitude, longitude')
@@ -93,22 +134,47 @@ export default function NearbyScreen() {
           .eq('listing_type', 'adoptable')
           .eq('is_public', true)
           .order('created_at', { ascending: false })
-          .limit(40),
-        fetch('/api/rescuegroups?pets=1&state=NY').then((r) => r.ok ? r.json() : { pets: [] }).catch(() => ({ pets: [] })),
-        fetch('/api/nearby-clinics?kind=clinic&' + q).then((r) => r.json()).catch(() => ({ clinics: [] })),
-        fetch('/api/nearby-clinics?kind=shelter&' + q).then((r) => r.json()).catch(() => ({ clinics: [] })),
+          .limit(80),
+        fetch(`/api/rescuegroups?pets=1&state=${encodeURIComponent(state)}`).then((r) => r.ok ? r.json() : { pets: [] }).catch(() => ({ pets: [] })),
+        fetch(`/api/rescuegroups?state=${encodeURIComponent(state)}`).then((r) => r.ok ? r.json() : { orgs: [] }).catch(() => ({ orgs: [] })),
+        fetch(`/api/nearby-clinics?kind=clinic&lat=${loc.lat}&lng=${loc.lng}`).then((r) => r.json()).catch(() => ({ clinics: [] })),
       ]);
+
+      const localOrgs = (orgsRes.data || []) as any[];
+      const remoteOrgs = ((rgOrgs.orgs || []) as any[]).filter((o) => !localOrgs.some((l) => String(l.name || '').toLowerCase() === String(o.name || '').toLowerCase()));
+      const allOrgs = [...localOrgs, ...remoteOrgs];
+
+      const seenPet = new Set<string>();
+      const allPets: any[] = [];
+      for (const p of [...((petsRemote.pets || []) as any[]), ...(petsLocal.data || [])]) {
+        const id = String(p.id);
+        if (seenPet.has(id)) continue;
+        seenPet.add(id);
+        allPets.push(p);
+      }
+
+      const toGeocode: string[] = [];
+      for (const o of allOrgs) {
+        if (coords(o.latitude ?? o.lat, o.longitude ?? o.lng)) continue;
+        const q = orgPlace(o);
+        if (q) toGeocode.push(q);
+      }
+      for (const p of allPets) {
+        if (coords(p.lat ?? p.latitude, p.lng ?? p.longitude)) continue;
+        const q = String(p.location || '').trim();
+        if (q) toGeocode.push(q);
+      }
+      await geocodeMany(toGeocode);
 
       const next: NearbyPin[] = [];
 
       for (const r of reportsRes.data || []) {
-        const lat = Number(r.latitude);
-        const lng = Number(r.longitude);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        const c = coords(r.latitude, r.longitude);
+        if (!c) continue;
         next.push({
           id: 'report-' + r.id,
           layer: 'reports',
-          lat, lng,
+          lat: c.lat, lng: c.lng,
           title: reportTitle(r),
           subtitle: TYPE_LABEL[r.report_type] || r.report_type,
           color: SEV_COLOR[r.severity] || Colors.accent,
@@ -116,54 +182,99 @@ export default function NearbyScreen() {
         });
       }
 
-      const remotePets = (petsRemote.pets || []) as any[];
-      const seen = new Set<string>();
-      for (const p of remotePets) {
-        const lat = Number(p.lat);
-        const lng = Number(p.lng);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng) || !lat) continue;
-        seen.add(p.id);
+      for (const o of allOrgs) {
+        let c = coords(o.latitude ?? o.lat, o.longitude ?? o.lng);
+        const q = orgPlace(o);
+        if (!c && q) c = await geocodePlace(q);
+        if (!c) continue;
+        if (!coords(o.latitude ?? o.lat, o.longitude ?? o.lng) && q) persistOrgCoords(String(o.id), c);
+        const place = [o.city, o.state].filter(Boolean).join(', ') || o.location || o.address || '';
         next.push({
-          id: 'pet-' + p.id,
-          layer: 'pets',
-          lat, lng,
-          title: p.name || 'Pet',
-          subtitle: [p.breed, p.location].filter(Boolean).join(' · '),
-          color: Colors.teal,
-          href: `/pet-details?id=${p.id}`,
-        });
-      }
-      for (const p of petsLocal.data || []) {
-        if (seen.has(p.id)) continue;
-        const lat = Number((p as any).lat ?? (p as any).latitude);
-        const lng = Number((p as any).lng ?? (p as any).longitude);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng) || !lat) continue;
-        next.push({
-          id: 'pet-' + p.id,
-          layer: 'pets',
-          lat, lng,
-          title: p.name || 'Pet',
-          subtitle: [p.breed, p.location].filter(Boolean).join(' · '),
-          color: Colors.teal,
-          href: `/pet-details?id=${p.id}`,
+          id: 'org-' + o.id,
+          layer: 'clinics',
+          lat: c.lat, lng: c.lng,
+          title: o.name || 'Organization',
+          subtitle: [o.org_type, place].filter(Boolean).join(' · '),
+          color: Colors.navy,
+          href: `/organization-details?id=${o.id}`,
+          initial: orgInitial(o.name || ''),
         });
       }
 
-      for (const c of [...(clinicsJson.clinics || []), ...(sheltersJson.clinics || [])]) {
-        const lat = Number(c.lat);
-        const lng = Number(c.lng);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      for (const c of clinicsJson.clinics || []) {
+        const locC = coords(c.lat, c.lng);
+        if (!locC) continue;
         next.push({
           id: 'clinic-' + c.id,
           layer: 'clinics',
-          lat, lng,
+          lat: locC.lat, lng: locC.lng,
           title: c.name,
           subtitle: c.status_label || c.address || (c.is_er ? 'ER' : 'Clinic'),
           color: c.is_er || c.is_24h ? Colors.coral : Colors.navy,
-          href: c.maps_url || c.website || `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`,
+          href: c.maps_url || c.website || `https://www.google.com/maps/search/?api=1&query=${locC.lat},${locC.lng}`,
+          initial: orgInitial(c.name || 'Vet'),
         });
       }
 
+      const groups = new Map<string, { lat: number; lng: number; label: string; pets: any[] }>();
+      for (const p of allPets) {
+        let c = coords(p.lat ?? p.latitude, p.lng ?? p.longitude);
+        const place = String(p.location || '').trim();
+        if (!c && place) c = await geocodePlace(place);
+        if (!c) continue;
+        const key = place.toLowerCase() || `${c.lat.toFixed(2)},${c.lng.toFixed(2)}`;
+        const g = groups.get(key) || { lat: c.lat, lng: c.lng, label: place || 'Nearby', pets: [] };
+        g.pets.push(p);
+        groups.set(key, g);
+      }
+      for (const [key, g] of groups) {
+        const n = g.pets.length;
+        if (n === 1) {
+          const p = g.pets[0];
+          next.push({
+            id: 'pet-' + p.id,
+            layer: 'pets',
+            lat: g.lat, lng: g.lng,
+            title: p.name || 'Pet',
+            subtitle: [p.breed, g.label].filter(Boolean).join(' · '),
+            color: Colors.teal,
+            href: `/pet-details?id=${p.id}`,
+            count: 1,
+          });
+        } else {
+          next.push({
+            id: 'pets-' + key,
+            layer: 'pets',
+            lat: g.lat, lng: g.lng,
+            title: `${n} adoptable pets`,
+            subtitle: g.label,
+            color: Colors.teal,
+            href: '/pets',
+            count: n,
+          });
+        }
+      }
+
+      const focus = next.filter((p) => p.layer !== 'reports');
+      const inR = (c: { lat: number; lng: number }, mi: number) =>
+        next.some((p) => kmBetween(c, p) <= mi * 1.609 + 0.05);
+      let nextCenter = loc;
+      let nextMi = flags?.alert_radius_mi || 5;
+      if (!inR(loc, nextMi)) {
+        if (inR(loc, 10)) nextMi = 10;
+        else if (inR(loc, 25)) nextMi = 25;
+        else if (!didLocate && focus.length) {
+          nextCenter = {
+            lat: focus.reduce((s, p) => s + p.lat, 0) / focus.length,
+            lng: focus.reduce((s, p) => s + p.lng, 0) / focus.length,
+          };
+          if (inR(nextCenter, 5)) nextMi = 5;
+          else if (inR(nextCenter, 10)) nextMi = 10;
+          else nextMi = 25;
+        }
+      }
+      setRadiusMi(nextMi);
+      setCenter(nextCenter);
       setPins(next);
     } catch {
       setPins([]);
@@ -195,7 +306,7 @@ export default function NearbyScreen() {
 
   const counts = {
     reports: visible.filter((p) => p.layer === 'reports').length,
-    pets: visible.filter((p) => p.layer === 'pets').length,
+    pets: visible.reduce((s, p) => s + (p.layer === 'pets' ? (p.count || 1) : 0), 0),
     clinics: visible.filter((p) => p.layer === 'clinics').length,
   };
 
@@ -214,8 +325,8 @@ export default function NearbyScreen() {
           <View style={styles.chipRow}>
             {([
               { key: 'reports' as const, label: 'Reports', icon: Siren, n: counts.reports },
-              { key: 'pets' as const, label: 'Pets', icon: PawPrint, n: counts.pets },
-              { key: 'clinics' as const, label: 'Clinics', icon: MapPin, n: counts.clinics },
+              { key: 'pets' as const, label: 'Adoptable pets', icon: PawPrint, n: counts.pets },
+              { key: 'clinics' as const, label: 'Shelters & clinics', icon: MapPin, n: counts.clinics },
             ]).map((c) => {
               const on = layers[c.key];
               const Icon = c.icon;
@@ -257,7 +368,9 @@ export default function NearbyScreen() {
                   onPress={() => onSelect(p)}
                   activeOpacity={0.85}
                 >
-                  <View style={[styles.dot, { backgroundColor: p.color }]} />
+                  <View style={[styles.badge, { backgroundColor: p.color }]}>
+                    <Text style={styles.badgeTxt}>{p.count != null ? p.count : (p.initial || '•')}</Text>
+                  </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.rowTitle} numberOfLines={1}>{p.title}</Text>
                     {p.subtitle ? <Text style={styles.rowSub} numberOfLines={1}>{p.subtitle}</Text> : null}
@@ -309,7 +422,8 @@ const styles = StyleSheet.create({
   empty: { fontFamily: Fonts.regular, fontSize: FontSizes.sm, color: Colors.textSecondary, paddingVertical: 8 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.border },
   rowOn: { backgroundColor: Colors.surface },
-  dot: { width: 10, height: 10, borderRadius: 5 },
+  badge: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  badgeTxt: { fontFamily: Fonts.bold, fontSize: 10, color: Colors.white },
   rowTitle: { fontFamily: Fonts.bold, fontSize: 14, color: Colors.navy },
   rowSub: { fontFamily: Fonts.regular, fontSize: 12, color: Colors.textSecondary, marginTop: 1 },
   ago: { fontFamily: Fonts.medium, fontSize: 11, color: Colors.textTertiary },

@@ -76,14 +76,14 @@ export default function PlatformScreen() {
     try {
       if (sec === 'pets' || sec === 'home') {
         const { data, error } = await supabase.from('pets')
-          .select('id, name, species, listing_type, status, owner_id, hidden, merged_into, main_photo_url, is_public, shelter_id')
+          .select('id, name, species, listing_type, status, owner_id, main_photo_url, is_public, shelter_id, created_at')
           .order('created_at', { ascending: false }).limit(200);
         if (error) fail(error, 'Could not load pets.');
         else setPets(data || []);
       }
       if (sec === 'reports' || sec === 'home') {
         const { data, error } = await supabase.from('reports')
-          .select('id, report_type, status, severity, pet_name, location_address, user_id, assigned_to, false_report, created_at, description')
+          .select('id, report_type, status, pet_name, location_address, created_at, description')
           .order('created_at', { ascending: false }).limit(200);
         if (error) fail(error, 'Could not load reports.');
         else setReports(data || []);
@@ -109,7 +109,7 @@ export default function PlatformScreen() {
       }
       if (sec === 'orgs' || sec === 'home') {
         const { data, error } = await supabase.from('organizations')
-          .select('id, name, org_type, status, website, contact_email, ein_verified, rg_sync_status, rg_synced_at, data_source, merged_into')
+          .select('id, name, org_type, status, website, contact_email, ein_verified, data_source')
           .order('name').limit(200);
         if (error) fail(error, 'Could not load organizations.');
         else setOrgs(data || []);

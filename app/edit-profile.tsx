@@ -28,7 +28,7 @@ export default function EditProfileScreen() {
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) { setLoading(false); return; }
     Promise.resolve(supabase.from('profiles').select('*').eq('id', user.id).maybeSingle())
       .then(({ data }) => {
         if (data) {

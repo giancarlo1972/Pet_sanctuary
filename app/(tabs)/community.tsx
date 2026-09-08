@@ -48,6 +48,7 @@ interface OrgRow {
   status: string | null;
   ein_verified: boolean | null;
   tax_deductible: boolean | null;
+  external_id?: string | null;
 }
 
 interface FosterPet {
@@ -206,24 +207,52 @@ export default function CommunityScreen() {
   const loadOrgs = useCallback(async () => {
     try {
       let local: OrgRow[] = [];
-      const { data, error } = await supabase
+      const full = await supabase
         .from('organizations')
-        .select('id, name, org_type, location, logo_url, description, status, ein_verified, tax_deductible')
+        .select('id, name, org_type, city, state, address, logo_url, description, status, ein_verified, tax_deductible, external_id')
         .eq('status', 'approved')
         .order('name');
-      if (!error && data) local = data as OrgRow[];
+      const { data, error } = full.error
+        ? await supabase
+            .from('organizations')
+            .select('id, name, org_type, city, state, address, logo_url, description, status')
+            .eq('status', 'approved')
+            .order('name')
+        : full;
+      if (!error && data) {
+        local = data.map((o: any) => ({
+          id: o.id,
+          name: o.name,
+          org_type: o.org_type,
+          location: [o.city, o.state].filter(Boolean).join(', ') || o.address || null,
+          logo_url: o.logo_url,
+          description: o.description,
+          status: o.status,
+          ein_verified: o.ein_verified ?? null,
+          tax_deductible: o.tax_deductible ?? null,
+          external_id: o.external_id || null,
+        }));
+      }
 
       let remote: OrgRow[] = [];
       try {
-        const resp = await fetch('/api/rescuegroups?state=NY');
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 10000);
+        const resp = await fetch('/api/rescuegroups?state=NY', { signal: ctrl.signal });
+        clearTimeout(t);
         if (resp.ok) {
           const json = await resp.json();
-          remote = (json.orgs || []) as OrgRow[];
+          remote = (json.orgs || []).map((o: any) => ({
+            ...o,
+            external_id: o.id,
+          })) as OrgRow[];
         }
       } catch { /* ignore */ }
 
-      const seen = new Set(local.map((o) => o.name.toLowerCase()));
-      setOrgs([...local, ...remote.filter((o) => !seen.has(o.name.toLowerCase()))]);
+      const byName = new Map(local.map((o) => [o.name.toLowerCase(), o]));
+      const byExt = new Map(local.filter((o) => o.external_id).map((o) => [String(o.external_id), o]));
+      const extra = remote.filter((r) => !byExt.has(r.id) && !byName.has((r.name || '').toLowerCase()));
+      setOrgs([...local, ...extra]);
     } catch { /* ignore */ }
     setLoading(false);
     setRefreshing(false);

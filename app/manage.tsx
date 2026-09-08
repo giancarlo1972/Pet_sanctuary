@@ -30,6 +30,7 @@ export default function ManageScreen() {
   const load = useCallback(async () => {
     if (!user) { setLoading(false); return; }
     setLoading(true);
+    try {
     const { data: owned } = await supabase.from('pets').select('id, name, main_photo_url, species').eq('owner_id', user.id).limit(40);
     const { data: rels } = await supabase.from('pet_relationships').select('pet_id, relationship').eq('user_id', user.id).is('ended_on', null);
     const extraIds = (rels || []).map((x: any) => x.pet_id).filter((id: string) => !(owned || []).some((p) => p.id === id));
@@ -55,7 +56,8 @@ export default function ManageScreen() {
 
     const { data: duty } = await supabase.from('helper_status').select('services, on_duty').eq('user_id', user.id).maybeSingle();
     setServices((((duty as any)?.services) || []) as string[]);
-    setLoading(false);
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
   }, [user]);
 
   useEffect(() => { if (!authLoading) load(); }, [authLoading, load]);

@@ -258,7 +258,7 @@ export default function PetDetailsScreen() {
   }, [id]);
 
   const loadPet = async () => {
-    if (!id) return;
+    if (!id) { setError('Pet not found'); setLoading(false); return; }
     setLoading(true);
     setError(null);
     const petId = String(id);

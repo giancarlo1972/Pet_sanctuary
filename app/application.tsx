@@ -26,7 +26,7 @@ export default function ApplicationScreen() {
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
 
   useEffect(() => {
-    if (!petId) return;
+    if (!petId) { setLoading(false); return; }
     Promise.resolve(supabase.from('pets').select('name, breed, species, main_photo_url').eq('id', petId).maybeSingle())
       .then(({ data }) => { if (data) setPet(data); })
       .finally(() => setLoading(false));

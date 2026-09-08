@@ -45,6 +45,7 @@ export default function OrgAdminScreen() {
     }
     if (!o?.id) { setOrg(null); setLoading(false); return; }
     setOrg(o);
+    try {
     const [{ data: m }, { data: r }, { count }] = await Promise.all([
       supabase.from('organization_members').select('user_id, role, profiles(full_name, email)').eq('organization_id', o.id).order('role'),
       supabase.from('record_access_requests').select('id, scope, status, requester_id, pet_id, pets(name), profiles:requester_id(full_name)')
@@ -52,7 +53,11 @@ export default function OrgAdminScreen() {
       supabase.from('pets').select('id', { count: 'exact', head: true }).eq('shelter_id', o.id),
     ]);
     setMembers((m as any) ?? []); setRequests((r as any) ?? []); setPetCount(count ?? 0);
-    setLoading(false);
+    } catch (e: any) {
+      setError(e?.message || 'Could not load organization.');
+    } finally {
+      setLoading(false);
+    }
   }, [user, actingAs, actingIsOrgAdmin]);
   useEffect(() => { if (!authLoading) load(); }, [authLoading, load]);
 

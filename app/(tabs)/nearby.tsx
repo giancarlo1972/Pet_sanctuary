@@ -160,7 +160,7 @@ export default function NearbyScreen() {
 
       const orgsFull = await supabase
         .from('organizations')
-        .select('id, name, org_type, city, state, address, latitude, longitude')
+        .select('id, name, org_type, city, state, address, latitude, longitude, external_id')
         .eq('status', 'approved')
         .limit(200);
       const orgsRes = orgsFull.error
@@ -187,7 +187,9 @@ export default function NearbyScreen() {
       ]);
 
       const localOrgs = (orgsRes.data || []) as any[];
-      const remoteOrgs = ((rgOrgs.orgs || []) as any[]).filter((o) => !localOrgs.some((l) => String(l.name || '').toLowerCase() === String(o.name || '').toLowerCase()));
+      const byName = new Map(localOrgs.map((l) => [String(l.name || '').toLowerCase(), l]));
+      const byExt = new Map(localOrgs.filter((l) => l.external_id).map((l) => [String(l.external_id), l]));
+      const remoteOrgs = ((rgOrgs.orgs || []) as any[]).filter((o) => !byExt.has(String(o.id)) && !byName.has(String(o.name || '').toLowerCase()));
       const allOrgs = [...localOrgs, ...remoteOrgs];
 
       const spp = (!sppRes.error && sppRes.data) ? (sppRes.data as any[]) : [];

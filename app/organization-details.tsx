@@ -30,6 +30,13 @@ import { supabase } from '@/lib/supabase';
 import SignedImage from '@/components/SignedImage';
 
 const BRAND_COLORS = [Colors.coral, Colors.teal, Colors.navy, Colors.accent, Colors.coralDark, Colors.tealDark];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ORG_SELECT_FULL = 'id, name, description, org_type, address, city, state, website, phone, contact_email, status, ein_verified, tax_deductible, donations_enabled, donate_url, data_source, external_id';
+const ORG_SELECT_SLIM = 'id, name, description, org_type, address, city, state, website, phone, contact_email, status';
+
+function isUuid(value: string) {
+  return UUID_RE.test(value);
+}
 
 function colorForName(name: string): string {
   let hash = 0;
@@ -92,6 +99,52 @@ const SHARE_CHIPS = [
   { label: 'Copy link', icon: LinkIcon },
 ];
 
+function mapDbOrg(dbOrg: any): OrgData {
+  const orgTypeLabel: Record<string, string> = {
+    nonprofit: 'Nonprofit',
+    business: 'Business / Sponsor',
+    municipal: 'Municipal',
+    individual: 'Personal Fundraiser',
+    shelter: 'Shelter',
+    rescue: 'Rescue group',
+    clinic: 'Clinic',
+    sponsor: 'Sponsor',
+  };
+  const city = dbOrg.city
+    || (String(dbOrg.address || '').match(/,\s*([^,]+),\s*[A-Z]{2}/)?.[1])
+    || '';
+  const fromRg = String(dbOrg.data_source || '').toLowerCase().includes('rescue');
+  return {
+    id: dbOrg.id,
+    name: dbOrg.name || 'Organization',
+    description: dbOrg.description || '',
+    type: orgTypeLabel[String(dbOrg.org_type || '').toLowerCase()] || (dbOrg.org_type || 'Organization'),
+    city,
+    status: dbOrg.status || 'pending',
+    ein: '',
+    ein_verified: Boolean(dbOrg.ein_verified),
+    tax_deductible: Boolean(dbOrg.tax_deductible),
+    address: dbOrg.address || [dbOrg.city, dbOrg.state].filter(Boolean).join(', '),
+    website: dbOrg.website || '',
+    donation_url: dbOrg.donate_url || '',
+    contact_email: dbOrg.contact_email || '',
+    data_source: fromRg ? 'RescueGroups.org API' : 'User registered',
+    pets_listed: 0,
+    adoptions: 0,
+    followers: 0,
+    pets: [],
+  };
+}
+
+async function loadOrgRow(rawId: string) {
+  const column = isUuid(rawId) ? 'id' : 'external_id';
+  let res = await supabase.from('organizations').select(ORG_SELECT_FULL).eq(column, rawId).maybeSingle();
+  if (res.error) {
+    res = await supabase.from('organizations').select(ORG_SELECT_SLIM).eq(column, rawId).maybeSingle();
+  }
+  return res;
+}
+
 function openDonate(org: OrgData) {
   const url =
     org.donation_url ||
@@ -112,95 +165,47 @@ export default function OrganizationDetailsScreen() {
   const [einFullAccess, setEinFullAccess] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      if (id) {
-        try {
-          const { data: dbOrg, error } = await supabase
-            .from('organizations')
-            .select('id, name, description, org_type, address, website, phone, contact_email, status, ein, ein_verified, tax_deductible, donations_enabled')
-            .eq('id', id)
-            .single();
-          if (!error && dbOrg) {
-            const orgTypeLabel: Record<string, string> = {
-              nonprofit: 'Nonprofit',
-              business: 'Business / Sponsor',
-              municipal: 'Municipal',
-              individual: 'Personal Fundraiser',
-            };
-            const cityMatch = dbOrg.address?.match(/,\s*([^,]+),\s*[A-Z]{2}\s*\d{5}/);
-            setOrg({
-              id: dbOrg.id,
-              name: dbOrg.name || 'Organization',
-              description: dbOrg.description || '',
-              type: orgTypeLabel[dbOrg.org_type] || 'Organization',
-              city: cityMatch?.[1] || '',
-              status: dbOrg.status || 'pending',
-              ein: dbOrg.ein || '',
-              ein_verified: dbOrg.ein_verified || false,
-              tax_deductible: dbOrg.tax_deductible || false,
-              address: dbOrg.address || '',
-              website: dbOrg.website || '',
-              donation_url: '',
-              contact_email: dbOrg.contact_email || '',
-              data_source: 'User registered',
-              pets_listed: 0,
-              adoptions: 0,
-              followers: 0,
-              pets: [],
-            });
-            setLoading(false);
-            return;
-          }
-        } catch { /* fall through to RescueGroups */ }
-
-        try {
-          const resp = await fetch('/api/rescuegroups?state=NY');
-          const json = await resp.json();
-          const d = (json.orgs || []).find((o: any) => o.id === id);
-          if (d) {
-            setOrg({
-              id: d.id,
-              name: d.name,
-              description: d.description || d.website || '',
-              type: d.org_type || 'Rescue',
-              city: d.location || '',
-              status: 'verified',
-              ein: '',
-              ein_verified: false,
-              tax_deductible: false,
-              address: d.location || '',
-              website: d.website || '',
-              donation_url: d.donation_url || '',
-              contact_email: d.email || '',
-              data_source: 'RescueGroups.org API',
-              pets_listed: 0,
-              adoptions: 0,
-              followers: 0,
-              pets: [],
-            });
-                        try {
-              const petRes = await fetch('/api/rescuegroups?org=' + encodeURIComponent(d.id));
-              const petJson = await petRes.json();
-              const pets = petJson.pets || [];
-              setOrg((prev) => prev && prev.id === d.id ? { ...prev, pets, pets_listed: petJson.foundRows || pets.length } : prev);
-            } catch { /* ignore */ }
-          } else {
-            setOrg(null);
-          }
-        } catch {
-            setOrg(null);
+      setLoading(true);
+      try {
+        const rawId = String(Array.isArray(id) ? id[0] : id || '').trim();
+        if (!rawId) {
+          setOrg(null);
+          return;
         }
-      } else if (story) {
-            setOrg(null);
-      } else {
-            setOrg(null);
+        const { data: dbOrg, error } = await loadOrgRow(rawId);
+        if (cancelled) return;
+        if (error || !dbOrg) {
+          setOrg(null);
+          return;
+        }
+        const mapped = mapDbOrg(dbOrg);
+        setOrg(mapped);
+        const ext = dbOrg.external_id || (!isUuid(rawId) ? rawId : null);
+        if (ext && String(ext).startsWith('rg-')) {
+          fetch('/api/rescuegroups?org=' + encodeURIComponent(String(ext)))
+            .then((r) => r.json())
+            .then((petJson) => {
+              if (cancelled) return;
+              const pets = petJson.pets || [];
+              setOrg((prev) => prev && prev.id === mapped.id
+                ? { ...prev, pets, pets_listed: petJson.foundRows || pets.length }
+                : prev);
+            })
+            .catch(() => { /* pets are optional */ });
+        }
+      } catch {
+        if (!cancelled) setOrg(null);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setLoading(false);
     })();
-  }, [id, story]);
+    return () => { cancelled = true; };
+  }, [id]);
 
   useEffect(() => {
-    if (!org || !org.id || org.id === 'demo' || String(org.id).startsWith('rg-')) return;
+    if (!org || !org.id || org.id === 'demo' || !isUuid(String(org.id))) return;
     (async () => {
       try {
         const { data } = await supabase.rpc('get_org_ein', { p_org_id: org.id });
@@ -240,6 +245,9 @@ export default function OrganizationDetailsScreen() {
       <SafeAreaView style={styles.container}>
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>Organization not found</Text>
+          <TouchableOpacity style={styles.errorBackBtn} onPress={safeBack} activeOpacity={0.85}>
+            <Text style={styles.errorBackText}>Back</Text>
+          </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
@@ -460,8 +468,10 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
   scrollView: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  errorContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  errorText: { fontSize: FontSizes.lg, fontFamily: Fonts.semibold, color: Colors.critical },
+  errorContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
+  errorText: { fontSize: FontSizes.lg, fontFamily: Fonts.semibold, color: Colors.text, marginBottom: 16, textAlign: 'center' },
+  errorBackBtn: { backgroundColor: Colors.coral, borderRadius: 14, paddingHorizontal: 24, paddingVertical: 12 },
+  errorBackText: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.white },
   navyHeader: {
     backgroundColor: Colors.navy,
     paddingHorizontal: 20,

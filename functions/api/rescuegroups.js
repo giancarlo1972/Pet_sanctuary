@@ -40,6 +40,44 @@ function ageFromDob(dob) {
   const rem = months % 12;
   return rem ? years + ' yr ' + rem + ' mo' : years + ' yr';
 }
+async function attachOrgUuids(env, orgs) {
+  const url = env && (env.EXPO_PUBLIC_SUPABASE_URL || env.SUPABASE_URL);
+  const key = env && (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY || env.SUPABASE_SECRET_KEY);
+  if (!url || !key || !orgs.length) return orgs;
+  try {
+    const res = await fetch(url + '/rest/v1/organizations?select=id,name,external_id&status=eq.approved&limit=500', {
+      headers: { apikey: key, Authorization: 'Bearer ' + key },
+    });
+    const rows = await res.json();
+    if (!Array.isArray(rows)) return orgs;
+    const byExt = new Map();
+    const byName = new Map();
+    for (const r of rows) {
+      if (r.external_id) byExt.set(String(r.external_id), r);
+      if (r.name) byName.set(String(r.name).toLowerCase(), r);
+    }
+    const patches = [];
+    const out = orgs.map((o) => {
+      const hit = byExt.get(o.id) || byName.get(String(o.name || '').toLowerCase());
+      if (!hit) return o;
+      if (!hit.external_id) patches.push({ id: hit.id, external_id: o.id });
+      return { ...o, id: hit.id, external_id: o.id };
+    });
+    await Promise.all(patches.map((p) => fetch(url + '/rest/v1/organizations?id=eq.' + p.id, {
+      method: 'PATCH',
+      headers: {
+        apikey: key,
+        Authorization: 'Bearer ' + key,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({ external_id: p.external_id, data_source: 'rescuegroups' }),
+    }).catch(() => null)));
+    return out;
+  } catch {
+    return orgs;
+  }
+}
 function coordsOf(lat, lng) {
   const a = Number(lat);
   const b = Number(lng);
@@ -177,10 +215,11 @@ export async function onRequestGet(context) {
       lng: null,
     };
   });
-  const geo = await geocodeList(orgs.map((o) => o.location).filter(Boolean));
-  for (const o of orgs) {
+  const resolved = await attachOrgUuids(context.env, orgs);
+  const geo = await geocodeList(resolved.map((o) => o.location).filter(Boolean));
+  for (const o of resolved) {
     const c = o.location ? geo[placeKey(o.location)] : null;
     if (c) { o.lat = c.lat; o.lng = c.lng; }
   }
-  return Response.json({ orgs, foundRows: json.foundRows || orgs.length });
+  return Response.json({ orgs: resolved, foundRows: json.foundRows || resolved.length });
 }

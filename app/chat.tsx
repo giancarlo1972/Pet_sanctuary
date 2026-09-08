@@ -35,7 +35,7 @@ export default function ChatScreen() {
   const scrollRef = useRef<ScrollView>(null);
 
   const loadMessages = useCallback(async () => {
-    if (!conversationId) return;
+    if (!conversationId) { setLoading(false); return; }
     try {
       const { data, error } = await supabase
         .from('messages')

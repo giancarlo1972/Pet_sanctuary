@@ -87,6 +87,37 @@ function persistOrgCoords(id: string, loc: { lat: number; lng: number }) {
   supabase.rpc('store_org_coords', { p_id: id, p_lat: loc.lat, p_lng: loc.lng }).then(() => {}, () => {});
 }
 
+function viewForPins(
+  loc: { lat: number; lng: number },
+  didLocate: boolean,
+  pins: NearbyPin[],
+  preferredMi: number,
+) {
+  const inMi = (list: NearbyPin[], c: { lat: number; lng: number }, mi: number) =>
+    list.some((p) => kmBetween(c, p) <= mi * 1.609 + 0.05);
+  const cover = (layer: NearbyLayer, c: { lat: number; lng: number }) => {
+    const list = pins.filter((p) => p.layer === layer);
+    if (!list.length) return null;
+    for (const mi of [preferredMi, 10, 25]) {
+      if (inMi(list, c, mi)) return Math.max(mi, preferredMi);
+    }
+    return null;
+  };
+  const hits = [cover('pets', loc), cover('clinics', loc)].filter((n): n is number => n != null);
+  if (hits.length) return { center: loc, mi: Math.max(...hits) };
+
+  const focus = pins.filter((p) => p.layer !== 'reports');
+  if (!didLocate && focus.length) {
+    const center = {
+      lat: focus.reduce((s, p) => s + p.lat, 0) / focus.length,
+      lng: focus.reduce((s, p) => s + p.lng, 0) / focus.length,
+    };
+    const around = [cover('pets', center), cover('clinics', center)].filter((n): n is number => n != null);
+    return { center, mi: around.length ? Math.max(...around) : 25 };
+  }
+  return { center: loc, mi: preferredMi };
+}
+
 export default function NearbyScreen() {
   const { user } = useAuth();
   const [center, setCenter] = useState(FALLBACK);
@@ -153,20 +184,28 @@ export default function NearbyScreen() {
         allPets.push(p);
       }
 
-      const toGeocode: string[] = [];
+      const orgQs: string[] = [];
+      const petQs: string[] = [];
       for (const o of allOrgs) {
         if (coords(o.latitude ?? o.lat, o.longitude ?? o.lng)) continue;
         const q = orgPlace(o);
-        if (q) toGeocode.push(q);
+        if (q) orgQs.push(q);
       }
       for (const p of allPets) {
         if (coords(p.lat ?? p.latitude, p.lng ?? p.longitude)) continue;
         const q = String(p.location || '').trim();
-        if (q) toGeocode.push(q);
+        if (q) petQs.push(q);
       }
-      await geocodeMany(toGeocode);
 
       const next: NearbyPin[] = [];
+      const preferredMi = flags?.alert_radius_mi || 5;
+      const paint = () => {
+        const view = viewForPins(loc, didLocate, next, preferredMi);
+        setRadiusMi(view.mi);
+        setCenter(view.center);
+        setPins([...next]);
+        setLoading(false);
+      };
 
       for (const r of reportsRes.data || []) {
         const c = coords(r.latitude, r.longitude);
@@ -182,40 +221,7 @@ export default function NearbyScreen() {
         });
       }
 
-      for (const o of allOrgs) {
-        let c = coords(o.latitude ?? o.lat, o.longitude ?? o.lng);
-        const q = orgPlace(o);
-        if (!c && q) c = await geocodePlace(q);
-        if (!c) continue;
-        if (!coords(o.latitude ?? o.lat, o.longitude ?? o.lng) && q) persistOrgCoords(String(o.id), c);
-        const place = [o.city, o.state].filter(Boolean).join(', ') || o.location || o.address || '';
-        next.push({
-          id: 'org-' + o.id,
-          layer: 'clinics',
-          lat: c.lat, lng: c.lng,
-          title: o.name || 'Organization',
-          subtitle: [o.org_type, place].filter(Boolean).join(' · '),
-          color: Colors.navy,
-          href: `/organization-details?id=${o.id}`,
-          initial: orgInitial(o.name || ''),
-        });
-      }
-
-      for (const c of clinicsJson.clinics || []) {
-        const locC = coords(c.lat, c.lng);
-        if (!locC) continue;
-        next.push({
-          id: 'clinic-' + c.id,
-          layer: 'clinics',
-          lat: locC.lat, lng: locC.lng,
-          title: c.name,
-          subtitle: c.status_label || c.address || (c.is_er ? 'ER' : 'Clinic'),
-          color: c.is_er || c.is_24h ? Colors.coral : Colors.navy,
-          href: c.maps_url || c.website || `https://www.google.com/maps/search/?api=1&query=${locC.lat},${locC.lng}`,
-          initial: orgInitial(c.name || 'Vet'),
-        });
-      }
-
+      await geocodeMany(petQs);
       const groups = new Map<string, { lat: number; lng: number; label: string; pets: any[] }>();
       for (const p of allPets) {
         let c = coords(p.lat ?? p.latitude, p.lng ?? p.longitude);
@@ -254,28 +260,43 @@ export default function NearbyScreen() {
           });
         }
       }
+      paint();
 
-      const focus = next.filter((p) => p.layer !== 'reports');
-      const inR = (c: { lat: number; lng: number }, mi: number) =>
-        next.some((p) => kmBetween(c, p) <= mi * 1.609 + 0.05);
-      let nextCenter = loc;
-      let nextMi = flags?.alert_radius_mi || 5;
-      if (!inR(loc, nextMi)) {
-        if (inR(loc, 10)) nextMi = 10;
-        else if (inR(loc, 25)) nextMi = 25;
-        else if (!didLocate && focus.length) {
-          nextCenter = {
-            lat: focus.reduce((s, p) => s + p.lat, 0) / focus.length,
-            lng: focus.reduce((s, p) => s + p.lng, 0) / focus.length,
-          };
-          if (inR(nextCenter, 5)) nextMi = 5;
-          else if (inR(nextCenter, 10)) nextMi = 10;
-          else nextMi = 25;
-        }
+      await geocodeMany(orgQs);
+      for (const o of allOrgs) {
+        let c = coords(o.latitude ?? o.lat, o.longitude ?? o.lng);
+        const q = orgPlace(o);
+        if (!c && q) c = await geocodePlace(q);
+        if (!c) continue;
+        if (!coords(o.latitude ?? o.lat, o.longitude ?? o.lng) && q) persistOrgCoords(String(o.id), c);
+        const place = [o.city, o.state].filter(Boolean).join(', ') || o.location || o.address || '';
+        next.push({
+          id: 'org-' + o.id,
+          layer: 'clinics',
+          lat: c.lat, lng: c.lng,
+          title: o.name || 'Organization',
+          subtitle: [o.org_type, place].filter(Boolean).join(' · '),
+          color: Colors.navy,
+          href: `/organization-details?id=${o.id}`,
+          initial: orgInitial(o.name || ''),
+        });
       }
-      setRadiusMi(nextMi);
-      setCenter(nextCenter);
-      setPins(next);
+
+      for (const c of clinicsJson.clinics || []) {
+        const locC = coords(c.lat, c.lng);
+        if (!locC) continue;
+        next.push({
+          id: 'clinic-' + c.id,
+          layer: 'clinics',
+          lat: locC.lat, lng: locC.lng,
+          title: c.name,
+          subtitle: c.status_label || c.address || (c.is_er ? 'ER' : 'Clinic'),
+          color: c.is_er || c.is_24h ? Colors.coral : Colors.navy,
+          href: c.maps_url || c.website || `https://www.google.com/maps/search/?api=1&query=${locC.lat},${locC.lng}`,
+          initial: orgInitial(c.name || 'Vet'),
+        });
+      }
+      paint();
     } catch {
       setPins([]);
     } finally {

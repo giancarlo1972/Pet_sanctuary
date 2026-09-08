@@ -233,6 +233,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
   const [pastPets, setPastPets] = useState<PetRel[]>([]);
   const [showPastPets, setShowPastPets] = useState(false);
   const [sharePet, setSharePet] = useState<{ id: string; name: string } | null>(null);
+  const [meTab, setMeTab] = useState<'pets' | 'apps' | 'fosters' | 'services'>('pets');
 
   // Due Soon reminders
   interface PetReminder { pet_id: string; pet_name: string; pet_photo: string | null; label: string; days_until_due: number; urgency: string; }
@@ -799,22 +800,31 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
               </TouchableOpacity>
             </View>
 
-            <OnDutyCard
-              userId={userId}
-              phoneVerified={Boolean(verifications.phone_verified)}
-              onBanner={(kind, message) => setBanner({ kind, message })}
-            />
-
-            {actingAs?.role !== 'member' ? (
             <View style={styles.section}>
-              <TouchableOpacity style={styles.adminCta} onPress={() => { router.push('/manage'); }} activeOpacity={0.85}>
+              <TouchableOpacity style={styles.adminCta} onPress={() => {
+                if (actingIsPlatform) router.push('/platform');
+                else if (actingIsOrgAdmin) router.push('/org-admin');
+                else router.push('/manage');
+              }} activeOpacity={0.85}>
                 <Shield color={Colors.white} size={18} />
                 <Text style={styles.adminCtaTxt}>Manage</Text>
               </TouchableOpacity>
             </View>
-            ) : null}
+            <View style={styles.segRow}>
+              {([
+                { key: 'pets' as const, label: 'My Pets' },
+                { key: 'apps' as const, label: 'My Applications' },
+                { key: 'fosters' as const, label: 'My Fosters' },
+                { key: 'services' as const, label: 'My Services' },
+              ]).map((t) => (
+                <TouchableOpacity key={t.key} style={[styles.segChip, meTab === t.key && styles.segChipOn]} onPress={() => setMeTab(t.key)} activeOpacity={0.85}>
+                  <Text style={[styles.segTxt, meTab === t.key && styles.segTxtOn]}>{t.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
 
             {/* My Pets */}
+            {meTab === 'pets' ? (
             <View style={styles.section}>
               <View style={styles.sectionHeaderRow}>
                 <Text style={styles.sectionTitle}>My Pets</Text>
@@ -856,6 +866,12 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                       )}
                       <View style={styles.petRelInfo}>
                         <Text style={styles.petRelName}>{p.pet_name}</Text>
+                        {petNotes.some((r) => r.urgency === 'overdue' && /weight/i.test(r.label || '')) ? (
+                          <View style={styles.overdueInlineRow}>
+                            <View style={styles.overdueDot} />
+                            <Text style={styles.overdueInline}>Weight overdue</Text>
+                          </View>
+                        ) : null}
                         <Text style={styles.petRelMeta}>{[p.species, p.breed].filter(Boolean).join(' · ') || 'Pet'}</Text>
                       </View>
                       {p.is_owner ? (
@@ -868,7 +884,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                       ) : null}
                       <ChevronRight color={Colors.textTertiary} size={18} />
                       </View>
-                      {petNotes.map((r, i) => {
+                      {petNotes.filter((r) => !(r.urgency === 'overdue' && /weight/i.test(r.label || ''))).map((r, i) => {
                         const isOverdue = r.urgency === 'overdue';
                         const color = isOverdue ? Colors.critical : Colors.urgent;
                         const bg = isOverdue ? Colors.criticalBg : Colors.urgentBg;
@@ -918,6 +934,7 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                 </>
               )}
             </View>
+            ) : null}
 
             {/* Trust & Verification */}
             <View style={styles.section}>
@@ -1055,6 +1072,8 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
             )}
 
             {/* Application Info */}
+            {meTab === 'apps' ? (
+            <>
             <View style={styles.section}>
               <View style={styles.sectionHeaderRow}>
                 <Text style={styles.sectionTitle}>Application Info</Text>
@@ -1182,8 +1201,32 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                 ))}
               </View>
             )}
+            </>
+            ) : null}
 
             {/* Foster Rating */}
+            {meTab === 'fosters' ? (
+            <>
+            {activePets.filter((p) => /foster/i.test(p.relationship)).length === 0 && !(fosterSummary && fosterSummary.rating_count > 0) ? (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>My Fosters</Text>
+                <Card padded={false}><Text style={styles.emptyText}>No foster placements yet</Text></Card>
+              </View>
+            ) : null}
+            {activePets.filter((p) => /foster/i.test(p.relationship)).map((p) => (
+              <TouchableOpacity key={p.id} style={styles.petRelCard} onPress={() => router.push(`/pet-record?petId=${p.pet_id}`)} activeOpacity={0.85}>
+                <View style={styles.petRelTop}>
+                  {isUsablePhoto(p.pet_photo) ? <SignedImage path={p.pet_photo} style={styles.petRelPhoto} /> : (
+                    <View style={[styles.petRelPhoto, styles.petRelPhotoFallback]}><PawPrint color={Colors.textTertiary} size={16} /></View>
+                  )}
+                  <View style={styles.petRelInfo}>
+                    <Text style={styles.petRelName}>{p.pet_name}</Text>
+                    <Text style={styles.petRelMeta}>Foster · {[p.species, p.breed].filter(Boolean).join(' · ') || 'Pet'}</Text>
+                  </View>
+                  <ChevronRight color={Colors.textTertiary} size={18} />
+                </View>
+              </TouchableOpacity>
+            ))}
             {fosterSummary && fosterSummary.rating_count > 0 && (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Foster Rating</Text>
@@ -1225,8 +1268,17 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                 ))}
               </View>
             )}
+            </>
+            ) : null}
 
             {/* Services I Provide */}
+            {meTab === 'services' ? (
+            <>
+            <OnDutyCard
+              userId={userId}
+              phoneVerified={Boolean(verifications.phone_verified)}
+              onBanner={(kind, message) => setBanner({ kind, message })}
+            />
             <View style={styles.section}>
               <View style={styles.sectionHeaderRow}>
                 <Text style={styles.sectionTitle}>Services I Provide</Text>
@@ -1265,6 +1317,8 @@ function ProfileDrawer({ userId, email, signOut }: { userId: string; email: stri
                 ))
               )}
             </View>
+            </>
+            ) : null}
 
             {/* My Contributions */}
             <View style={styles.section}>
@@ -1649,6 +1703,14 @@ const styles = StyleSheet.create({
   roleChipTxtOn: { color: Colors.white },
   adminCta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: Colors.navy, borderRadius: 14, paddingVertical: 16, marginTop: 4 },
   adminCtaTxt: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.white },
+  segRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12, marginBottom: 4 },
+  segChip: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border },
+  segChipOn: { backgroundColor: Colors.navy, borderColor: Colors.navy },
+  segTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy },
+  segTxtOn: { color: Colors.white },
+  overdueInlineRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
+  overdueDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: Colors.critical },
+  overdueInline: { fontFamily: Fonts.medium, fontSize: 12, color: Colors.critical },
   orgCta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: Colors.teal, borderRadius: 14, paddingVertical: 16, marginTop: 8 },
   orgCtaTxt: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.white },
 

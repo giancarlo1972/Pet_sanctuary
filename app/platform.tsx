@@ -248,8 +248,18 @@ export default function PlatformScreen() {
 
         {section === 'home' ? (
           <>
-            <Text style={styles.hero}>Platform</Text>
-            <Text style={styles.heroSub}>Rescue Army admin · every action is audit-logged</Text>
+            <View style={styles.navyHero}>
+              <Text style={styles.navyTitle}>Platform</Text>
+              <Text style={styles.navySub}>Rescue Army admin · every action is audit-logged</Text>
+              <View style={styles.countRow}>
+                {SECTIONS.map((s) => (
+                  <View key={s.key} style={styles.countCell}>
+                    <Text style={styles.countN}>{counts[s.key as keyof typeof counts] ?? 0}</Text>
+                    <Text style={styles.countL}>{s.label}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
             <View style={styles.grid}>
               {SECTIONS.map((s) => (
                 <TouchableOpacity key={s.key} style={styles.tile} onPress={() => go(s.key)} activeOpacity={0.85}>
@@ -728,6 +738,13 @@ function IssueSheet({ row, edit, setEdit, busy, run, audit, userId, onClose }: a
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: Colors.screen },
+  navyHero: { backgroundColor: '#26265E', borderRadius: 16, padding: 16, marginBottom: 14, gap: 8 },
+  navyTitle: { fontFamily: INTERB, fontSize: 22, color: Colors.white, fontWeight: '800' },
+  navySub: { fontFamily: INTER, fontSize: 13, color: '#B9BCE0' },
+  countRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  countCell: { width: '30%', minWidth: 90, backgroundColor: 'rgba(255,255,255,0.10)', borderRadius: 12, paddingVertical: 10, paddingHorizontal: 8 },
+  countN: { fontFamily: INTERB, fontSize: 20, color: Colors.white, fontWeight: '800' },
+  countL: { fontFamily: INTER, fontSize: 11, color: '#B9BCE0', marginTop: 2 },
   hero: { fontFamily: INTERB, fontSize: 22, color: Colors.navy, fontWeight: '800' },
   heroSub: { fontFamily: INTER, fontSize: 13, color: Colors.textSecondary, marginBottom: 8 },
   grid: { gap: 10 },

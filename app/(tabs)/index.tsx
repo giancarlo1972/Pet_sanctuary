@@ -67,7 +67,25 @@ interface CommunityNeed {
   body: string | null;
   need_type: string;
   created_at: string;
+  org_id?: string | null;
 }
+
+const MOCK_NEEDS: CommunityNeed[] = [
+  {
+    id: 'seed-ride',
+    title: 'Happy Paws needs a ride: 2 cats to Hudson Vet Clinic',
+    body: '3.1 mi · Brooklyn → Manhattan',
+    need_type: 'ride',
+    created_at: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+  },
+  {
+    id: 'seed-supplies',
+    title: 'Second Chance Sanctuary is low on kitten formula',
+    body: '4 of 12 cans donated',
+    need_type: 'supplies',
+    created_at: new Date(Date.now() - 5 * 3600 * 1000).toISOString(),
+  },
+];
 
 interface DutyStatus {
   on: boolean;
@@ -172,11 +190,25 @@ function normalizeNeed(type: string): string {
   return k || 'NEED';
 }
 
-function needCta(type: string): { label: string; href: string } {
+function compactAgo(dateString: string): string {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(dateString).getTime()) / 1000));
+  if (seconds < 60) return 'now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
+}
+
+function needCta(type: string, orgId?: string | null): { label: string; href: string } {
   const t = normalizeNeed(type);
-  if (t === 'RIDE NEEDED') return { label: 'Offer ride', href: '/(tabs)/community' };
-  if (t === 'SUPPLIES') return { label: 'Donate', href: '/(tabs)/reports' };
-  if (t === 'FOSTER SURGE') return { label: 'Apply', href: '/(tabs)/community' };
+  if (t === 'RIDE NEEDED') {
+    if (orgId) return { label: 'Offer ride', href: `/organization-details?id=${orgId}` };
+    return { label: 'Offer ride', href: '/(tabs)/community' };
+  }
+  if (t === 'SUPPLIES') return { label: 'Donate', href: '/(tabs)/reports?tab=fund' };
+  if (t === 'FOSTER SURGE') return { label: 'Apply', href: '/(tabs)/community?seg=fosters' };
   if (t === 'VOLUNTEERS') return { label: 'Join', href: '/(tabs)/community' };
   return { label: 'Help', href: '/(tabs)/community' };
 }
@@ -263,14 +295,27 @@ export default function HomeScreen() {
 
   const loadNeeds = useCallback(async () => {
     try {
-      const { data } = await supabase
+      let { data, error } = await supabase
         .from('community_needs')
-        .select('id, title, body, need_type, created_at')
+        .select('id, title, body, need_type, created_at, org_id')
         .in('status', ['open', 'pinned'])
         .order('created_at', { ascending: false })
         .limit(8);
-      setNeeds((data || []) as CommunityNeed[]);
-    } catch { /* ignore */ }
+      if (error) {
+        const retry = await supabase
+          .from('community_needs')
+          .select('id, title, body, need_type, created_at')
+          .in('status', ['open', 'pinned'])
+          .order('created_at', { ascending: false })
+          .limit(8);
+        data = retry.data as typeof data;
+        error = retry.error;
+      }
+      const rows = (!error && data ? data : []) as CommunityNeed[];
+      setNeeds(rows.length ? rows : MOCK_NEEDS);
+    } catch {
+      setNeeds(MOCK_NEEDS);
+    }
   }, []);
 
   const loadDuty = useCallback(async () => {
@@ -508,20 +553,22 @@ export default function HomeScreen() {
                 {needs.map((n) => {
                   const tag = normalizeNeed(n.need_type);
                   const tone = NEED_TONE[tag] || { bg: Colors.surface, color: Colors.navy };
-                  const cta = needCta(n.need_type);
+                  const cta = needCta(n.need_type, n.org_id);
                   return (
                     <View key={n.id} style={styles.needCard}>
                       <View style={styles.needTop}>
                         <View style={[styles.needTag, { backgroundColor: tone.bg }]}>
                           <Text style={[styles.needTagText, { color: tone.color }]}>{tag}</Text>
                         </View>
-                        <Text style={styles.needTime}>{timeAgo(n.created_at)}</Text>
+                        <Text style={styles.needTime}>{compactAgo(n.created_at)}</Text>
                       </View>
                       <Text style={styles.needTitle} numberOfLines={3}>{n.title}</Text>
-                      {n.body ? <Text style={styles.needMeta} numberOfLines={2}>{n.body}</Text> : null}
-                      <TouchableOpacity onPress={() => router.push(cta.href as any)} activeOpacity={0.8}>
-                        <Text style={styles.needCta}>{cta.label} →</Text>
-                      </TouchableOpacity>
+                      <View style={styles.needFooter}>
+                        {n.body ? <Text style={styles.needMeta} numberOfLines={2}>{n.body}</Text> : <View style={{ flex: 1 }} />}
+                        <TouchableOpacity onPress={() => router.push(cta.href as any)} activeOpacity={0.8}>
+                          <Text style={styles.needCta}>{cta.label} →</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   );
                 })}
@@ -685,11 +732,12 @@ const styles = StyleSheet.create({
   },
   needTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   needTag: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
-  needTagText: { fontSize: 10, fontFamily: Fonts.bold, letterSpacing: 0.2 },
+  needTagText: { fontSize: 10, fontFamily: Fonts.bold, fontWeight: '700', letterSpacing: 0.2 },
   needTime: { fontSize: 11, fontFamily: Fonts.regular, color: Colors.textTertiary },
-  needTitle: { fontSize: 13, fontFamily: Fonts.bold, color: Colors.navy, lineHeight: 18 },
-  needMeta: { fontSize: 11.5, fontFamily: Fonts.regular, color: Colors.textSecondary },
-  needCta: { fontSize: 12, fontFamily: Fonts.bold, color: Colors.coral },
+  needTitle: { fontSize: 13, fontFamily: Fonts.bold, fontWeight: '700', color: Colors.navy, lineHeight: 18 },
+  needFooter: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8, marginTop: 'auto' as const },
+  needMeta: { flex: 1, fontSize: 11.5, fontFamily: Fonts.regular, color: Colors.textSecondary },
+  needCta: { fontSize: 12, fontFamily: Fonts.bold, fontWeight: '700', color: Colors.coral },
 
   featuredRow: { gap: 12, paddingRight: 8 },
   featuredCard: {

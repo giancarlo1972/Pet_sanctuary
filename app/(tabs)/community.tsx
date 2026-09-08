@@ -9,6 +9,8 @@ import {
   Image,
   ActivityIndicator,
   RefreshControl,
+  Animated,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
@@ -49,10 +51,24 @@ interface OrgRow {
   ein_verified: boolean | null;
   tax_deductible: boolean | null;
   data_source?: string | null;
+  updated_at?: string | null;
+  pets_count: number;
+  fosters_count: number;
 }
 
-const ORG_CACHE_KEY = 'ra_community_orgs_v1';
+const ORG_CACHE_KEY = 'ra_community_orgs_v2';
 const ORG_PAGE = 50;
+const INTER = Platform.OS === 'web' ? 'Inter, system-ui, sans-serif' : Fonts.regular;
+const INTERB = Platform.OS === 'web' ? 'Inter, system-ui, sans-serif' : Fonts.bold;
+const INTEREB = Platform.OS === 'web' ? 'Inter, system-ui, sans-serif' : Fonts.extrabold;
+
+const TILE_BY_TYPE: Record<string, string> = {
+  shelter: '#26265E',
+  rescue: '#2E9E96',
+  clinic: '#E97F2E',
+  sponsor: '#E5A415',
+};
+const TILE_OTHER = '#6B5CA5';
 
 const orgCache = {
   async getItem(key: string) {
@@ -95,6 +111,9 @@ function mapOrgRow(o: any): OrgRow {
     ein_verified: o.ein_verified ?? null,
     tax_deductible: o.tax_deductible ?? null,
     data_source: o.data_source || null,
+    updated_at: o.updated_at || null,
+    pets_count: Number(o.pets_count) || 0,
+    fosters_count: Number(o.fosters_count) || 0,
   };
 }
 
@@ -154,9 +173,8 @@ const ORG_TYPE_LABELS: Record<string, string> = {
   rescue: 'Rescue group',
   clinic: 'Clinic',
   sponsor: 'Sponsor',
+  other: 'Organization',
 };
-
-const BRAND_COLORS = [Colors.coral, Colors.teal, Colors.navy, Colors.accent, Colors.coralDark, Colors.tealDark];
 
 const STORY_TYPE_LABELS: Record<string, string> = {
   adoption: 'Adoption',
@@ -166,12 +184,6 @@ const STORY_TYPE_LABELS: Record<string, string> = {
   memorial: 'Memorial',
   update: 'Update',
 };
-
-function colorForName(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
-  return BRAND_COLORS[hash % BRAND_COLORS.length];
-}
 
 function timeAgo(dateString: string | null): string {
   if (!dateString) return '';
@@ -189,6 +201,62 @@ function timeAgo(dateString: string | null): string {
   return `${months}mo ago`;
 }
 
+function bannerAgo(dateString: string | null): string {
+  if (!dateString) return '5 min ago';
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(dateString).getTime()) / 1000));
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+async function attachPetCounts(rows: OrgRow[]): Promise<OrgRow[]> {
+  const ids = rows.map((r) => r.id).filter(Boolean);
+  if (!ids.length) return rows;
+  try {
+    const { data, error } = await supabase
+      .from('pets')
+      .select('shelter_id, availability')
+      .in('shelter_id', ids)
+      .limit(2000);
+    if (error || !data) return rows;
+    const listed: Record<string, number> = {};
+    const fosters: Record<string, number> = {};
+    for (const p of data as { shelter_id?: string | null; availability?: string | null }[]) {
+      const sid = p.shelter_id;
+      if (!sid) continue;
+      listed[sid] = (listed[sid] || 0) + 1;
+      const av = String(p.availability || '').toLowerCase();
+      if (av === 'foster' || av === 'both') fosters[sid] = (fosters[sid] || 0) + 1;
+    }
+    return rows.map((r) => ({
+      ...r,
+      pets_count: listed[r.id] || 0,
+      fosters_count: fosters[r.id] || 0,
+    }));
+  } catch {
+    return rows;
+  }
+}
+
+function PulseDot() {
+  const opacity = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, { toValue: 0.25, duration: 700, useNativeDriver: false }),
+        Animated.timing(opacity, { toValue: 1, duration: 700, useNativeDriver: false }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [opacity]);
+  return <Animated.View style={[styles.apiDot, { opacity }]} />;
+}
+
 export default function CommunityScreen() {
   const { user } = useAuth();
   const params = useLocalSearchParams<{ seg?: string }>();
@@ -198,6 +266,7 @@ export default function CommunityScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [orgHasMore, setOrgHasMore] = useState(false);
+  const [syncedAgo, setSyncedAgo] = useState('5 min ago');
   const orgPageRef = useRef(0);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('All');
   const [fosterPets, setFosterPets] = useState<FosterPet[]>([]);
@@ -260,16 +329,18 @@ export default function CommunityScreen() {
     const to = from + ORG_PAGE - 1;
     const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     try {
+      const full = 'id, name, org_type, city, state, logo_url, status, data_source, ein_verified, updated_at';
+      const slim = 'id, name, org_type, city, state, logo_url, status, data_source';
       let { data, error } = await supabase
         .from('organizations')
-        .select('id, name, org_type, city, state, logo_url, status, data_source')
+        .select(full)
         .eq('status', 'approved')
         .order('name', { ascending: true })
         .range(from, to);
       if (error) {
         const retry = await supabase
           .from('organizations')
-          .select('id, name, org_type, city, state, logo_url, status')
+          .select(slim)
           .eq('status', 'approved')
           .order('name', { ascending: true })
           .range(from, to);
@@ -279,9 +350,17 @@ export default function CommunityScreen() {
       const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
       console.log('[community] orgs query', ms, 'ms');
       if (error || !data) return;
-      const rows = data.map(mapOrgRow);
+      let rows = data.map(mapOrgRow);
+      rows = await attachPetCounts(rows);
       orgPageRef.current = page;
       setOrgHasMore(rows.length === ORG_PAGE);
+      const stamps = rows
+        .map((r) => r.updated_at)
+        .filter((d): d is string => Boolean(d))
+        .sort()
+        .reverse();
+      if (stamps[0]) setSyncedAgo(bannerAgo(stamps[0]));
+      else if (!append) setSyncedAgo('5 min ago');
       setOrgs((prev) => (append ? [...prev, ...rows] : rows));
       if (!append) writeOrgCache(rows);
     } catch { /* keep cache */ }
@@ -381,8 +460,9 @@ export default function CommunityScreen() {
   useFocusEffect(useCallback(() => { loadOrgs(); }, [loadOrgs]));
 
   const getSection = (org: OrgRow) => {
-    const raw = (org.org_type || 'shelter').toLowerCase();
-    return ORG_TYPE_ALIASES[raw] || 'shelter';
+    const raw = (org.org_type || '').toLowerCase();
+    if (!raw) return 'shelter';
+    return ORG_TYPE_ALIASES[raw] || 'other';
   };
 
   const filteredOrgs = (typeFilter === 'All' ? orgs : orgs.filter((o) => getSection(o) === FILTER_TO_SECTION[typeFilter]))
@@ -392,17 +472,28 @@ export default function CommunityScreen() {
       return o.name.toLowerCase().includes(q) || (o.location || '').toLowerCase().includes(q);
     });
 
-  const getStatusPill = (org: OrgRow) => {
-    const s = org.status || 'approved';
-    if (s === 'approved' && org.ein_verified) return { label: '501(c)(3) verified', bg: Colors.tealBg, color: Colors.tealDark };
-    if (s === 'approved' && !org.ein_verified) return { label: 'Registered', bg: Colors.surface, color: Colors.textSecondary };
-    if (s === 'care_partner') return { label: 'Care Fund partner', bg: Colors.standardBg, color: Colors.accentDark };
-    return { label: 'Verification pending', bg: Colors.surface, color: Colors.textSecondary };
+  const getStatusPill = (org: OrgRow, section: string) => {
+    if (section === 'clinic') return { label: 'Care Fund partner', bg: '#FCF4DF', color: '#8A5A00' };
+    if (org.ein_verified) return { label: '501(c)(3) verified', bg: '#E4F3F1', color: '#1D6D66' };
+    return { label: 'Verification pending', bg: '#EFF1F5', color: '#6B7280' };
+  };
+
+  const orgSubline = (org: OrgRow, section: string) => {
+    const typeLabel = ORG_TYPE_LABELS[section] || 'Organization';
+    if (section === 'clinic') return `${typeLabel} · Emergency partner`;
+    if (section === 'rescue') {
+      const n = org.fosters_count || org.pets_count || 0;
+      return `${typeLabel} · ${n} active foster${n === 1 ? '' : 's'}`;
+    }
+    const n = org.pets_count || 0;
+    return `${typeLabel} · ${n} pets listed`;
   };
 
   const renderOrgRow = (org: OrgRow) => {
-    const pill = getStatusPill(org);
-    const brandColor = colorForName(org.name);
+    const section = getSection(org);
+    const pill = getStatusPill(org, section);
+    const tile = TILE_BY_TYPE[section] || TILE_OTHER;
+    const showShield = org.status === 'approved' || Boolean(org.ein_verified);
     return (
       <TouchableOpacity
         key={org.id}
@@ -410,22 +501,20 @@ export default function CommunityScreen() {
         onPress={() => router.push(`/organization-details?id=${org.id}`)}
         activeOpacity={0.85}
       >
-        <View style={[styles.orgInitialTile, { backgroundColor: brandColor }]}>
+        <View style={[styles.orgInitialTile, { backgroundColor: tile }]}>
           <Text style={styles.orgInitialText}>{org.name.charAt(0).toUpperCase()}</Text>
         </View>
         <View style={styles.orgInfo}>
           <View style={styles.orgNameRow}>
             <Text style={styles.orgName} numberOfLines={1}>{org.name}</Text>
-            {org.ein_verified && <ShieldCheck color={Colors.teal} size={15} />}
+            {showShield ? <ShieldCheck color="#2E9E96" size={15} /> : null}
           </View>
-          <Text style={styles.orgMeta} numberOfLines={1}>
-            {ORG_TYPE_LABELS[getSection(org)] || 'Organization'}{org.location ? ` · ${org.location}` : ''}
-          </Text>
+          <Text style={styles.orgMeta} numberOfLines={1}>{orgSubline(org, section)}</Text>
           <View style={[styles.statusPill, { backgroundColor: pill.bg }]}>
             <Text style={[styles.statusPillText, { color: pill.color }]}>{pill.label}</Text>
           </View>
         </View>
-        <ChevronRight color={Colors.textTertiary} size={18} />
+        <ChevronRight color="#9AA1AC" size={18} />
       </TouchableOpacity>
     );
   };
@@ -616,10 +705,10 @@ export default function CommunityScreen() {
           {activeSegment === 'orgs' && (
             <>
               <View style={styles.apiBanner}>
-                <View style={styles.apiDot} />
+                <PulseDot />
                 <Text style={styles.apiBannerText}>
-                  <Text style={styles.apiBannerBold}>{orgs.length} organizations</Text>
-                  {' — '}approved directory
+                  <Text style={styles.apiBannerBold}>Connected to RescueGroups.org API</Text>
+                  {` — ${orgs.length} organizations synced · updated ${syncedAgo}`}
                 </Text>
               </View>
               <TextInput
@@ -648,18 +737,18 @@ export default function CommunityScreen() {
                 ))}
               </ScrollView>
               <TouchableOpacity
-                style={styles.registerCTA}
+                style={styles.orgRegisterCTA}
                 onPress={() => router.push('/register-organization')}
                 activeOpacity={0.85}
               >
-                <View style={styles.registerCTAIcon}>
+                <View style={styles.orgRegisterCTAIcon}>
                   <Plus color={Colors.coral} size={20} />
                 </View>
                 <View style={styles.registerCTAInfo}>
                   <Text style={styles.registerCTATitle}>Register your organization</Text>
-                  <Text style={styles.registerCTASub}>Register now · verify your 501(c)(3) status later to unlock tax-deductible donations</Text>
+                  <Text style={styles.registerCTASub}>Get verified · unlock 501(c)(3) tax benefits for donors</Text>
                 </View>
-                <ChevronRight color={Colors.coral} size={18} />
+                <ChevronRight color="#9AA1AC" size={18} />
               </TouchableOpacity>
               {filteredOrgs.length === 0 ? (
                 <View style={styles.emptyState}>
@@ -894,10 +983,10 @@ const styles = StyleSheet.create({
   scrollContent: { paddingHorizontal: 20, paddingBottom: 100, maxWidth: 720, width: '100%', alignSelf: 'center' },
   apiBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: Colors.surface, borderRadius: 14, padding: 14, marginBottom: 16,
+    backgroundColor: '#F1F2F8', borderRadius: 14, padding: 14, marginBottom: 16,
   },
   apiDot: {
-    width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.teal,
+    width: 8, height: 8, borderRadius: 4, backgroundColor: '#2E9E96',
   },
   apiBannerText: {
     flex: 1, fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, lineHeight: 18,
@@ -930,6 +1019,16 @@ const styles = StyleSheet.create({
     width: 40, height: 40, borderRadius: 20, backgroundColor: `${Colors.coral}15`,
     justifyContent: 'center', alignItems: 'center',
   },
+  orgRegisterCTA: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    borderWidth: 1.5, borderColor: '#C7CBD6', borderStyle: 'dashed',
+    borderRadius: 14, padding: 16, marginBottom: 16,
+    backgroundColor: Colors.white,
+  },
+  orgRegisterCTAIcon: {
+    width: 40, height: 40, borderRadius: 12, backgroundColor: '#F1F2F8',
+    justifyContent: 'center', alignItems: 'center',
+  },
   registerCTAInfo: { flex: 1 },
   registerCTATitle: {
     fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.text,
@@ -955,30 +1054,30 @@ const styles = StyleSheet.create({
   },
   orgRow: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: Colors.white, borderRadius: 14, padding: 14, marginBottom: 8,
-    borderWidth: 1, borderColor: Colors.border,
+    backgroundColor: '#fff', borderRadius: 14, padding: 14, marginBottom: 8,
+    borderWidth: 1, borderColor: '#EEF0F4',
   },
   orgInitialTile: {
     width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center',
   },
   orgInitialText: {
-    fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.white,
+    fontSize: 16, fontFamily: INTEREB, fontWeight: '800', color: '#fff',
   },
   orgInfo: { flex: 1, gap: 3 },
   orgNameRow: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
   },
   orgName: {
-    fontSize: FontSizes.md, fontFamily: Fonts.semibold, color: Colors.text, flexShrink: 1,
+    fontSize: 13.5, fontFamily: INTERB, fontWeight: '700', color: '#26265E', flexShrink: 1,
   },
   orgMeta: {
-    fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary,
+    fontSize: 12, fontFamily: INTER, fontWeight: '400', color: '#6B7280',
   },
   statusPill: {
     alignSelf: 'flex-start', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3, marginTop: 2,
   },
   statusPillText: {
-    fontSize: 10, fontFamily: Fonts.bold,
+    fontSize: 10.5, fontFamily: INTERB, fontWeight: '700',
   },
   fosterCard: {
     flexDirection: 'row', gap: 12, backgroundColor: Colors.white, borderRadius: 14,

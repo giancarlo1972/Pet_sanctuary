@@ -440,6 +440,8 @@ export async function onRequestPost(context) {
     const sb = getSupabase(env);
     const extractedText = body.extractedText || body.text || '';
     const pageCountIn = Number(body.pageCount) || 0;
+    const forceScan = Boolean(body.forceScan);
+    const incomingImages = Array.isArray(body.images) ? body.images.filter(Boolean) : [];
     let kinds = normalizeKinds(body.kinds || body.content_kinds);
     if (documentId && sb.url && sb.key && !(Array.isArray(body.kinds) && body.kinds.length) && !(Array.isArray(body.content_kinds) && body.content_kinds.length)) {
       try {
@@ -451,16 +453,26 @@ export async function onRequestPost(context) {
         console.log('[parse-pet-document] kinds row skip', String(e));
       }
     }
+    const pagesGuess = pageCountIn || incomingImages.length || 0;
+    const charsPer = extractedText.length / Math.max(pagesGuess || 1, 1);
+    const sparseText = pagesGuess > 0 && charsPer < 200;
+    let mode = body.mode === 'images' || forceScan || incomingImages.length || (sparseText && !/Service on\s+\d/i.test(extractedText))
+      ? 'images'
+      : 'text';
+    if (incomingImages.length) mode = 'images';
+    if (forceScan) mode = 'images';
+    console.log('[parse-pet-document]', { pages: pagesGuess, chars: extractedText.length, mode });
     console.log('[parse-pet-document] start', {
       documentId,
       kinds,
       hasAnthropic: Boolean(key),
       hasSupabase: Boolean(sb.url && sb.key),
       hasImage: Boolean(body.imageBase64),
-      hasImages: Array.isArray(body.images) && body.images.length,
+      hasImages: incomingImages.length,
       textChars: extractedText.length,
       pageCount: pageCountIn,
       mime: body.mimeType || null,
+      mode,
     });
     if (!key) {
       console.log('[parse-pet-document] FAIL missing ANTHROPIC_API_KEY');
@@ -468,24 +480,33 @@ export async function onRequestPost(context) {
       return fail('model_error', { error: 'AI key missing' });
     }
 
-    if (extractedText && (extractedText.length > 2500 || /Service on\s+\d/i.test(extractedText))) {
+    if (mode === 'text' && extractedText && (extractedText.length > 2500 || /Service on\s+\d/i.test(extractedText))) {
       return parseClinicExport(env, key, documentId, extractedText, pageCountIn || splitServiceBlocks(extractedText).length, kinds);
     }
 
-    let imgs = Array.isArray(body.images) ? body.images : (body.imageBase64 ? [body.imageBase64] : []);
+    let imgs = incomingImages.length ? incomingImages : (body.imageBase64 ? [body.imageBase64] : []);
     let isPdf = String(body.mimeType || '').includes('pdf') || String(body.path || '').toLowerCase().endsWith('.pdf');
     if (imgs.length === 0 && documentId && body.path) {
       const fetched = await fetchDocBytes(env, body.path);
       if (fetched) {
-        imgs = [fetched.b64];
         isPdf = fetched.isPdf;
         console.log('[parse-pet-document] fetched storage', fetched.byteLength, 'pdf=', isPdf);
-        if (fetched.isPdf && fetched.bytes) {
+        if (fetched.isPdf && fetched.bytes && mode === 'text') {
           const naive = extractPdfTextNaive(fetched.bytes);
           console.log('[parse-pet-document] naive pdf text', naive.charCount, 'pages', naive.pageCount);
+          const naivePer = naive.charCount / Math.max(naive.pageCount || pageCountIn || 1, 1);
+          console.log('[parse-pet-document]', { pages: naive.pageCount || pageCountIn, chars: naive.charCount, mode: naivePer < 200 ? 'images' : 'text' });
           if (naive.charCount > 2500 || /Service on\s+\d/i.test(naive.text)) {
             return parseClinicExport(env, key, documentId, naive.text, naive.pageCount || pageCountIn, kinds);
           }
+          if (naivePer >= 200) {
+            imgs = [fetched.b64];
+          } else {
+            mode = 'images';
+            imgs = [fetched.b64];
+          }
+        } else {
+          imgs = [fetched.b64];
         }
       }
     }
@@ -523,19 +544,22 @@ export async function onRequestPost(context) {
     const content = [];
     for (const s0 of imgs) {
       const s = String(s0);
-      if (decodedBytes(s) > (looksPdf ? 32_000_000 : 9_500_000)) {
+      if (decodedBytes(s) > (looksPdf && mode !== 'images' ? 32_000_000 : 9_500_000)) {
         if (documentId) await updateDoc(env, documentId, { ai_status: 'failed', ai_summary: { reason: 'too_large' } });
         return fail('too_large', { status: 413 });
       }
       const raw = s.replace(/^data:[^;]+;base64,/, '');
-      if (isPdf || s.includes('application/pdf')) {
+      const isJpeg = s.includes('image/jpeg') || raw.startsWith('/9j/');
+      const isPng = s.includes('image/png') || raw.startsWith('iVBORw0');
+      if (isJpeg || isPng) {
+        content.push({ type: 'image', source: { type: 'base64', media_type: isPng ? 'image/png' : 'image/jpeg', data: raw } });
+      } else if (isPdf || s.includes('application/pdf') || looksPdf) {
         content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: raw } });
       } else {
-        let mediaType = 'image/jpeg';
-        if (s.includes('image/png') || raw.startsWith('iVBORw0')) mediaType = 'image/png';
-        content.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: raw } });
+        content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: raw } });
       }
     }
+    console.log('[parse-pet-document]', { pages: content.filter((c) => c.type === 'image' || c.type === 'document').length || pagesGuess, chars: extractedText.length, mode });
     let prompt = buildPrompt(kinds);
     if (documentId && sb.url && sb.key) {
       try {
@@ -615,8 +639,11 @@ export async function onRequestPost(context) {
         vitals_series: Array.isArray(parsed.vitals_series) ? parsed.vitals_series : [],
         ai_note: parsed.ai_note || null,
         owner_notes: Array.isArray(parsed.owner_notes) ? parsed.owner_notes.filter((n) => n && n.text) : [],
+        page_count: pageCountIn || incomingImages.length || null,
+        char_count: extractedText.length,
+        parse_mode: mode,
       }, kinds);
-      console.log('[parse-pet-document] vaccinations[0]', vaccinations[0]);
+      console.log('[parse-pet-document]', { pages: out.page_count, chars: extractedText.length, mode });
       if (documentId) {
         await updateDoc(env, documentId, {
           ai_status: 'ready',

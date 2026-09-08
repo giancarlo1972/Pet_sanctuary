@@ -65,7 +65,7 @@ import { WeightLineChart, LabSparkline } from '@/components/PetCharts';
 import MedicalDashboard from '@/components/MedicalDashboard';
 import VetExamCard from '@/components/VetExamCard';
 import { Card, InnerTile } from '@/components/Card';
-import { extractPdfText } from '@/lib/pdf-text';
+import { extractPdf } from '@/lib/pdf-text';
 import { SearchablePicker } from '@/components/SearchablePicker';
 import { DateField } from '@/components/DateField';
 import { matchCatalog, vaccineType, durationYearsFromProduct, addYearsLocal, type CatalogRow } from '@/lib/catalog';
@@ -723,6 +723,8 @@ export default function PetRecordScreen() {
     weightsCount?: number;
     pageCount?: number;
     exams?: any[];
+    aiNote?: string | null;
+    parseMode?: 'text' | 'images' | null;
   } | null>(null);
   const parsedAttempted = useRef<Set<string>>(new Set());
   const [editableVax, setEditableVax] = useState<ExtractedVaccination[]>([]);
@@ -1576,10 +1578,24 @@ export default function PetRecordScreen() {
         if (isPdf || mime.includes('pdf') || /\.pdf$/i.test(storedPath)) {
           try {
             setParseProgress('Reading PDF pages…');
-            const pdf = await extractPdfText(docFile.uri);
+            const pdf = await extractPdf(docFile.uri);
             extractedText = pdf.text;
             pageCount = pdf.pageCount;
-            setParseProgress(`Reading ${pdf.pageCount} pages · ${pdf.charCount.toLocaleString()} characters`);
+            console.log('[parse-pet-document]', { pages: pdf.pageCount, chars: pdf.charCount, mode: pdf.mode });
+            setParseProgress(pdf.mode === 'images'
+              ? `Scan · ${pdf.pageCount} pages`
+              : `Reading ${pdf.pageCount} pages · ${pdf.charCount.toLocaleString()} characters`);
+            triggerExtraction(docData.id, {
+              imageBase64: null,
+              mimeType: mime,
+              path: storedPath,
+              extractedText: pdf.mode === 'text' ? extractedText : undefined,
+              pageCount,
+              kinds,
+              images: pdf.mode === 'images' ? pdf.images : undefined,
+              forceScan: pdf.mode === 'images',
+            });
+            return;
           } catch (e) {
             console.log('[pet-record] pdf text extract failed', e);
           }
@@ -1703,10 +1719,12 @@ export default function PetRecordScreen() {
       weightsCount: allWeights.length,
       pageCount: parsed.page_count || parsed.progress?.page_count,
       exams: parsed.exams || [],
+      aiNote: parsed.ai_note || parsed.ai_notes || null,
+      parseMode: parsed.parse_mode || null,
     });
   };
 
-  const triggerExtraction = async (documentId: string, extra?: { imageBase64?: string | null; mimeType?: string; path?: string; extractedText?: string; pageCount?: number; kinds?: string[] }, silent = false) => {
+  const triggerExtraction = async (documentId: string, extra?: { imageBase64?: string | null; mimeType?: string; path?: string; extractedText?: string; pageCount?: number; kinds?: string[]; images?: string[]; forceScan?: boolean }, silent = false) => {
     if (!user) return;
     parsedAttempted.current.add(documentId);
     if (!silent) { setExtracting(true); setParseProgress(extra?.pageCount ? `Reading ${extra.pageCount} pages · parsing visits` : 'Analyzing document…'); }
@@ -1728,26 +1746,44 @@ export default function PetRecordScreen() {
       };
       let extractedText = extra?.extractedText;
       let pageCount = extra?.pageCount || 0;
-      if (!extractedText && path && /\.pdf$/i.test(path) && typeof document !== 'undefined') {
+      let images = extra?.images ? extra.images.slice() : [];
+      const charsNow = extractedText?.length || 0;
+      const sparse = pageCount > 0 && charsNow / pageCount < 200;
+      if (typeof document !== 'undefined' && path && /\.pdf$/i.test(path) && images.length === 0 && (extra?.forceScan || sparse || !extractedText)) {
         try {
-          setParseProgress('Reading PDF pages…');
+          setParseProgress(extra?.forceScan || sparse ? 'Rendering scan pages…' : 'Reading PDF pages…');
           const { data: signed } = await supabase.storage.from('pet-documents').createSignedUrl(path, 180);
           if (signed?.signedUrl) {
-            const pdf = await extractPdfText(signed.signedUrl);
+            const pdf = await extractPdf(signed.signedUrl, { forceImages: Boolean(extra?.forceScan) || sparse || charsNow < 200 });
             extractedText = pdf.text;
             pageCount = pdf.pageCount;
-            setParseProgress(`Reading ${pdf.pageCount} pages · parsing visits`);
+            if (pdf.mode === 'images') images = pdf.images;
+            console.log('[parse-pet-document]', { pages: pdf.pageCount, chars: pdf.charCount, mode: pdf.mode });
+            setParseProgress(pdf.mode === 'images'
+              ? `Scan · ${pdf.pageCount} pages`
+              : `Reading ${pdf.pageCount} pages · ${pdf.charCount.toLocaleString()} characters`);
           }
         } catch (e) {
           console.log('[parse-pet-document] client pdf extract failed', e);
         }
       }
-      if (!silent && extra?.imageBase64 && !extractedText) payload.imageBase64 = extra.imageBase64;
-      if (extractedText) {
-        payload.extractedText = extractedText;
-        payload.pageCount = pageCount;
+      const chars = extractedText?.length || 0;
+      const mode: 'text' | 'images' = extra?.forceScan || images.length ? 'images' : 'text';
+      console.log('[parse-pet-document]', { pages: pageCount || images.length, chars, mode });
+      if (images.length) {
+        payload.images = images;
+        payload.mode = 'images';
+        payload.forceScan = Boolean(extra?.forceScan);
+        payload.pageCount = pageCount || images.length;
+      } else {
+        if (!silent && extra?.imageBase64 && !extractedText) payload.imageBase64 = extra.imageBase64;
+        if (extractedText) {
+          payload.extractedText = extractedText;
+          payload.pageCount = pageCount;
+        }
+        payload.mode = mode;
       }
-      console.log('[parse-pet-document] POST /api/parse-pet-document', { documentId, silent, hasImage: Boolean(payload.imageBase64), path });
+      console.log('[parse-pet-document] POST /api/parse-pet-document', { documentId, silent, hasImage: Boolean(payload.imageBase64), hasImages: images.length, path, mode });
       const resp = await fetch(siteApi('/api/parse-pet-document'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3945,6 +3981,18 @@ export default function PetRecordScreen() {
                 </Text>
               </View>
               <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24, gap: 12 }} showsVerticalScrollIndicator={false}>
+                {(() => {
+                  const zeroItems = editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) === 0;
+                  if (!zeroItems) return null;
+                  return (
+                    <View style={styles.confirmCard}>
+                      <Text style={styles.docTitle}>Nothing extracted</Text>
+                      <Text style={styles.confirmLine}>
+                        {extractionReview.aiNote || 'This file looks like a scan. Retry as scan to read the pages as images, or add records manually.'}
+                      </Text>
+                    </View>
+                  );
+                })()}
                 {editableWeights.length > 0 ? (
                   <View style={styles.confirmCard}>
                     <Text style={styles.docTitle}>Weight history ({editableWeights.length})</Text>
@@ -4078,9 +4126,41 @@ export default function PetRecordScreen() {
                 })}
               </ScrollView>
               <View style={styles.confirmFooter}>
-                <TouchableOpacity style={[styles.coralConfirm, applyingExtraction && styles.btnDisabled]} onPress={applyExtraction} disabled={applyingExtraction} activeOpacity={0.85}>
-                  {applyingExtraction ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.coralConfirmTxt}>Confirm all</Text>}
-                </TouchableOpacity>
+                {editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) === 0 ? (
+                  <>
+                    <TouchableOpacity
+                      style={styles.aiShareBtn}
+                      onPress={() => {
+                        const id = extractionReview.documentId;
+                        const doc = documents.find((d) => d.id === id);
+                        setExtractionReview(null);
+                        void triggerExtraction(id, {
+                          path: doc?.file_path,
+                          mimeType: 'application/pdf',
+                          kinds: doc?.content_kinds || undefined,
+                          forceScan: true,
+                        });
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.aiShareTxt}>Retry as scan</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => {
+                        setExtractionReview(null);
+                        setTab('medical');
+                      }}
+                      style={{ paddingVertical: 12, alignItems: 'center' }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.addLink}>Add manually</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <TouchableOpacity style={[styles.coralConfirm, applyingExtraction && styles.btnDisabled]} onPress={applyExtraction} disabled={applyingExtraction} activeOpacity={0.85}>
+                    {applyingExtraction ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.coralConfirmTxt}>Confirm all</Text>}
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity onPress={() => setExtractionReview(null)} style={{ paddingVertical: 12, alignItems: 'center' }}>
                   <Text style={styles.modalCloseText}>Dismiss</Text>
                 </TouchableOpacity>

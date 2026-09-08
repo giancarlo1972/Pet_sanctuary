@@ -109,18 +109,33 @@ export default function MedicalDashboard(props: {
     props.vitals.filter((v) => v[key] != null).map((v) => ({ v: Number(v[key]), at: formatDate(v.recorded_at) }));
 
   const computedRisks = useMemo(() => {
-    const list: string[] = [];
-    if (props.bcs != null && props.bcs >= 8) list.push(`Obesity · BCS ${props.bcs}`);
+    type Tone = 'red' | 'yellow' | 'gray' | 'neutral';
+    const list: { label: string; tone: Tone }[] = [];
+    const push = (label: string, tone: Tone) => {
+      if (list.some((x) => x.label.toLowerCase() === label.toLowerCase())) return;
+      list.push({ label, tone });
+    };
+    const overPct = props.latestLb != null && props.targetLb != null && props.targetLb > 0
+      ? ((props.latestLb - props.targetLb) / props.targetLb) * 100
+      : null;
+    if (props.bcs != null && props.bcs >= 8) push('Obesity', 'red');
+    if (overPct != null && overPct > 15) push('Overweight', 'red');
+    else if (overPct != null && overPct > 5) push('Above target', 'yellow');
     for (const r of props.risks || []) {
       const t = String(r || '').trim();
       if (!t) continue;
-      if (list.some((x) => x.toLowerCase() === t.toLowerCase() || t.toLowerCase().includes('obes'))) continue;
-      list.push(t);
+      if (/obes/i.test(t) || /overweight|above target/i.test(t)) continue;
+      push(t, /limited health record/i.test(t) ? 'gray' : 'neutral');
     }
     return list.slice(0, 3);
-  }, [props.bcs, props.risks]);
-  const mainRisk = computedRisks[0] || 'None flagged';
-  const riskWarn = /obes|bcs\s*[89]/i.test(mainRisk);
+  }, [props.bcs, props.risks, props.latestLb, props.targetLb]);
+  const mainRisk = computedRisks[0]?.label || 'None flagged';
+  const riskTone = computedRisks[0]?.tone;
+
+  const overPct = props.latestLb != null && props.targetLb != null && props.targetLb > 0
+    ? ((props.latestLb - props.targetLb) / props.targetLb) * 100
+    : null;
+  const overPctLabel = overPct == null ? null : `${overPct > 0 ? '+' : ''}${overPct.toFixed(1)}%`;
 
   const [expand, setExpand] = useState<Record<string, boolean>>({});
 
@@ -160,7 +175,11 @@ export default function MedicalDashboard(props: {
           <View style={styles.kpi}>
             <Text style={styles.kpiKLight}>Weight</Text>
             <Text style={styles.kpiV}>{props.latestLb != null ? props.latestLb : '—'}<Text style={styles.kpiU}> lb</Text></Text>
-            <Delta d={wDelta} />
+            {overPctLabel ? (
+              <Text style={[styles.kpiHint, { color: overPct != null && overPct > 15 ? '#F5C1B8' : overPct != null && overPct > 5 ? '#FCE9C8' : '#B9BCE0' }]}>{overPctLabel}</Text>
+            ) : (
+              <Delta d={wDelta} />
+            )}
             {props.targetLb != null ? <Text style={styles.kpiHint}>target {props.targetLb} lb</Text> : null}
             {props.weightPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.45, width: 90 }}><MiniSpark values={props.weightPts.map((p) => p.v)} color="#7EE0D6" height={28} /></View> : null}
           </View>
@@ -170,12 +189,14 @@ export default function MedicalDashboard(props: {
             <Delta d={bcsDelta} />
             {props.bcsPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.45, width: 90 }}><MiniSpark values={props.bcsPts.map((p) => p.v)} color="#FCE9C8" height={28} /></View> : null}
           </View>
-          <View style={[styles.kpi, riskWarn ? { backgroundColor: 'rgba(229,164,21,0.22)' } : null]}>
+          <View style={[styles.kpi, riskTone === 'red' ? { backgroundColor: 'rgba(215,68,62,0.28)' } : riskTone === 'yellow' ? { backgroundColor: 'rgba(229,164,21,0.22)' } : null]}>
             <Text style={styles.kpiKLight}>Main risk</Text>
-            <Text style={[styles.kpiV, { fontSize: 16, color: riskWarn ? '#FCE9C8' : Colors.white }]} numberOfLines={2}>{mainRisk}</Text>
+            <Text style={[styles.kpiV, { fontSize: 16, color: riskTone === 'red' ? '#F5C1B8' : riskTone === 'yellow' ? '#FCE9C8' : Colors.white }]} numberOfLines={2}>{mainRisk}</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
               {computedRisks.slice(1, 3).map((r) => (
-                <View key={r} style={styles.riskChip}><Text style={styles.riskTxt} numberOfLines={1}>{r}</Text></View>
+                <View key={r.label} style={[styles.riskChip, r.tone === 'gray' ? { backgroundColor: 'rgba(255,255,255,0.10)' } : r.tone === 'red' ? { backgroundColor: 'rgba(215,68,62,0.35)' } : r.tone === 'yellow' ? { backgroundColor: 'rgba(229,164,21,0.28)' } : null]}>
+                  <Text style={[styles.riskTxt, r.tone === 'gray' ? { color: '#C5C8D8' } : null]} numberOfLines={1}>{r.label}</Text>
+                </View>
               ))}
             </View>
           </View>
@@ -201,7 +222,7 @@ export default function MedicalDashboard(props: {
         <Text style={styles.kicker}>WEIGHT + BCS</Text>
         {props.weightPts.length >= 2 ? (
           <AreaChart
-            points={props.weightPts.map((p) => ({ ...p, out: props.targetLb != null && p.v > props.targetLb * 1.08 }))}
+            points={props.weightPts.map((p) => ({ ...p, out: props.targetLb != null && p.v > props.targetLb * 1.05 }))}
             secondary={props.bcsPts.length >= 2 ? props.bcsPts : undefined}
             height={160}
             target={props.targetLb}

@@ -2423,9 +2423,16 @@ export default function PetRecordScreen() {
   let weightTone: 'ok' | 'due' | 'over' | 'unknown' = 'unknown';
   let weightSub = latestLb != null ? `${latestLb} lb` : 'No weight';
   if (latestLb != null && targetLb != null) {
-    if (latestLb > targetLb * 1.08 || (bcs != null && bcs >= 7)) {
-      weightTone = 'due';
+    const overPct = ((latestLb - targetLb) / targetLb) * 100;
+    if (bcs != null && bcs >= 8) {
+      weightTone = 'over';
+      weightSub = `Obesity\n${latestLb} lb · ${overPct > 0 ? '+' : ''}${overPct.toFixed(1)}%`;
+    } else if (overPct > 15) {
+      weightTone = 'over';
       weightSub = `Overweight\n${latestLb} → ${targetLb} lb`;
+    } else if (overPct > 5) {
+      weightTone = 'due';
+      weightSub = `Above target\n${latestLb} lb · +${overPct.toFixed(1)}%`;
     } else if (latestLb < targetLb * 0.92 || (bcs != null && bcs <= 3)) {
       weightTone = 'over';
       weightSub = `${latestLb} lb · underweight`;
@@ -2988,7 +2995,7 @@ export default function PetRecordScreen() {
               latestLb={latestLb}
               targetLb={targetLb}
               weightDelta={weightEntries[0] && weightEntries[1] ? weightEntries[0].weight_lb - weightEntries[1].weight_lb : null}
-              weightPts={weightEntries.slice().reverse().map((w) => ({ v: w.weight_lb, at: w.measured_on, out: targetLb != null && w.weight_lb > targetLb * 1.08 }))}
+              weightPts={weightEntries.slice().reverse().map((w) => ({ v: w.weight_lb, at: w.measured_on, out: targetLb != null && w.weight_lb > targetLb * 1.05 }))}
               bcs={bcsVal}
               bcsDelta={bcsVal != null && prevBcs != null ? bcsVal - prevBcs : null}
               bcsPts={petExams.map((e) => ({ v: Number(e.vitals?.bcs), at: e.visit_date })).filter((p) => Number.isFinite(p.v)).reverse()}

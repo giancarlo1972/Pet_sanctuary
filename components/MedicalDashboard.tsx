@@ -5,7 +5,7 @@ import { Fonts } from '@/constants/Fonts';
 import { AreaChart, HealthRing, RefBand } from '@/components/MedicalCharts';
 import { LabSparkline as MiniSpark } from '@/components/PetCharts';
 import { SourceBadge } from '@/components/SourceBadge';
-import { Card, InnerTile } from '@/components/Card';
+import { Card } from '@/components/Card';
 export { EXAM_PILLS } from '@/components/VetExamCard';
 
 export function classifyLab(name: string): 'Hematology' | 'Chemistry' | 'Endocrinology' | 'Urinalysis' {
@@ -147,53 +147,53 @@ export default function MedicalDashboard(props: {
 
   return (
     <View style={{ gap: 16 }}>
-      <Card identity>
+      <View style={styles.navy}>
         <View style={styles.kpiRow}>
-          <InnerTile style={styles.kpiTile}>
-            <Text style={styles.kpiK}>Health score</Text>
+          <View style={styles.kpi}>
+            <Text style={styles.kpiKLight}>Health score</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <HealthRing score={props.healthScore} light size={64} />
-              <Text style={styles.kpiHintDark}>{props.verdict}</Text>
+              <HealthRing score={props.healthScore} size={64} />
+              <Text style={styles.kpiHint}>{props.verdict}</Text>
             </View>
-          </InnerTile>
-          <InnerTile style={styles.kpiTile}>
-            <Text style={styles.kpiK}>Weight</Text>
-            <Text style={styles.kpiVDark}>{props.latestLb != null ? props.latestLb : '—'}<Text style={styles.kpiUDark}> lb</Text></Text>
+          </View>
+          <View style={styles.kpi}>
+            <Text style={styles.kpiKLight}>Weight</Text>
+            <Text style={styles.kpiV}>{props.latestLb != null ? props.latestLb : '—'}<Text style={styles.kpiU}> lb</Text></Text>
             <Delta d={wDelta} />
-            {props.targetLb != null ? <Text style={styles.kpiHintDark}>target {props.targetLb} lb</Text> : null}
-            {props.weightPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.35, width: 90 }}><MiniSpark values={props.weightPts.map((p) => p.v)} color={Colors.teal} height={28} /></View> : null}
-          </InnerTile>
-          <InnerTile style={styles.kpiTile}>
-            <Text style={styles.kpiK}>BCS</Text>
-            <Text style={styles.kpiVDark}>{props.bcs != null ? props.bcs : '—'}<Text style={styles.kpiUDark}> /9</Text></Text>
+            {props.targetLb != null ? <Text style={styles.kpiHint}>target {props.targetLb} lb</Text> : null}
+            {props.weightPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.45, width: 90 }}><MiniSpark values={props.weightPts.map((p) => p.v)} color="#7EE0D6" height={28} /></View> : null}
+          </View>
+          <View style={styles.kpi}>
+            <Text style={styles.kpiKLight}>BCS</Text>
+            <Text style={styles.kpiV}>{props.bcs != null ? props.bcs : '—'}<Text style={styles.kpiU}> /9</Text></Text>
             <Delta d={bcsDelta} />
-            {props.bcsPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.35, width: 90 }}><MiniSpark values={props.bcsPts.map((p) => p.v)} color={Colors.accent} height={28} /></View> : null}
-          </InnerTile>
-          <InnerTile style={[styles.kpiTile, riskWarn ? { backgroundColor: Colors.standardBg } : null]}>
-            <Text style={styles.kpiK}>Main risk</Text>
-            <Text style={[styles.kpiVDark, { fontSize: 16, color: riskWarn ? Colors.accentDark : Colors.navy }]} numberOfLines={2}>{mainRisk}</Text>
+            {props.bcsPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.45, width: 90 }}><MiniSpark values={props.bcsPts.map((p) => p.v)} color="#FCE9C8" height={28} /></View> : null}
+          </View>
+          <View style={[styles.kpi, riskWarn ? { backgroundColor: 'rgba(229,164,21,0.22)' } : null]}>
+            <Text style={styles.kpiKLight}>Main risk</Text>
+            <Text style={[styles.kpiV, { fontSize: 16, color: riskWarn ? '#FCE9C8' : Colors.white }]} numberOfLines={2}>{mainRisk}</Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
               {computedRisks.slice(1, 3).map((r) => (
-                <View key={r} style={styles.riskChipLight}><Text style={styles.riskTxtDark} numberOfLines={1}>{r}</Text></View>
+                <View key={r} style={styles.riskChip}><Text style={styles.riskTxt} numberOfLines={1}>{r}</Text></View>
               ))}
             </View>
-          </InnerTile>
+          </View>
         </View>
-        <View style={styles.docStrip}>
+        <View style={styles.docStripNavy}>
           {([
             { kind: 'labs' as const, label: 'Labs', n: props.docCounts?.labs ?? 0 },
             { kind: 'vaccinations' as const, label: 'Vaccines', n: props.docCounts?.vaccines ?? 0 },
             { kind: 'exam_visit' as const, label: 'Records', n: props.docCounts?.records ?? 0 },
           ]).map((item, i) => (
             <React.Fragment key={item.kind}>
-              {i > 0 ? <Text style={styles.stripDot}>·</Text> : null}
+              {i > 0 ? <Text style={styles.stripDotNavy}>·</Text> : null}
               <TouchableOpacity onPress={() => props.onOpenDocs?.(item.kind)} activeOpacity={0.85}>
-                <Text style={styles.stripTxt}>{item.label} {item.n}</Text>
+                <Text style={styles.stripTxtNavy}>{item.label} {item.n}</Text>
               </TouchableOpacity>
             </React.Fragment>
           ))}
         </View>
-      </Card>
+      </View>
 
       {props.weightPts.length >= 1 ? (
       <Card>
@@ -345,7 +345,7 @@ export default function MedicalDashboard(props: {
 }
 
 const styles = StyleSheet.create({
-  navy: { backgroundColor: Colors.navy, borderRadius: 16, padding: 16, gap: 4 },
+  navy: { backgroundColor: '#26265E', borderRadius: 16, padding: 16, gap: 12 },
   kpiRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   kpiTile: { width: '48%', backgroundColor: Colors.white, borderRadius: 16, padding: 14, minHeight: 118, overflow: 'hidden', gap: 4 },
   kpiVDark: { fontFamily: Fonts.extrabold, fontSize: 26, color: Colors.navy },
@@ -356,12 +356,16 @@ const styles = StyleSheet.create({
   docStrip: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, paddingTop: 4 },
   stripTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.navy },
   stripDot: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.textTertiary },
+  docStripNavy: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, paddingTop: 4 },
+  stripTxtNavy: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.white },
+  stripDotNavy: { fontFamily: Fonts.bold, fontSize: 13, color: '#B9BCE0' },
   navyKicker: { fontFamily: Fonts.extrabold, fontSize: 11, letterSpacing: 0.8, color: '#B9BCE0' },
   navySub: { fontFamily: Fonts.bold, fontSize: 16, color: Colors.white },
   riskChip: { backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, maxWidth: 160 },
   riskTxt: { fontFamily: Fonts.bold, fontSize: 11, color: '#FCE9C8' },
-  kpi: { flex: 1, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 14, padding: 12, gap: 4 },
+  kpi: { width: '48%', backgroundColor: 'rgba(255,255,255,0.10)', borderRadius: 14, padding: 12, minHeight: 118, overflow: 'hidden', gap: 4 },
   kpiK: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.textTertiary },
+  kpiKLight: { fontFamily: Fonts.bold, fontSize: 11, color: '#B9BCE0' },
   kpiV: { fontFamily: Fonts.extrabold, fontSize: 26, color: Colors.white },
   kpiU: { fontFamily: Fonts.medium, fontSize: 13, color: '#B9BCE0' },
   kpiHint: { fontFamily: Fonts.regular, fontSize: 11, color: '#B9BCE0' },

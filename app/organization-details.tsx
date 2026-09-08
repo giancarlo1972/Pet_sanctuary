@@ -32,20 +32,14 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import SignedImage from '@/components/SignedImage';
+import { orgSection, orgTypeLabel, orgTileColor, orgListsPets, type OrgSection } from '@/lib/org-type';
 
-const BRAND_COLORS = [Colors.coral, Colors.teal, Colors.navy, Colors.accent, Colors.coralDark, Colors.tealDark];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ORG_SELECT_FULL = 'id, name, description, org_type, address, city, state, website, phone, contact_email, status, ein_verified, tax_deductible, donations_enabled, donate_url, data_source, external_id';
 const ORG_SELECT_SLIM = 'id, name, description, org_type, address, city, state, website, phone, contact_email, status';
 
 function isUuid(value: string) {
   return UUID_RE.test(value);
-}
-
-function colorForName(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
-  return BRAND_COLORS[hash % BRAND_COLORS.length];
 }
 
 interface OrgPet {
@@ -59,6 +53,7 @@ interface OrgData {
   name: string;
   description: string;
   type: string;
+  kind: OrgSection;
   city: string;
   status: string;
   ein: string;
@@ -81,6 +76,7 @@ const MOCK_ORG: OrgData = {
   name: 'Happy Paws Shelter',
   description: '',
   type: 'Shelter',
+  kind: 'shelter',
   city: '',
   status: 'verified',
   ein: '',
@@ -106,25 +102,19 @@ const SHARE_CHIPS = [
 ];
 
 function mapDbOrg(dbOrg: any): OrgData {
-  const orgTypeLabel: Record<string, string> = {
-    nonprofit: 'Nonprofit',
-    business: 'Business / Sponsor',
-    municipal: 'Municipal',
-    individual: 'Personal Fundraiser',
-    shelter: 'Shelter',
-    rescue: 'Rescue group',
-    clinic: 'Clinic',
-    sponsor: 'Sponsor',
-  };
   const city = dbOrg.city
     || (String(dbOrg.address || '').match(/,\s*([^,]+),\s*[A-Z]{2}/)?.[1])
     || '';
   const fromRg = String(dbOrg.data_source || '').toLowerCase().includes('rescue');
+  const kind = orgSection(dbOrg.org_type);
+  const description = dbOrg.description
+    || (kind === 'sponsor' ? 'Helps shelters and animals in need.' : '');
   return {
     id: dbOrg.id,
     name: dbOrg.name || 'Organization',
-    description: dbOrg.description || '',
-    type: orgTypeLabel[String(dbOrg.org_type || '').toLowerCase()] || (dbOrg.org_type || 'Organization'),
+    description,
+    type: orgTypeLabel(dbOrg.org_type),
+    kind,
     city,
     status: dbOrg.status || 'pending',
     ein: '',
@@ -210,7 +200,7 @@ export default function OrganizationDetailsScreen() {
         const mapped = mapDbOrg(dbOrg);
         setOrg(mapped);
         const ext = dbOrg.external_id || (!isUuid(rawId) ? rawId : null);
-        if (ext && String(ext).startsWith('rg-')) {
+        if (orgListsPets(dbOrg.org_type) && ext && String(ext).startsWith('rg-')) {
           fetch('/api/rescuegroups?org=' + encodeURIComponent(String(ext)))
             .then((r) => r.json())
             .then((petJson) => {
@@ -280,8 +270,19 @@ export default function OrganizationDetailsScreen() {
     );
   }
 
-  const brandColor = colorForName(org.name);
+  const brandColor = orgTileColor(org.kind);
   const canDonate = !!(org.donation_url || org.contact_email || org.website);
+  const listsPets = org.kind === 'shelter' || org.kind === 'rescue';
+  const websiteCta = org.kind === 'clinic' ? 'Clinic website' : org.kind === 'sponsor' ? 'Website' : 'Shelter website';
+  const statusLabel = org.status === 'approved' && org.ein_verified
+    ? '501(c)(3) verified'
+    : org.kind === 'sponsor'
+      ? 'Sponsor'
+      : org.status === 'approved'
+        ? 'Approved'
+        : org.status === 'pending' || org.status === 'pending_review'
+          ? 'Pending review'
+          : 'Approved';
 
   return (
     <SafeAreaView style={styles.container}>
@@ -312,18 +313,35 @@ export default function OrganizationDetailsScreen() {
             </View>
           </View>
           <View style={styles.statRow}>
-            <View style={styles.statTile}>
-              <Text style={styles.statValue}>{org.pets_listed}</Text>
-              <Text style={styles.statLabel}>Pets listed</Text>
-            </View>
-            <View style={styles.statTile}>
-              <Text style={styles.statValue}>{org.adoptions.toLocaleString()}</Text>
-              <Text style={styles.statLabel}>Adoptions</Text>
-            </View>
-            <View style={styles.statTile}>
-              <Text style={styles.statValue}>{org.followers.toLocaleString()}</Text>
-              <Text style={styles.statLabel}>Followers</Text>
-            </View>
+            {listsPets ? (
+              <>
+                <View style={styles.statTile}>
+                  <Text style={styles.statValue}>{org.pets_listed}</Text>
+                  <Text style={styles.statLabel}>Pets listed</Text>
+                </View>
+                <View style={styles.statTile}>
+                  <Text style={styles.statValue}>{org.adoptions.toLocaleString()}</Text>
+                  <Text style={styles.statLabel}>Adoptions</Text>
+                </View>
+                <View style={styles.statTile}>
+                  <Text style={styles.statValue}>{org.followers.toLocaleString()}</Text>
+                  <Text style={styles.statLabel}>Followers</Text>
+                </View>
+              </>
+            ) : (
+              <View style={styles.roleBanner}>
+                <Text style={styles.roleBannerKicker}>
+                  {org.kind === 'clinic' ? 'CLINIC' : org.kind === 'sponsor' ? 'SPONSOR' : 'ORGANIZATION'}
+                </Text>
+                <Text style={styles.roleBannerText}>
+                  {org.kind === 'clinic'
+                    ? 'Emergency partner'
+                    : org.kind === 'sponsor'
+                      ? 'Helps shelters and animals in need'
+                      : org.type}
+                </Text>
+              </View>
+            )}
           </View>
         </View>
 
@@ -336,7 +354,7 @@ export default function OrganizationDetailsScreen() {
             <View style={styles.infoRow}>
               <Text style={styles.infoKey}>Status</Text>
               <Text style={[styles.infoVal, { color: Colors.tealDark }]}>
-                {org.status === 'approved' && org.ein_verified ? '501(c)(3) verified' : org.status === 'approved' ? 'Registered' : org.status === 'pending' ? 'Pending review' : 'Registered'}
+                {statusLabel}
               </Text>
             </View>
             {(einDisplay || org.ein) ? (
@@ -394,7 +412,7 @@ export default function OrganizationDetailsScreen() {
             </View>
           ) : null}
 
-          {org.pets.length > 0 && (
+          {listsPets && org.pets.length > 0 && (
             <View style={styles.petStripSection}>
               <Text style={styles.sectionTitle}>Available pets</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.petStrip}>
@@ -477,7 +495,7 @@ export default function OrganizationDetailsScreen() {
               ) : null}
               {org.website ? (
                 <TouchableOpacity style={styles.donateOption} onPress={() => openHref(websiteHref(org.website))}>
-                  <Text style={styles.donateOptionText}>Shelter website</Text>
+                  <Text style={styles.donateOptionText}>{websiteCta}</Text>
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -575,6 +593,16 @@ const styles = StyleSheet.create({
   },
   statLabel: {
     fontSize: FontSizes.xs, fontFamily: Fonts.regular, color: 'rgba(255,255,255,0.7)', marginTop: 4,
+  },
+  roleBanner: {
+    flex: 1, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 12,
+    paddingVertical: 14, paddingHorizontal: 16, alignItems: 'center',
+  },
+  roleBannerKicker: {
+    fontSize: 11, fontFamily: Fonts.bold, color: Colors.accent, letterSpacing: 1.2,
+  },
+  roleBannerText: {
+    fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.white, marginTop: 4, textAlign: 'center',
   },
   body: { padding: 20, paddingBottom: 100 },
   description: {

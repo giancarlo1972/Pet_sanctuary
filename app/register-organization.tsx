@@ -55,7 +55,7 @@ export default function RegisterOrganizationScreen() {
       }
       const { data, error } = await supabase.from('organizations').insert({
         name: name.trim(),
-        org_type: orgType === 'sponsor' ? 'business' : orgType,
+        org_type: orgType,
         description: description.trim() || null,
         address: address.trim() || null,
         city: city.trim() || null,

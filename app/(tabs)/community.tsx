@@ -36,6 +36,7 @@ import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 import SignedImage from '@/components/SignedImage';
 import { PROVIDER_SERVICES } from '@/lib/role-categories';
+import { orgSection, ORG_TILE, ORG_TYPE_LABEL } from '@/lib/org-type';
 import type { Story } from '@/types';
 
 type Segment = 'orgs' | 'fosters' | 'stories' | 'services';
@@ -61,14 +62,6 @@ const ORG_PAGE = 50;
 const INTER = Platform.OS === 'web' ? 'Inter, system-ui, sans-serif' : Fonts.regular;
 const INTERB = Platform.OS === 'web' ? 'Inter, system-ui, sans-serif' : Fonts.bold;
 const INTEREB = Platform.OS === 'web' ? 'Inter, system-ui, sans-serif' : Fonts.extrabold;
-
-const TILE_BY_TYPE: Record<string, string> = {
-  shelter: '#26265E',
-  rescue: '#2E9E96',
-  clinic: '#E97F2E',
-  sponsor: '#E5A415',
-};
-const TILE_OTHER = '#6B5CA5';
 
 const orgCache = {
   async getItem(key: string) {
@@ -155,25 +148,6 @@ const FILTER_TO_SECTION: Record<TypeFilter, string> = {
   'Rescue groups': 'rescue',
   Clinics: 'clinic',
   Sponsors: 'sponsor',
-};
-
-const ORG_TYPE_ALIASES: Record<string, string> = {
-  rescue_group: 'rescue',
-  rescue: 'rescue',
-  animal_shelter: 'shelter',
-  shelter: 'shelter',
-  veterinary_clinic: 'clinic',
-  clinic: 'clinic',
-  sponsor: 'sponsor',
-  business: 'sponsor',
-};
-
-const ORG_TYPE_LABELS: Record<string, string> = {
-  shelter: 'Shelter',
-  rescue: 'Rescue group',
-  clinic: 'Clinic',
-  sponsor: 'Sponsor',
-  other: 'Organization',
 };
 
 const STORY_TYPE_LABELS: Record<string, string> = {
@@ -459,11 +433,7 @@ export default function CommunityScreen() {
   useEffect(() => { loadFosters(); loadStories(); loadProviders(); }, [loadFosters, loadStories, loadProviders]);
   useFocusEffect(useCallback(() => { loadOrgs(); }, [loadOrgs]));
 
-  const getSection = (org: OrgRow) => {
-    const raw = (org.org_type || '').toLowerCase();
-    if (!raw) return 'shelter';
-    return ORG_TYPE_ALIASES[raw] || 'other';
-  };
+  const getSection = (org: OrgRow) => orgSection(org.org_type);
 
   const filteredOrgs = (typeFilter === 'All' ? orgs : orgs.filter((o) => getSection(o) === FILTER_TO_SECTION[typeFilter]))
     .filter((o) => {
@@ -474,13 +444,15 @@ export default function CommunityScreen() {
 
   const getStatusPill = (org: OrgRow, section: string) => {
     if (section === 'clinic') return { label: 'Care Fund partner', bg: '#FCF4DF', color: '#8A5A00' };
+    if (section === 'sponsor') return { label: 'Sponsor', bg: '#FCF4DF', color: '#8A5A00' };
     if (org.ein_verified) return { label: '501(c)(3) verified', bg: '#E4F3F1', color: '#1D6D66' };
     return { label: 'Verification pending', bg: '#EFF1F5', color: '#6B7280' };
   };
 
   const orgSubline = (org: OrgRow, section: string) => {
-    const typeLabel = ORG_TYPE_LABELS[section] || 'Organization';
+    const typeLabel = ORG_TYPE_LABEL[section as keyof typeof ORG_TYPE_LABEL] || 'Organization';
     if (section === 'clinic') return `${typeLabel} · Emergency partner`;
+    if (section === 'sponsor') return `${typeLabel} · Helps shelters & animals in need`;
     if (section === 'rescue') {
       const n = org.fosters_count || org.pets_count || 0;
       return `${typeLabel} · ${n} active foster${n === 1 ? '' : 's'}`;
@@ -492,7 +464,7 @@ export default function CommunityScreen() {
   const renderOrgRow = (org: OrgRow) => {
     const section = getSection(org);
     const pill = getStatusPill(org, section);
-    const tile = TILE_BY_TYPE[section] || TILE_OTHER;
+    const tile = ORG_TILE[section] || ORG_TILE.other;
     const showShield = org.status === 'approved' || Boolean(org.ein_verified);
     return (
       <TouchableOpacity

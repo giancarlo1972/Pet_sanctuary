@@ -1486,22 +1486,34 @@ export default function PetRecordScreen() {
         }
       }
       if (!ext || ext.length > 5) ext = isPdf ? 'pdf' : 'jpg';
-      dest = `${petId}/${Date.now()}.${ext}`;
+      const ts = Date.now();
+      const dests = [`${petId}/${ts}.${ext}`, `${user.id}/${ts}.${ext}`];
       size = body.size;
-      console.log('[upload]', { bucket: 'pet-documents', path: dest, size, error: null });
-      let up = await supabase.storage.from('pet-documents').upload(dest, body, { contentType, upsert: false });
-      if (up.error && Platform.OS !== 'web') {
-        console.warn('[upload] arrayBuffer upload failed, retrying FormData', {
-          message: up.error.message,
-          name: up.error.name,
-          statusCode: (up.error as any).statusCode,
-        });
-        const fd = new FormData();
-        fd.append('file', { uri: docFile.uri, type: contentType, name: dest.split('/').pop() || originalName } as any);
-        up = await supabase.storage.from('pet-documents').upload(dest, fd as any, { contentType, upsert: true });
+      let up: { data: { path?: string } | null; error: { message?: string } | null } = { data: null, error: { message: 'not attempted' } };
+      for (let i = 0; i < dests.length; i++) {
+        dest = dests[i];
+        console.log('[upload]', { bucket: 'pet-documents', path: dest, size, error: null, attempt: i + 1 });
+        up = await supabase.storage.from('pet-documents').upload(dest, body, { contentType, upsert: false });
+        if (up.error && Platform.OS !== 'web') {
+          console.warn('[upload] arrayBuffer upload failed, retrying FormData', {
+            message: up.error.message,
+            name: (up.error as any).name,
+            statusCode: (up.error as any).statusCode,
+          });
+          const fd = new FormData();
+          fd.append('file', { uri: docFile.uri, type: contentType, name: dest.split('/').pop() || originalName } as any);
+          up = await supabase.storage.from('pet-documents').upload(dest, fd as any, { contentType, upsert: true });
+        }
+        if (!up.error) break;
+        console.warn('[upload]', { bucket: 'pet-documents', path: dest, size, error: up.error.message, attempt: i + 1 });
+        if (!/row-level security|security policy/i.test(up.error.message || '')) break;
       }
       if (up.error) {
-        fail(up.error.message || 'Could not upload document.', { path: dest, size, error: up.error.message });
+        const raw = up.error.message || 'Could not upload document.';
+        const msg = /row-level security|security policy/i.test(raw)
+          ? `Could not store the file (permission). ${raw}`
+          : raw;
+        fail(msg, { path: dest, size, error: raw });
         return;
       }
       const storedPath = up.data?.path || dest;
@@ -1512,6 +1524,7 @@ export default function PetRecordScreen() {
         pet_id: petId,
         kind: kindFromContent(kinds),
         file_path: storedPath,
+        storage_path: storedPath,
         title,
         taken_on: docForm.taken_on || null,
         clinic: docForm.clinic.trim() || null,
@@ -1527,8 +1540,31 @@ export default function PetRecordScreen() {
         docData = retry.data;
         insErr = retry.error;
       }
+      if (insErr && /row-level security|security policy/i.test(insErr.message || '')) {
+        console.warn('[upload] table insert RLS, trying insert_pet_document', insErr.message);
+        const rpc = await supabase.rpc('insert_pet_document', {
+          p_pet_id: petId,
+          p_kind: row.kind,
+          p_file_path: storedPath,
+          p_title: title,
+          p_taken_on: docForm.taken_on || null,
+          p_clinic: docForm.clinic.trim() || null,
+          p_notes: docForm.notes.trim() || null,
+          p_content_kinds: kinds,
+        });
+        if (!rpc.error && rpc.data && typeof rpc.data === 'object' && (rpc.data as any).id) {
+          docData = rpc.data as typeof docData;
+          insErr = null;
+        } else {
+          console.warn('[upload] insert_pet_document rpc', rpc.error);
+        }
+      }
       if (insErr) {
-        fail(insErr.message || 'Uploaded, but could not save the record.', { path: storedPath, size, error: insErr.message });
+        const raw = insErr.message || 'Uploaded, but could not save the record.';
+        const msg = /row-level security|security policy/i.test(raw)
+          ? `Could not save the record (permission). ${raw}`
+          : raw;
+        fail(msg, { path: storedPath, size, error: raw });
         return;
       }
       setDocModalVisible(false);

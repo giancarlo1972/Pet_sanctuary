@@ -166,7 +166,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await saveActingAs(null);
     setActingAsState(null);
     applyHeaders(null);
-    await supabase.auth.signOut({ scope: 'global' });
+    await supabase.auth.signOut({ scope: 'local' });
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       try {
         Object.keys(localStorage).forEach((k) => {

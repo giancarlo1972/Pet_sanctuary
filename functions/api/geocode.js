@@ -1,8 +1,9 @@
+import { geocodeList, geocodeOne, placeKey } from './_places.js';
+
 const UA = { headers: { 'User-Agent': 'RescueArmy/1.0 (hub-preview.pet-sanctuary.pages.dev)' } };
 
-export async function onRequestGet(context) {
+async function handle(context) {
   const url = new URL(context.request.url);
-  const q = (url.searchParams.get('q') || '').trim();
   const latQ = url.searchParams.get('lat');
   const lngQ = url.searchParams.get('lng') || url.searchParams.get('lon');
   try {
@@ -23,16 +24,40 @@ export async function onRequestGet(context) {
         state_code: iso.includes('-') ? iso.split('-').pop() : null,
       });
     }
-    if (!q) return Response.json({ lat: null, lng: null }, { status: 400 });
-    const res = await fetch(
-      'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q),
-      UA,
-    );
-    const arr = await res.json();
-    const hit = Array.isArray(arr) ? arr[0] : null;
-    if (!hit) return Response.json({ lat: null, lng: null });
-    return Response.json({ lat: Number(hit.lat), lng: Number(hit.lon), label: hit.display_name || q });
+
+    let queries = [];
+    if (context.request.method === 'POST') {
+      const body = await context.request.json().catch(() => ({}));
+      const raw = body.q ?? body.queries ?? [];
+      queries = Array.isArray(raw) ? raw : String(raw || '').split('|');
+    } else {
+      const q = (url.searchParams.get('q') || '').trim();
+      queries = q ? q.split('|') : [];
+    }
+    queries = queries.map((x) => String(x || '').trim()).filter(Boolean);
+    if (!queries.length) return Response.json({ lat: null, lng: null }, { status: 400 });
+
+    if (queries.length === 1) {
+      const loc = await geocodeOne(queries[0]);
+      return Response.json(loc ? { ...loc, label: queries[0] } : { lat: null, lng: null });
+    }
+
+    const map = await geocodeList(queries);
+    const results = {};
+    for (const q of queries) {
+      const loc = map[placeKey(q)];
+      if (loc) results[placeKey(q)] = loc;
+    }
+    return Response.json({ results });
   } catch (e) {
     return Response.json({ lat: null, lng: null, error: String(e) }, { status: 502 });
   }
+}
+
+export async function onRequestGet(context) {
+  return handle(context);
+}
+
+export async function onRequestPost(context) {
+  return handle(context);
 }

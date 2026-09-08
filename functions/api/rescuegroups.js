@@ -1,3 +1,5 @@
+import { geocodeList, placeKey } from './_places.js';
+
 function photoFrom(a) {
   const pic = Array.isArray(a.animalPictures) && a.animalPictures[0];
   if (pic) {
@@ -28,9 +30,18 @@ function ageFromDob(dob) {
   const rem = months % 12;
   return rem ? years + ' yr ' + rem + ' mo' : years + ' yr';
 }
+function coordsOf(lat, lng) {
+  const a = Number(lat);
+  const b = Number(lng);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  if (Math.abs(a) < 0.01 && Math.abs(b) < 0.01) return null;
+  return { lat: a, lng: b };
+}
 function mapPet(a) {
   const status = a.animalStatus || 'Available';
   const adopted = /adopted|unavailable|removed/i.test(status);
+  const location = (a.animalLocationCitystate || '').trim() || null;
+  const given = coordsOf(a.animalLocationLatitude, a.animalLocationLongitude);
   return {
     id: 'rg-a-' + a.animalID,
     name: a.animalName,
@@ -42,9 +53,10 @@ function mapPet(a) {
     description: decode(a.animalDescriptionPlain),
     photo_url: photoFrom(a),
     main_photo_url: photoFrom(a),
-    location: a.animalLocationCitystate || null,
-    lat: Number(a.animalLocationLatitude) || null,
-    lng: Number(a.animalLocationLongitude) || null,
+    location,
+    city: a.animalLocationCitystate || null,
+    lat: given?.lat || null,
+    lng: given?.lng || null,
     status,
     vaccinated: yes(a.animalUptodate) || yes(a.animalShotsCurrent),
     spayed_neutered: yes(a.animalAltered),
@@ -53,6 +65,17 @@ function mapPet(a) {
     listing_url: a.animalUrl || null,
     availability: adopted ? 'none' : 'both',
   };
+}
+
+async function attachPetCoords(pets) {
+  const missing = pets.filter((p) => p.location && !coordsOf(p.lat, p.lng)).map((p) => p.location);
+  if (!missing.length) return pets;
+  const geo = await geocodeList(missing);
+  return pets.map((p) => {
+    if (coordsOf(p.lat, p.lng) || !p.location) return p;
+    const c = geo[placeKey(p.location)];
+    return c ? { ...p, lat: c.lat, lng: c.lng } : p;
+  });
 }
 
 export async function onRequestGet(context) {
@@ -86,7 +109,8 @@ export async function onRequestGet(context) {
     const json = await rg([{ fieldName: 'animalID', operation: 'equals', criteria: animalId }], 1);
     const a = Object.values(json.data || {})[0];
     if (!a) return Response.json({ pet: null }, { status: 404 });
-    return Response.json({ pet: mapPet(a) });
+    const pets = await attachPetCoords([mapPet(a)]);
+    return Response.json({ pet: pets[0] });
   }
 
   if (url.searchParams.get('pets') === '1') {
@@ -94,7 +118,7 @@ export async function onRequestGet(context) {
       { fieldName: 'animalLocationState', operation: 'equals', criteria: state },
       { fieldName: 'animalStatus', operation: 'equals', criteria: 'Available' },
     ], 48);
-    const pets = Object.values(json.data || {}).map(mapPet);
+    const pets = await attachPetCoords(Object.values(json.data || {}).map((a) => mapPet(a)));
     return Response.json({ pets, foundRows: json.foundRows || pets.length });
   }
 
@@ -103,7 +127,7 @@ export async function onRequestGet(context) {
       { fieldName: 'animalOrgID', operation: 'equals', criteria: orgId },
       { fieldName: 'animalStatus', operation: 'equals', criteria: 'Available' },
     ], 24);
-    const pets = Object.values(json.data || {}).map(mapPet);
+    const pets = await attachPetCoords(Object.values(json.data || {}).map((a) => mapPet(a)));
     return Response.json({ pets, foundRows: json.foundRows || pets.length });
   }
 
@@ -120,19 +144,33 @@ export async function onRequestGet(context) {
     }),
   });
   const json = await res.json();
-  const orgs = Object.values(json.data || {}).map((o) => ({
-    id: 'rg-' + o.orgID,
-    name: o.orgName,
-    org_type: (o.orgType || 'Rescue').toLowerCase(),
-    location: [o.orgCity, o.orgState].filter(Boolean).join(', '),
-    logo_url: null,
-    description: o.orgWebsiteUrl || null,
-    status: 'approved',
-    ein_verified: false,
-    tax_deductible: false,
-    website: o.orgWebsiteUrl || null,
-    email: o.orgEmail || null,
-    donation_url: o.orgDonationUrl || null,
-  }));
+  const orgs = Object.values(json.data || {}).map((o) => {
+    const city = (o.orgCity || '').trim() || null;
+    const st = (o.orgState || '').trim() || null;
+    const location = [city, st].filter(Boolean).join(', ');
+    return {
+      id: 'rg-' + o.orgID,
+      name: o.orgName,
+      org_type: (o.orgType || 'Rescue').toLowerCase(),
+      city,
+      state: st,
+      location,
+      logo_url: null,
+      description: o.orgWebsiteUrl || null,
+      status: 'approved',
+      ein_verified: false,
+      tax_deductible: false,
+      website: o.orgWebsiteUrl || null,
+      email: o.orgEmail || null,
+      donation_url: o.orgDonationUrl || null,
+      lat: null,
+      lng: null,
+    };
+  });
+  const geo = await geocodeList(orgs.map((o) => o.location).filter(Boolean));
+  for (const o of orgs) {
+    const c = o.location ? geo[placeKey(o.location)] : null;
+    if (c) { o.lat = c.lat; o.lng = c.lng; }
+  }
   return Response.json({ orgs, foundRows: json.foundRows || orgs.length });
 }

@@ -50,7 +50,8 @@ function reportTitle(r: { pet_name?: string | null; location_address?: string; r
 function coords(lat: unknown, lng: unknown): { lat: number; lng: number } | null {
   const a = Number(lat);
   const b = Number(lng);
-  if (!Number.isFinite(a) || !Number.isFinite(b) || !a) return null;
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  if (Math.abs(a) < 0.01 && Math.abs(b) < 0.01) return null;
   return { lat: a, lng: b };
 }
 
@@ -135,13 +136,26 @@ export default function NearbyScreen() {
     try {
       const flags = user?.id ? await loadHelpFlags(user.id) : null;
       if (flags?.alert_radius_mi) setRadiusMi(flags.alert_radius_mi);
-      const loc = (await deviceLocation()) || FALLBACK;
-      const didLocate = !!loc && loc !== FALLBACK;
-      setCenter(loc);
+      const device = await deviceLocation();
+      let loc = device;
+      let didLocate = Boolean(device);
+      let state = '';
+      if (didLocate && loc) {
+        const rev = await reverseGeocode(loc.lat, loc.lng);
+        state = (rev?.stateCode || '').slice(0, 2).toUpperCase();
+      }
+      if (!state && user?.id) {
+        const { data: prof } = await supabase.from('profiles').select('address_city, address_state').eq('id', user.id).maybeSingle();
+        state = String(prof?.address_state || '').slice(0, 2).toUpperCase();
+        if (!loc && (prof?.address_city || prof?.address_state)) {
+          loc = await geocodePlace([prof.address_city, prof.address_state].filter(Boolean).join(', '));
+        }
+      }
+      if (!loc) loc = FALLBACK;
+      if (!state) state = 'VA';
+      const here = loc;
+      setCenter(here);
       setLocated(didLocate);
-
-      const rev = didLocate ? await reverseGeocode(loc.lat, loc.lng) : null;
-      const state = (rev?.stateCode || 'NY').slice(0, 2).toUpperCase();
 
       const orgsFull = await supabase
         .from('organizations')
@@ -161,46 +175,52 @@ export default function NearbyScreen() {
           .limit(80),
         supabase
           .from('pets')
-          .select('id, name, breed, species, location, main_photo_url')
-          .eq('listing_type', 'adoptable')
+          .select('id, name, breed, species, location, main_photo_url, listing_type, is_public')
           .eq('is_public', true)
           .order('created_at', { ascending: false })
           .limit(80),
         fetch(`/api/rescuegroups?pets=1&state=${encodeURIComponent(state)}`).then((r) => r.ok ? r.json() : { pets: [] }).catch(() => ({ pets: [] })),
         fetch(`/api/rescuegroups?state=${encodeURIComponent(state)}`).then((r) => r.ok ? r.json() : { orgs: [] }).catch(() => ({ orgs: [] })),
-        fetch(`/api/nearby-clinics?kind=clinic&lat=${loc.lat}&lng=${loc.lng}`).then((r) => r.json()).catch(() => ({ clinics: [] })),
+        fetch(`/api/nearby-clinics?kind=clinic&lat=${here.lat}&lng=${here.lng}`).then((r) => r.json()).catch(() => ({ clinics: [] })),
       ]);
 
       const localOrgs = (orgsRes.data || []) as any[];
       const remoteOrgs = ((rgOrgs.orgs || []) as any[]).filter((o) => !localOrgs.some((l) => String(l.name || '').toLowerCase() === String(o.name || '').toLowerCase()));
       const allOrgs = [...localOrgs, ...remoteOrgs];
 
+      let localPets = (petsLocal.data || []) as any[];
+      if (petsLocal.error) {
+        const retry = await supabase.from('pets').select('id, name, breed, species, location, main_photo_url').eq('is_public', true).limit(80);
+        localPets = (retry.data || []) as any[];
+      }
+      localPets = localPets.filter((p) => !p.listing_type || p.listing_type === 'adoptable');
+
       const seenPet = new Set<string>();
       const allPets: any[] = [];
-      for (const p of [...((petsRemote.pets || []) as any[]), ...(petsLocal.data || [])]) {
+      for (const p of [...((petsRemote.pets || []) as any[]), ...localPets]) {
         const id = String(p.id);
         if (seenPet.has(id)) continue;
         seenPet.add(id);
         allPets.push(p);
       }
 
-      const orgQs: string[] = [];
-      const petQs: string[] = [];
+      const needGeo: string[] = [];
       for (const o of allOrgs) {
         if (coords(o.latitude ?? o.lat, o.longitude ?? o.lng)) continue;
         const q = orgPlace(o);
-        if (q) orgQs.push(q);
+        if (q) needGeo.push(q);
       }
       for (const p of allPets) {
         if (coords(p.lat ?? p.latitude, p.lng ?? p.longitude)) continue;
         const q = String(p.location || '').trim();
-        if (q) petQs.push(q);
+        if (q) needGeo.push(q);
       }
+      const geo = await geocodeMany(needGeo);
 
       const next: NearbyPin[] = [];
       const preferredMi = flags?.alert_radius_mi || 5;
       const paint = () => {
-        const view = viewForPins(loc, didLocate, next, preferredMi);
+        const view = viewForPins(here, didLocate, next, preferredMi);
         setRadiusMi(view.mi);
         setCenter(view.center);
         setPins([...next]);
@@ -221,12 +241,11 @@ export default function NearbyScreen() {
         });
       }
 
-      await geocodeMany(petQs);
       const groups = new Map<string, { lat: number; lng: number; label: string; pets: any[] }>();
       for (const p of allPets) {
         let c = coords(p.lat ?? p.latitude, p.lng ?? p.longitude);
         const place = String(p.location || '').trim();
-        if (!c && place) c = await geocodePlace(place);
+        if (!c && place) c = geo.get(place.toLowerCase().replace(/\s+/g, ' ')) || null;
         if (!c) continue;
         const key = place.toLowerCase() || `${c.lat.toFixed(2)},${c.lng.toFixed(2)}`;
         const g = groups.get(key) || { lat: c.lat, lng: c.lng, label: place || 'Nearby', pets: [] };
@@ -260,13 +279,11 @@ export default function NearbyScreen() {
           });
         }
       }
-      paint();
 
-      await geocodeMany(orgQs);
       for (const o of allOrgs) {
         let c = coords(o.latitude ?? o.lat, o.longitude ?? o.lng);
         const q = orgPlace(o);
-        if (!c && q) c = await geocodePlace(q);
+        if (!c && q) c = geo.get(q.toLowerCase().replace(/\s+/g, ' ')) || null;
         if (!c) continue;
         if (!coords(o.latitude ?? o.lat, o.longitude ?? o.lng) && q) persistOrgCoords(String(o.id), c);
         const place = [o.city, o.state].filter(Boolean).join(', ') || o.location || o.address || '';

@@ -2,18 +2,19 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
-  Switch, TextInput, ScrollView,
+  Switch, TextInput, ScrollView, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   ChevronLeft, ChevronRight, ShieldCheck, LogOut, Phone, IdCard, GraduationCap,
-  PawPrint, Plus, Sparkles,
+  PawPrint, Plus, Sparkles, MoreVertical,
 } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts } from '@/constants/Fonts';
 import { router, useFocusEffect } from 'expo-router';
 import { useAuth } from '@/lib/context/AuthContext';
 import SignInPrompt from '@/components/SignInPrompt';
+import { ConfirmDialog, type ConfirmConfig } from '@/components/ConfirmDialog';
 import { isPlatformAdmin } from '@/lib/admin-access';
 import { supabase } from '@/lib/supabase';
 import { Page } from '@/components/Page';
@@ -96,6 +97,8 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
   const [provider, setProvider] = useState<any | null>(null);
   const [helpReqs, setHelpReqs] = useState<any[]>([]);
   const [orgMembers, setOrgMembers] = useState<any[]>([]);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmConfig, setConfirmConfig] = useState<ConfirmConfig | null>(null);
 
   const tabs = TABS_BY_VIEW[view];
   const subs = SUBS[tab] || [];
@@ -428,6 +431,22 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
 
   const emptyLabel = (subs.find((x) => x.key === sub)?.label || tab).toLowerCase();
 
+  const askSignOut = () => {
+    setMenuOpen(false);
+    setConfirmConfig({
+      title: 'Sign out?',
+      message: 'You can sign back in anytime.',
+      confirmText: 'Sign out',
+      onConfirm: async () => { await signOut(); },
+    });
+  };
+
+  const switchAccount = async () => {
+    setMenuOpen(false);
+    await signOut();
+    router.replace('/auth');
+  };
+
   return (
     <SafeAreaView style={s.wrap} edges={['top']}>
       <Page>
@@ -447,6 +466,9 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
             </View>
             <Text style={s.meta} numberOfLines={1}>{[city || email, year ? `member since ${year}` : null].filter(Boolean).join(' · ')}</Text>
           </View>
+          <TouchableOpacity style={s.menuBtn} onPress={() => setMenuOpen(true)} activeOpacity={0.85} accessibilityLabel="Account menu">
+            <MoreVertical color={Colors.navy} size={18} />
+          </TouchableOpacity>
           {showPlatform ? (
             <TouchableOpacity style={s.plat} onPress={() => router.push('/platform')} activeOpacity={0.85}>
               <Text style={s.platTxt}>Platform</Text>
@@ -577,14 +599,34 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
               <Plus color={Colors.coral} size={16} />
               <Text style={s.dashTxt}>Add another role</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity style={s.logout} onPress={async () => { await signOut(); }} activeOpacity={0.8}>
-              <LogOut color={Colors.critical} size={18} />
-              <Text style={s.logoutTxt}>Sign out</Text>
-            </TouchableOpacity>
           </View>
         )}
+
+        <TouchableOpacity style={s.logout} onPress={askSignOut} activeOpacity={0.8}>
+          <LogOut color={Colors.coral} size={18} />
+          <Text style={s.logoutTxt}>Sign out</Text>
+        </TouchableOpacity>
       </Page>
+
+      <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
+        <View style={s.sheetOverlay}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setMenuOpen(false)} activeOpacity={1} />
+          <View style={s.sheet}>
+            <TouchableOpacity style={s.sheetRow} onPress={() => { setMenuOpen(false); router.push('/edit-profile'); }} activeOpacity={0.85}>
+              <Text style={s.sheetTxt}>Edit profile</Text>
+            </TouchableOpacity>
+            <View style={s.sheetDiv} />
+            <TouchableOpacity style={s.sheetRow} onPress={switchAccount} activeOpacity={0.85}>
+              <Text style={s.sheetTxt}>Switch account</Text>
+            </TouchableOpacity>
+            <View style={s.sheetDiv} />
+            <TouchableOpacity style={s.sheetRow} onPress={askSignOut} activeOpacity={0.85}>
+              <Text style={s.sheetDanger}>Sign out</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      <ConfirmDialog config={confirmConfig} onClose={() => setConfirmConfig(null)} />
     </SafeAreaView>
   );
 }
@@ -627,6 +669,7 @@ const s = StyleSheet.create({
   meta: { fontFamily: Fonts.regular, fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
   plat: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, backgroundColor: Colors.navy },
   platTxt: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.white },
+  menuBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
   duty: { backgroundColor: Colors.tealBg, borderRadius: 12, padding: 12, gap: 4 },
   dutyTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.tealDark },
   dutyN: { fontFamily: Fonts.medium, fontSize: 12, color: Colors.tealDark },
@@ -670,8 +713,14 @@ const s = StyleSheet.create({
   div: { height: 1, backgroundColor: Colors.border },
   input: { borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, fontFamily: Fonts.regular, color: Colors.navy },
   link: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.coral },
-  logout: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12 },
-  logoutTxt: { fontFamily: Fonts.semibold, fontSize: 15, color: Colors.critical },
+  logout: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 16, marginTop: 8 },
+  logoutTxt: { fontFamily: Fonts.semibold, fontSize: 15, color: Colors.coral },
+  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  sheet: { backgroundColor: Colors.white, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 28, paddingTop: 8 },
+  sheetRow: { paddingHorizontal: 20, paddingVertical: 16 },
+  sheetTxt: { fontFamily: Fonts.semibold, fontSize: 16, color: Colors.navy },
+  sheetDanger: { fontFamily: Fonts.bold, fontSize: 16, color: Colors.coral },
+  sheetDiv: { height: 1, backgroundColor: Colors.border, marginHorizontal: 20 },
   ok: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.tealDark },
   no: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.critical },
 });

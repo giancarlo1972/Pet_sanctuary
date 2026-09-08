@@ -49,29 +49,53 @@ CREATE POLICY "anon_insert_reports"
   );
 
 DO $$
+DECLARE
+  org_col text;
 BEGIN
-  IF EXISTS (
+  IF NOT EXISTS (
     SELECT 1 FROM information_schema.tables
     WHERE table_schema = 'public' AND table_name = 'organization_private'
   ) THEN
-    REVOKE ALL ON organization_private FROM anon;
-    GRANT SELECT, INSERT, UPDATE ON organization_private TO authenticated;
-    EXECUTE 'ALTER TABLE organization_private ENABLE ROW LEVEL SECURITY';
+    RETURN;
   END IF;
-END $$;
 
-DROP POLICY IF EXISTS op_org_members ON organization_private;
-CREATE POLICY op_org_members ON organization_private FOR SELECT TO authenticated
-  USING (
-    is_platform_admin()
-    OR EXISTS (
-      SELECT 1 FROM organization_members om
-      WHERE om.organization_id = organization_private.organization_id
-        AND om.user_id = auth.uid()
-    )
-    OR EXISTS (
-      SELECT 1 FROM organizations o
-      WHERE o.id = organization_private.organization_id
-        AND o.created_by = auth.uid()
-    )
+  REVOKE ALL ON organization_private FROM anon;
+  GRANT SELECT, INSERT, UPDATE ON organization_private TO authenticated;
+  ALTER TABLE organization_private ENABLE ROW LEVEL SECURITY;
+
+  SELECT c.column_name INTO org_col
+  FROM information_schema.columns c
+  WHERE c.table_schema = 'public'
+    AND c.table_name = 'organization_private'
+    AND c.column_name IN ('organization_id', 'org_id', 'id')
+  ORDER BY CASE c.column_name
+    WHEN 'organization_id' THEN 1
+    WHEN 'org_id' THEN 2
+    ELSE 3
+  END
+  LIMIT 1;
+
+  IF org_col IS NULL THEN
+    RETURN;
+  END IF;
+
+  EXECUTE 'DROP POLICY IF EXISTS op_org_members ON organization_private';
+  EXECUTE format(
+    $p$
+    CREATE POLICY op_org_members ON organization_private FOR SELECT TO authenticated
+      USING (
+        is_platform_admin()
+        OR EXISTS (
+          SELECT 1 FROM organization_members om
+          WHERE om.organization_id = organization_private.%I
+            AND om.user_id = auth.uid()
+        )
+        OR EXISTS (
+          SELECT 1 FROM organizations o
+          WHERE o.id = organization_private.%I
+            AND o.created_by = auth.uid()
+        )
+      )
+    $p$, org_col, org_col
   );
+END $$;

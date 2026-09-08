@@ -22,6 +22,8 @@ import { InlineBanner } from '@/components/InlineBanner';
 import SignedImage from '@/components/SignedImage';
 import { isUsablePhoto } from '@/lib/photos';
 import OnDutyCard from '@/components/OnDutyCard';
+import MeStatsPanel from '@/components/MeStatsPanel';
+import VisibilityCard from '@/components/VisibilityCard';
 import {
   ROLE_CARDS, TABS_BY_VIEW, SUBS, PROVIDER_SERVICES, normalizeCategories,
   dashAction, type RoleCategory,
@@ -97,6 +99,7 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
   const [provider, setProvider] = useState<any | null>(null);
   const [helpReqs, setHelpReqs] = useState<any[]>([]);
   const [orgMembers, setOrgMembers] = useState<any[]>([]);
+  const [friendCount, setFriendCount] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmConfig, setConfirmConfig] = useState<ConfirmConfig | null>(null);
 
@@ -212,6 +215,14 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
 
     const { data: hr } = await supabase.from('help_requests').select('id, status, service, created_at').eq('helper_id', userId).order('created_at', { ascending: false }).limit(20);
     setHelpReqs((hr as any[]) || []);
+
+    const [{ count: followN }, { count: shareN }] = await Promise.all([
+      supabase.from('follows').select('follower_id', { count: 'exact', head: true }).eq('follower_id', userId),
+      supabase.from('pet_relationships').select('id', { count: 'exact', head: true })
+        .eq('user_id', userId).is('ended_on', null)
+        .in('relationship', ['caretaker', 'co_owner', 'co-owner', 'veterinarian', 'sponsor', 'sponsored']),
+    ]);
+    setFriendCount((followN || 0) + (shareN || 0));
 
     const { data: mem } = await supabase.from('organization_members').select('organization_id, organizations(id, name, status)').eq('user_id', userId);
     const orgList = ((mem || []) as any[]).map((m) => ({ id: m.organizations?.id || m.organization_id, name: m.organizations?.name || 'Organization', status: m.organizations?.status })).filter((o) => o.id);
@@ -361,6 +372,21 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
   const year = since ? new Date(since).getFullYear() : null;
   const action = dashAction(tab);
 
+  const petCount = pets.filter((r) => !r.ended_on).length;
+  const volunteerEntries = apps.filter((a) => a.application_type === 'volunteer').length
+    + (duty?.services?.length || 0)
+    + (volOn && !(duty?.services?.length) ? 1 : 0);
+  const servicesCount = (provider?.services || []).length + volunteerEntries;
+
+  const setMe2Tab = (label: string) => {
+    if (label === 'Friends') { router.push('/friends'); return; }
+    const order: RoleCategory[] = [view, ...cats.filter((c) => c !== view), 'owner', 'provider', 'organization', 'campaign'];
+    for (const v of order) {
+      const t = TABS_BY_VIEW[v]?.find((x) => x.label === label);
+      if (t) { setView(v); setTab(t.key); return; }
+    }
+  };
+
   const setBooking = async (id: string, status: string) => {
     const { error } = await supabase.from('service_bookings').update({ status }).eq('id', id);
     if (error) { setBanner({ kind: 'error', message: error.message }); return; }
@@ -479,6 +505,22 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
             </TouchableOpacity>
           ) : null}
         </View>
+
+        <MeStatsPanel
+          view={view}
+          pets={petCount}
+          services={servicesCount}
+          friends={friendCount}
+          setMe2Tab={setMe2Tab}
+        />
+        {(provider || volOn) ? (
+          <VisibilityCard
+            userId={userId}
+            volunteerActive={volOn}
+            onBanner={(kind, message) => setBanner({ kind, message })}
+            onChanged={load}
+          />
+        ) : null}
 
         <View style={s.navy}>
           <Text style={s.navyK}>ROLE CATEGORIES</Text>

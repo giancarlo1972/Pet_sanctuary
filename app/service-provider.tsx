@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator, Switch } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Colors } from '@/constants/Colors';
@@ -92,10 +92,6 @@ export default function ServiceProviderSetup() {
         <TextInput style={s.input} value={radius} onChangeText={setRadius} keyboardType="number-pad" />
         <Text style={s.label}>Availability</Text>
         <TextInput style={s.input} value={avail} onChangeText={setAvail} placeholder="Weekdays after 5" placeholderTextColor={Colors.textTertiary} />
-        <View style={s.row}>
-          <Text style={s.label}>Show on Nearby map</Text>
-          <Switch value={showMap} onValueChange={setShowMap} trackColor={{ true: Colors.teal, false: Colors.border }} />
-        </View>
         <TouchableOpacity style={s.cta} onPress={save} disabled={busy} activeOpacity={0.85}>
           {busy ? <ActivityIndicator color={Colors.white} /> : <Text style={s.ctaTxt}>Save</Text>}
         </TouchableOpacity>

@@ -79,6 +79,20 @@ function blobTypeFromName(path: string) {
   return 'image/jpeg';
 }
 
+function siteApi(path: string) {
+  if (Platform.OS === 'web') return path;
+  return `https://rescue-army.com${path}`;
+}
+
+function originalFileName(file: any): string {
+  const raw = String(file?.name || file?.fileName || '').trim();
+  if (raw) return raw.replace(/[/\\]/g, '_');
+  const fromUri = String(file?.uri || '').split('?')[0].split('/').pop() || '';
+  if (fromUri && /\.[a-z0-9]{2,5}$/i.test(fromUri) && !/^(ImagePicker|RNFetchBlob)/i.test(fromUri)) return fromUri;
+  return 'vet-record.jpg';
+}
+
+
 async function fileToDataUrl(uri: string): Promise<string> {
   const resp = await fetch(uri);
   const blob = await resp.blob();
@@ -1399,64 +1413,109 @@ export default function PetRecordScreen() {
   const saveDoc = async () => {
     if (!petId || !user || !docFile) return;
     setSavingDoc(true);
-    const ext = ((docFile as any).name || docFile.uri.split('.').pop() || 'file').split('.').pop() || 'file';
-    const filePath = `${user.id}/${Date.now()}.${ext}`;
-    let uploadResult;
-    if (Platform.OS === 'web') {
+    try {
+      const originalName = originalFileName(docFile);
+      const mimeGuess = String((docFile as any).mimeType || (docFile as any).type || '');
+      if (!docFile.uri) throw new Error('No file selected.');
       const resp = await fetch(docFile.uri);
+      if (!resp.ok) throw new Error(`Could not read file (${resp.status})`);
       const blob = await resp.blob();
-      uploadResult = await supabase.storage.from('pet-documents').upload(filePath, blob);
-    } else {
-      const formData = new FormData();
-      formData.append('file', { uri: docFile.uri, type: `application/octet-stream`, name: `doc.${ext}` } as any);
-      uploadResult = await supabase.storage.from('pet-documents').upload(filePath, formData);
-    }
-    if (uploadResult.error) { console.error('[pet-record] doc upload:', uploadResult.error); showBanner(uploadResult.error.message || 'Could not upload document.'); setSavingDoc(false); return; }
-    const { data: docData, error: insErr } = await supabase.from('pet_documents').insert({
-      pet_id: petId,
-      kind: docForm.kind,
-      file_path: filePath,
-      title: docForm.title.trim() || null,
-      taken_on: docForm.taken_on || null,
-      clinic: docForm.clinic.trim() || null,
-      notes: docForm.notes.trim() || null,
-      uploaded_by: user.id,
-      ai_status: 'processing',
-    }).select().single();
-    if (insErr) { console.error('[pet-record] doc insert:', insErr); showBanner(insErr.message || 'Could not save document.'); setSavingDoc(false); return; }
-    if (docData?.id) {
-      await supabase.from('pet_documents').update({ ai_status: 'processing' }).eq('id', docData.id);
-    }
-    setSavingDoc(false);
-    setDocModalVisible(false);
-    load();
-    if (docData?.id) {
-      let dataUrl: string | null = null;
-      let extractedText: string | undefined;
-      let pageCount = 0;
-      const mime = (docFile as any).mimeType || blobTypeFromName(filePath);
-      if (mime.includes('pdf') || /\.pdf$/i.test(filePath)) {
+      const isPdf = /pdf/i.test(mimeGuess) || /\.pdf$/i.test(originalName) || /pdf/i.test(blob.type);
+      let body: Blob = blob;
+      let contentType = blob.type || mimeGuess || (isPdf ? 'application/pdf' : 'image/jpeg');
+      let ext = (originalName.split('.').pop() || '').toLowerCase();
+      if (!isPdf && typeof File !== 'undefined') {
         try {
-          setParseProgress('Reading PDF pages…');
-          const pdf = await extractPdfText(docFile.uri);
-          extractedText = pdf.text;
-          pageCount = pdf.pageCount;
-          setParseProgress(`Reading ${pdf.pageCount} pages · ${pdf.charCount.toLocaleString()} characters`);
+          const file = new File([blob], originalName, { type: contentType });
+          const prepared = await prepareImageFile(file);
+          body = prepared.blob;
+          contentType = prepared.mediaType;
+          ext = 'jpg';
         } catch (e) {
-          console.log('[pet-record] pdf text extract failed', e);
+          console.warn('[pet-record] image compress skipped', e);
         }
-      } else {
-        dataUrl = await fileToDataUrl(docFile.uri).catch(() => null);
       }
-      triggerExtraction(docData.id, {
-        imageBase64: dataUrl,
-        mimeType: mime,
-        path: filePath,
-        extractedText,
-        pageCount,
-      });
+      if (!ext || ext.length > 5) ext = isPdf ? 'pdf' : 'jpg';
+      const dest = `${petId}/${Date.now()}.${ext}`;
+      const buf = await body.arrayBuffer();
+      let up = await supabase.storage.from('pet-documents').upload(dest, buf, { contentType, upsert: false });
+      if (up.error && Platform.OS !== 'web') {
+        console.warn('[pet-record] arrayBuffer upload failed, retrying FormData', {
+          message: up.error.message,
+          name: up.error.name,
+          statusCode: (up.error as any).statusCode,
+        });
+        const fd = new FormData();
+        fd.append('file', { uri: docFile.uri, type: contentType, name: dest.split('/').pop() || originalName } as any);
+        up = await supabase.storage.from('pet-documents').upload(dest, fd as any, { contentType, upsert: true });
+      }
+      if (up.error) {
+        console.error('[pet-record] storage upload', {
+          message: up.error.message,
+          name: up.error.name,
+          statusCode: (up.error as any).statusCode,
+          dest,
+          contentType,
+          size: body.size,
+          error: up.error,
+        });
+        showBanner(up.error.message || 'Could not upload document.');
+        return;
+      }
+      const storedPath = up.data?.path || dest;
+      const title = docForm.title.trim() || originalName;
+      const { data: docData, error: insErr } = await supabase.from('pet_documents').insert({
+        pet_id: petId,
+        kind: docForm.kind,
+        file_path: storedPath,
+        title,
+        taken_on: docForm.taken_on || null,
+        clinic: docForm.clinic.trim() || null,
+        notes: docForm.notes.trim() || null,
+        uploaded_by: user.id,
+        ai_status: 'processing',
+      }).select().single();
+      if (insErr) {
+        console.error('[pet-record] doc insert after upload:', insErr);
+        showBanner(insErr.message || 'Uploaded, but could not save the record.');
+        return;
+      }
+      setDocModalVisible(false);
+      load();
+      if (docData?.id) {
+        let dataUrl: string | null = null;
+        let extractedText: string | undefined;
+        let pageCount = 0;
+        const mime = mimeGuess || contentType || blobTypeFromName(storedPath);
+        if (isPdf || mime.includes('pdf') || /\.pdf$/i.test(storedPath)) {
+          try {
+            setParseProgress('Reading PDF pages…');
+            const pdf = await extractPdfText(docFile.uri);
+            extractedText = pdf.text;
+            pageCount = pdf.pageCount;
+            setParseProgress(`Reading ${pdf.pageCount} pages · ${pdf.charCount.toLocaleString()} characters`);
+          } catch (e) {
+            console.log('[pet-record] pdf text extract failed', e);
+          }
+        } else {
+          dataUrl = await fileToDataUrl(docFile.uri).catch(() => null);
+        }
+        triggerExtraction(docData.id, {
+          imageBase64: dataUrl,
+          mimeType: mime,
+          path: storedPath,
+          extractedText,
+          pageCount,
+        });
+      }
+    } catch (e: any) {
+      console.error('[pet-record] saveDoc', e);
+      showBanner(e?.message || 'Could not upload document.');
+    } finally {
+      setSavingDoc(false);
     }
   };
+
 
   const openConfirmFromParse = (documentId: string, parsed: any) => {
     console.log('[parse-pet-document] RAW', JSON.stringify(parsed));
@@ -1596,7 +1655,7 @@ export default function PetRecordScreen() {
         payload.pageCount = pageCount;
       }
       console.log('[parse-pet-document] POST /api/parse-pet-document', { documentId, silent, hasImage: Boolean(payload.imageBase64), path });
-      const resp = await fetch('/api/parse-pet-document', {
+      const resp = await fetch(siteApi('/api/parse-pet-document'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -2192,6 +2251,15 @@ export default function PetRecordScreen() {
 
   const lastExam = petExams[0] || null;
   const prevExam = petExams[1] || null;
+  const confirmedDocs = documents.some((d) => d.ai_status === 'confirmed' || (d.ai_summary && (d.ai_summary as any).applied === true));
+  const healthDataPoints = [
+    weightEntries.length > 0 || pet.weight_kg != null,
+    !!pet.date_of_birth,
+    vaccinations.length > 0,
+    labRows.length > 0,
+    petExams.length > 0,
+  ].filter(Boolean).length;
+  const aiReady = confirmedDocs || healthDataPoints >= 3;
   const labSeries = (matchers: string[]) => {
     const rows = labRows.filter((r) => matchers.some((m) => new RegExp(m, 'i').test(String(r.analyte || r.name || ''))));
     const sorted = [...rows].sort((a, b) => String(a.collected_on || a.created_at || '').localeCompare(String(b.collected_on || b.created_at || '')));
@@ -2275,7 +2343,7 @@ export default function PetRecordScreen() {
         exams: petExams.map((e) => ({ visit_date: e.visit_date, clinic: e.clinic, vitals: e.vitals, systems: e.systems })),
       };
       console.log('[pet-health-analysis] payload', { weight_lb: record.weight_lb, conditions: record.conditions.length, entries: record.weight_entries.length });
-      const res = await fetch('/api/pet-health-analysis', {
+      const res = await fetch(siteApi('/api/pet-health-analysis'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ record }),
@@ -2718,6 +2786,10 @@ export default function PetRecordScreen() {
               aiRuns={aiRuns}
               aiBusy={aiBusy}
               aiShared={aiShared}
+              aiReady={aiReady}
+              onAddWeight={openWeight}
+              onAddDob={openDetailsSheet}
+              onUploadRecord={openAddDoc}
               onRunAi={runAiHealth}
               onShareAi={async () => {
                 if (aiFindings?.id) await supabase.from('ai_health_analyses').update({ shared_with_vet_at: new Date().toISOString() }).eq('id', aiFindings.id);
@@ -3208,8 +3280,8 @@ export default function PetRecordScreen() {
                     <Text style={{ fontFamily: Fonts.regular, fontSize: 13, color: Colors.white, lineHeight: 20, marginTop: 6 }}>{aiFindings.conclusion}</Text>
                   </Card>
                 ) : null}
-                <TouchableOpacity style={[styles.aiPrimaryBtn, aiBusy && styles.btnDisabled]} disabled={aiBusy} onPress={runAiHealth} activeOpacity={0.85}>
-                  {aiBusy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.aiPrimaryTxt}>Run AI Health</Text>}
+                <TouchableOpacity style={[styles.aiPrimaryBtn, (aiBusy || !aiReady) && styles.btnDisabled]} disabled={aiBusy || !aiReady} onPress={runAiHealth} activeOpacity={0.85}>
+                  {aiBusy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.aiPrimaryTxt}>{aiReady ? 'Run AI Health' : 'Add records first'}</Text>}
                 </TouchableOpacity>
                 <Text style={styles.aiLastRun}>
                   {aiFindings?.run_number ? `Run ${aiFindings.run_number} · ${formatDate(aiFindings.ran_at || aiLastRun)}` : (aiLastRun ? `Last run ${formatDate(aiLastRun)}` : 'Not run yet')}

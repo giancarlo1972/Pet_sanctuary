@@ -76,6 +76,7 @@ export default function MedicalDashboard(props: {
       const cat = props.labCatalog.find((c) => c.name.toLowerCase() === key || (c.name || '').toLowerCase() === String(cur.analyte || '').toLowerCase());
       const flag = String(cur.flag || '').toLowerCase();
       const nums = sorted.map((r) => parseFloat(r.value ?? r.value_num ?? r.value_text)).filter((n) => !Number.isNaN(n));
+      const dates = sorted.map((r) => r.collected_on || r.created_at).filter(Boolean);
       return {
         key,
         label: cur.analyte || cur.name,
@@ -85,16 +86,16 @@ export default function MedicalDashboard(props: {
         flag,
         delta: !Number.isNaN(curN) && !Number.isNaN(prevN) ? curN - prevN : null,
         nums,
-        dates: sorted.map((r) => r.collected_on || r.created_at),
+        dates,
         low: cur.ref_low ?? cat?.ref_low ?? null,
         high: cur.ref_high ?? cat?.ref_high ?? null,
-        n: sorted.length,
-        first: sorted[0]?.collected_on || sorted[0]?.created_at,
-        last: cur.collected_on || cur.created_at,
+        n: dates.length || sorted.length,
+        first: dates[0] || sorted[0]?.collected_on || sorted[0]?.created_at,
+        last: dates[dates.length - 1] || cur.collected_on || cur.created_at,
         abnormal: flag === 'high' || flag === 'low' || flag === 'abnormal',
         source: cur.source,
       };
-    }).sort((a, b) => Number(b.abnormal) - Number(a.abnormal) || a.label.localeCompare(b.label));
+    }).filter((it) => it.n > 0).sort((a, b) => Number(b.abnormal) - Number(a.abnormal) || a.label.localeCompare(b.label));
   }, [props.labRows, props.labCatalog]);
 
   const grouped = {
@@ -235,11 +236,18 @@ export default function MedicalDashboard(props: {
 
       {(['Hematology', 'Chemistry', 'Endocrinology', 'Urinalysis'] as const).map((g) => {
         if (!grouped[g].length) return null;
+        const groupDates = grouped[g].flatMap((it) => it.dates).filter(Boolean).sort();
+        const groupN = grouped[g].reduce((s, it) => s + it.n, 0);
+        const groupFirst = groupDates[0] || grouped[g][0]?.first;
+        const groupLast = groupDates[groupDates.length - 1] || grouped[g][grouped[g].length - 1]?.last;
         return (
         <Card key={g}>
-          <TouchableOpacity onPress={() => setLabOpen((s) => ({ ...s, [g]: !s[g] }))} style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-            <Text style={styles.kicker}>{g.toUpperCase()}</Text>
-            <Text style={styles.link}>{labOpen[g] === false ? 'Show' : 'Hide'} · {grouped[g].length}</Text>
+          <TouchableOpacity onPress={() => setLabOpen((s) => ({ ...s, [g]: !s[g] }))} style={{ gap: 2 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+              <Text style={styles.kicker}>{g.toUpperCase()}</Text>
+              <Text style={styles.link}>{labOpen[g] === false ? 'Show' : 'Hide'}</Text>
+            </View>
+            <Text style={styles.foot}>{groupN} result{groupN === 1 ? '' : 's'} · {formatDate(groupFirst)} → {formatDate(groupLast)}</Text>
           </TouchableOpacity>
           {labOpen[g] !== false ? grouped[g].map((it) => (
             <View key={it.key} style={styles.labRow}>
@@ -248,15 +256,21 @@ export default function MedicalDashboard(props: {
                 <SourceBadge source={it.source} />
                 <Text style={[styles.labVal, { color: it.abnormal ? Colors.coral : Colors.navy }]}>
                   {it.value ?? '—'}{it.unit ? ` ${it.unit}` : ''}
-                  {it.delta != null ? `  ${it.delta > 0 ? '▲' : it.delta < 0 ? '▼' : '•'}${Math.abs(Math.round(it.delta * 100) / 100)}` : ''}
+                  {it.n >= 2 && it.delta != null ? `  ${it.delta > 0 ? '▲' : it.delta < 0 ? '▼' : '•'}${Math.abs(Math.round(it.delta * 100) / 100)}` : ''}
+                  {it.n < 2 ? ` · ${formatDate(it.last)}` : ''}
                 </Text>
               </View>
-              <RefBand value={typeof it.value === 'number' ? it.value : parseFloat(it.value)} low={it.low} high={it.high} flag={it.flag} />
-              {it.nums.length >= 2 ? <MiniSpark values={it.nums} color={it.abnormal ? Colors.coral : '#2E9E96'} height={40} /> : null}
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                <Text style={styles.foot}>First to last · {it.n} measurements</Text>
-                <Text style={styles.link}>View all →</Text>
-              </View>
+              {it.n >= 2 ? (
+                <>
+                  <RefBand value={typeof it.value === 'number' ? it.value : parseFloat(it.value)} low={it.low} high={it.high} flag={it.flag} />
+                  {it.nums.length >= 2 ? <MiniSpark values={it.nums} color={it.abnormal ? Colors.coral : '#2E9E96'} height={40} /> : null}
+                  {it.n > 6 ? (
+                    <TouchableOpacity onPress={() => setExpand((s) => ({ ...s, [it.key]: !s[it.key] }))}>
+                      <Text style={styles.link}>{expand[it.key] ? 'Show less' : 'View all →'}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </>
+              ) : null}
             </View>
           )) : null}
         </Card>

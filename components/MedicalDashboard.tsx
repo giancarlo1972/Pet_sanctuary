@@ -301,7 +301,7 @@ export default function MedicalDashboard(props: {
               <Text style={styles.checkTxt}>Add date of birth</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.checkRow, styles.checkPrimary]} onPress={props.onUploadRecord} activeOpacity={0.85}>
-              <Text style={styles.checkPrimaryTxt}>Upload a vet record</Text>
+              <Text style={styles.checkPrimaryTxt}>Go to Documents</Text>
             </TouchableOpacity>
           </View>
         ) : (

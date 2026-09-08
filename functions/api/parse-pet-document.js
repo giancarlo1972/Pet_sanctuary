@@ -32,38 +32,84 @@ function getSupabase(env) {
   return { url, key };
 }
 
-const PROMPT = `Extract structured veterinary data from this document (vaccine card, lab report, invoice, wellness visit, or insurance letter).
+const ALL_CONTENT_KINDS = ['vaccinations', 'labs', 'exam_visit', 'weight', 'medications', 'imaging', 'insurance', 'other'];
+
+function normalizeKinds(raw) {
+  const arr = (Array.isArray(raw) ? raw : String(raw || '').split(',')).map((k) => String(k).trim()).filter(Boolean);
+  const filtered = arr.filter((k) => ALL_CONTENT_KINDS.includes(k));
+  return filtered.length ? filtered : ALL_CONTENT_KINDS.slice();
+}
+
+function applyKinds(out, kinds) {
+  const k = new Set(normalizeKinds(kinds));
+  if (!k.has('vaccinations')) out.vaccinations = [];
+  if (!k.has('labs')) out.labs = [];
+  if (!k.has('exam_visit')) {
+    out.visits = [];
+    out.exams = [];
+    out.conditions = [];
+    out.owner_notes = [];
+  }
+  if (!k.has('weight')) {
+    out.weight = null;
+    out.weights = [];
+    out.vitals_series = [];
+  }
+  if (!k.has('medications')) out.medications = [];
+  if (!k.has('imaging')) out.diagnostics = [];
+  out.content_kinds = [...k];
+  return out;
+}
+
+const SCHEMA_PARTS = {
+  vaccinations: `"vaccinations": [{"name": "", "product": null, "manufacturer": null, "lot": null, "dose": null, "given": "YYYY-MM-DD date administered — never the due date", "next_due": "YYYY-MM-DD or null", "vet": null, "clinic": null, "reactions": null}]`,
+  labs: `"labs": [{"analyte": "", "value": "", "unit": null, "flag": "normal|high|low|abnormal|unknown", "collected_on": null, "ref_low": null, "ref_high": null, "group": "hematology|chemistry|endocrinology|urinalysis"}]`,
+  exam_visit: `"visits": [{"clinic": null, "date": "YYYY-MM-DD or null", "reason": null, "summary": null}],
+  "exams": [{"visit_date": "YYYY-MM-DD", "clinic": null, "vitals": {"temp_f": null, "hr": null, "rr": null, "bcs": null, "pain": null, "hydration": null}, "systems": [{"name": "Cardiovascular", "status": "normal|abnormal", "note": null}]}],
+  "conditions": [{"name": "", "kind": "condition|allergy", "status": "active|resolved|monitoring", "onset_date": "YYYY-MM-DD or null", "resolved_date": "YYYY-MM-DD or null", "notes": null}],
+  "owner_notes": [{"text": "behavioral or lifestyle guidance for the owner", "date": "YYYY-MM-DD or null"}]`,
+  weight: `"weight": {"value": null, "unit": "lb|kg", "measured_on": null},
+  "vitals_series": [{"at": "YYYY-MM-DDTHH:MM or YYYY-MM-DD", "temp_f": null, "hr": null, "rr": null, "weight_lb": null, "bcs": null}]`,
+  medications: `"medications": [{"name": "", "dose": null, "route": null, "given_on": null, "status": "active|completed"}]`,
+  imaging: `"diagnostics": [{"kind": "imaging|pcr|other", "name": "", "result": null, "date": null}]`,
+  insurance: `"kind": "insurance"`,
+  other: `"kind": "other"`,
+};
+
+const RULE_PARTS = {
+  vaccinations: '- vaccinations: list EVERY vaccine administered at this visit AND every vaccine listed as current. Field "given" = date administered. Field "next_due" = next due only if a SECOND later date is printed. Always include manufacturer, lot, and vet when printed.',
+  labs: '- labs[].value MUST be a string or a number. Qualitative PCR stays as that string. Include urinalysis, PCV, Total Solids, CK, Triglycerides, Spec fPL. Set group. Include ref_low/ref_high when printed.',
+  exam_visit: '- exams: one per physical exam. systems MUST cover 12: Oral-Nasal-Throat, Ears, Eyes, Cardiovascular, Respiratory, Abdominal, Genitourinary, Musculoskeletal, Integument, Lymphatics, Neurological, Rectal.\n- conditions: one row per distinct issue; do not duplicate names.\n- owner_notes: behavioral/lifestyle guidance for the owner. Empty array if none.',
+  weight: '- weight: return the printed {value, unit} as-is (do not convert).\n- vitals_series: EVERY timestamped vital from flowsheets plus exam vitals.',
+  medications: '- medications: every drug administered or prescribed (name, dose, route PO/SC/IV, date, active vs completed).',
+  imaging: '- diagnostics: imaging (x-ray, ultrasound) and PCR/Idexx panels with the printed result text.',
+  insurance: '- insurance: extract policy/carrier name into title and clinic; date = policy or letter date.',
+  other: '- other: capture leftover labeled facts in ai_note only.',
+};
+
+function buildPrompt(kinds) {
+  const k = normalizeKinds(kinds);
+  const fields = [
+    `"title": "short document title"`,
+    `"clinic": "string or null"`,
+    `"date": "YYYY-MM-DD or null"`,
+    `"ai_note": "3-5 short lines: key findings, deltas vs prior values, flags. Plain text, no markdown."`,
+    ...k.map((key) => SCHEMA_PARTS[key]).filter(Boolean),
+  ];
+  const rules = [
+    `Only extract these sections: ${k.join(', ')}. Omit every other clinical array (return [] / null).`,
+    '- ai_note: 3–5 lines covering findings and flags. Do not diagnose.',
+    '- Never invent dates. Empty arrays if unreadable.',
+    ...k.map((key) => RULE_PARTS[key]).filter(Boolean),
+  ];
+  return `Extract structured veterinary data from this document.
 Return JSON only, no markdown:
 {
-  "title": "short document title",
-  "kind": "vaccination|lab|visit|invoice|insurance|other",
-  "clinic": "string or null",
-  "date": "YYYY-MM-DD or null",
-  "vaccinations": [{"name": "", "product": null, "manufacturer": null, "lot": null, "dose": null, "given": "YYYY-MM-DD date administered — never the due date", "next_due": "YYYY-MM-DD or null", "vet": null, "clinic": null, "reactions": null}],
-  "conditions": [{"name": "", "kind": "condition|allergy", "status": "active|resolved|monitoring", "onset_date": "YYYY-MM-DD or null", "resolved_date": "YYYY-MM-DD or null", "notes": null}],
-  "medications": [{"name": "", "dose": null, "route": null, "given_on": null, "status": "active|completed"}],
-  "diagnostics": [{"kind": "imaging|pcr|other", "name": "", "result": null, "date": null}],
-  "vitals_series": [{"at": "YYYY-MM-DDTHH:MM or YYYY-MM-DD", "temp_f": null, "hr": null, "rr": null, "weight_lb": null, "bcs": null}],
-  "labs": [{"analyte": "", "value": "", "unit": null, "flag": "normal|high|low|abnormal|unknown", "collected_on": null, "ref_low": null, "ref_high": null, "group": "hematology|chemistry|endocrinology|urinalysis"}],
-  "visits": [{"clinic": null, "date": "YYYY-MM-DD or null", "reason": null, "summary": null}],
-  "labs": [{"analyte": "", "value": "", "unit": null, "flag": "normal|high|low|abnormal|unknown", "collected_on": null}],
-  "weight": {"value": null, "unit": "lb|kg", "measured_on": null},
-  "exams": [{"visit_date": "YYYY-MM-DD", "clinic": null, "vitals": {"temp_f": null, "hr": null, "rr": null, "bcs": null, "pain": null, "hydration": null}, "systems": [{"name": "Cardiovascular", "status": "normal|abnormal", "note": null}]}],
-  "ai_note": "3-5 short lines: key findings, deltas vs prior values for the same analytes, flags. Plain text, no markdown.",
-  "owner_notes": [{"text": "behavioral or lifestyle guidance for the owner", "date": "YYYY-MM-DD or null"}]
+  ${fields.join(',\n  ')}
 }
 Rules:
-- labs[].value MUST be a string or a number. Qualitative PCR (e.g. "Detected", "Not detected") stays as that string; unit null. If value is Detected (case-insensitive) flag=abnormal; if Not detected flag=normal. Numeric labs keep the printed number and unit.
-- vaccinations: list EVERY vaccine administered at this visit AND every vaccine listed as current. Field "given" = date administered (e.g. 2026-08-12). Field "next_due" = next due / valid until, only if a SECOND later date is printed. If the card shows only one date, put it in given and leave next_due null. Never put the administered date in next_due. Always include manufacturer (Purevax, Merck, Elanco), lot, and vet when printed.
-- weight: return the printed {value, unit} as-is (do not convert). Empty arrays if unreadable. Never invent dates.
-- conditions: one row per distinct issue. If a visit notes an existing problem is better or gone, set status=resolved (or monitoring), do not duplicate the name. Use onset_date/resolved_date when printed.
-- ai_note: 3–5 lines covering findings, any delta vs prior labs for the same analytes, and flags. Do not diagnose.
-- owner_notes: behavioral/lifestyle guidance quoted from the vet notes for the owner (diet, indoor-only, activity, follow-up at home). Not clinical findings, diagnoses, or lab values. Empty array if none.
-- exams: one per physical exam / wellness visit. vitals: temp_f (°F), hr, rr, bcs (1-9), pain (0-10), hydration (e.g. adequate). systems MUST cover 12: Oral-Nasal-Throat, Ears, Eyes, Cardiovascular, Respiratory, Abdominal, Genitourinary, Musculoskeletal, Integument, Lymphatics, Neurological, Rectal. status=normal|watch|abnormal with the vet note.
-- vitals_series: EVERY timestamped vital from hospitalization/flowsheets (T/P/R charts), plus exam vitals. One row per time.
-- medications: every drug administered or prescribed (name, dose, route PO/SC/IV, date, active vs completed).
-- diagnostics: imaging (x-ray, ultrasound) and PCR/Idexx panels with the printed result text.
-- labs: include urinalysis, PCV, Total Solids, CK, Triglycerides, Spec fPL. Set group. Include ref_low/ref_high when printed.`;
+${rules.join('\n')}`;
+}
 
 const MODELS = ['claude-haiku-4-5', 'claude-3-5-haiku-latest', 'claude-3-5-sonnet-20241022'];
 const SYSTEM = 'Respond with a single JSON object only, no markdown, no commentary';
@@ -238,7 +284,7 @@ const VISIT_PROMPT = `This is one or more veterinary visit blocks from a clinic 
 {"visits":[{"clinic":null,"date":"YYYY-MM-DD","reason":null,"summary":null}],"vaccinations":[{"name":"","product":null,"manufacturer":null,"lot":null,"given":"YYYY-MM-DD","next_due":null,"vet":null,"clinic":null}],"labs":[{"analyte":"","value":"","unit":null,"flag":"normal|high|low|abnormal","ref_low":null,"ref_high":null,"collected_on":null}],"conditions":[{"name":"","kind":"condition|allergy|medication","status":"active|resolved|monitoring","notes":null}],"owner_notes":[{"text":"","date":null}],"ai_note":""}
 Use given for administered date. Inventory Item PUREVAX lines are vaccines given that service date. Lab tables: keep H/L flags and reference ranges.`;
 
-async function parseClinicExport(env, key, documentId, text, pageCount) {
+async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
   const charCount = text.length;
   const blocks = splitServiceBlocks(text);
   console.log('[parse-pet-document] clinic export', { pageCount, charCount, visits: blocks.length });
@@ -357,6 +403,7 @@ async function parseClinicExport(env, key, documentId, text, pageCount) {
     owner_notes: [],
   };
   console.log('[parse-pet-document] clinic done', out.ai_note, 'vaccinations[0]', dedupeVax[0]);
+  applyKinds(out, kinds);
   if (documentId) {
     await updateDoc(env, documentId, {
       ai_status: 'ready',
@@ -393,8 +440,20 @@ export async function onRequestPost(context) {
     const sb = getSupabase(env);
     const extractedText = body.extractedText || body.text || '';
     const pageCountIn = Number(body.pageCount) || 0;
+    let kinds = normalizeKinds(body.kinds || body.content_kinds);
+    if (documentId && sb.url && sb.key && !(Array.isArray(body.kinds) && body.kinds.length) && !(Array.isArray(body.content_kinds) && body.content_kinds.length)) {
+      try {
+        const row = await fetch(`${sb.url}/rest/v1/pet_documents?id=eq.${documentId}&select=content_kinds`, {
+          headers: { apikey: sb.key, Authorization: `Bearer ${sb.key}` },
+        }).then((r) => r.json());
+        if (row?.[0]?.content_kinds) kinds = normalizeKinds(row[0].content_kinds);
+      } catch (e) {
+        console.log('[parse-pet-document] kinds row skip', String(e));
+      }
+    }
     console.log('[parse-pet-document] start', {
       documentId,
+      kinds,
       hasAnthropic: Boolean(key),
       hasSupabase: Boolean(sb.url && sb.key),
       hasImage: Boolean(body.imageBase64),
@@ -410,7 +469,7 @@ export async function onRequestPost(context) {
     }
 
     if (extractedText && (extractedText.length > 2500 || /Service on\s+\d/i.test(extractedText))) {
-      return parseClinicExport(env, key, documentId, extractedText, pageCountIn || splitServiceBlocks(extractedText).length);
+      return parseClinicExport(env, key, documentId, extractedText, pageCountIn || splitServiceBlocks(extractedText).length, kinds);
     }
 
     let imgs = Array.isArray(body.images) ? body.images : (body.imageBase64 ? [body.imageBase64] : []);
@@ -425,7 +484,7 @@ export async function onRequestPost(context) {
           const naive = extractPdfTextNaive(fetched.bytes);
           console.log('[parse-pet-document] naive pdf text', naive.charCount, 'pages', naive.pageCount);
           if (naive.charCount > 2500 || /Service on\s+\d/i.test(naive.text)) {
-            return parseClinicExport(env, key, documentId, naive.text, naive.pageCount || pageCountIn);
+            return parseClinicExport(env, key, documentId, naive.text, naive.pageCount || pageCountIn, kinds);
           }
         }
       }
@@ -477,7 +536,7 @@ export async function onRequestPost(context) {
         content.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: raw } });
       }
     }
-    let prompt = PROMPT;
+    let prompt = buildPrompt(kinds);
     if (documentId && sb.url && sb.key) {
       try {
         const docRow = await fetch(`${sb.url}/rest/v1/pet_documents?id=eq.${documentId}&select=pet_id`, {
@@ -537,7 +596,7 @@ export async function onRequestPost(context) {
       const visits = Array.isArray(parsed.visits) ? parsed.visits : [];
       const labs = (Array.isArray(parsed.labs) ? parsed.labs : []).map(normalizeLab);
       const weight = parsed.weight && typeof parsed.weight === 'object' ? parsed.weight : null;
-      const out = {
+      const out = applyKinds({
         parsed: true,
         source: 'ai_extracted',
         schemaVersion: 2,
@@ -551,9 +610,12 @@ export async function onRequestPost(context) {
         visits,
         labs,
         weight,
+        exams: Array.isArray(parsed.exams) ? parsed.exams : [],
+        diagnostics: Array.isArray(parsed.diagnostics) ? parsed.diagnostics : [],
+        vitals_series: Array.isArray(parsed.vitals_series) ? parsed.vitals_series : [],
         ai_note: parsed.ai_note || null,
         owner_notes: Array.isArray(parsed.owner_notes) ? parsed.owner_notes.filter((n) => n && n.text) : [],
-      };
+      }, kinds);
       console.log('[parse-pet-document] vaccinations[0]', vaccinations[0]);
       if (documentId) {
         await updateDoc(env, documentId, {

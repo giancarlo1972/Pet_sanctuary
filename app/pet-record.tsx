@@ -265,6 +265,7 @@ interface PetDocument {
   notes: string | null;
   ai_summary?: any;
   ai_status?: string | null;
+  content_kinds?: string[] | null;
 }
 
 interface ExtractedVaccination {
@@ -444,15 +445,27 @@ const FOOD_TYPES = [
   { key: 'other', label: 'Other' },
 ];
 
-const DOCUMENT_KINDS = [
-  { key: 'vaccination_record', label: 'Vaccination Record' },
-  { key: 'medical_record', label: 'Medical Record' },
-  { key: 'xray', label: 'X-Ray' },
-  { key: 'ultrasound', label: 'Ultrasound' },
-  { key: 'lab_result', label: 'Lab Result' },
-  { key: 'other_imaging', label: 'Other Imaging' },
-  { key: 'other_document', label: 'Other Document' },
-];
+const CONTENT_KINDS = [
+  { key: 'vaccinations', label: 'Vaccinations' },
+  { key: 'labs', label: 'Labs' },
+  { key: 'exam_visit', label: 'Exam / visit' },
+  { key: 'weight', label: 'Weight' },
+  { key: 'medications', label: 'Medications' },
+  { key: 'imaging', label: 'Imaging' },
+  { key: 'insurance', label: 'Insurance' },
+  { key: 'other', label: 'Other' },
+] as const;
+const ALL_CONTENT_KIND_KEYS = CONTENT_KINDS.map((k) => k.key);
+
+function kindFromContent(kinds: string[]) {
+  if (kinds.length === 1) {
+    if (kinds[0] === 'vaccinations') return 'vaccination_record';
+    if (kinds[0] === 'labs') return 'lab_result';
+    if (kinds[0] === 'imaging') return 'other_imaging';
+    if (kinds[0] === 'insurance') return 'other_document';
+  }
+  return 'medical_record';
+}
 
 const LB_PER_KG = 2.20462;
 
@@ -604,6 +617,7 @@ export default function PetRecordScreen() {
 
   const [pet, setPet] = useState<Pet | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
+  const [medSub, setMedSub] = useState<'summary' | 'documents'>('summary');
   const [openMed, setOpenMed] = useState<Record<string, boolean>>({ vaccinations: true });
   const [examNote, setExamNote] = useState<string | null>(null);
   const [petExams, setPetExams] = useState<any[]>([]);
@@ -692,6 +706,7 @@ export default function PetRecordScreen() {
   const [docModalVisible, setDocModalVisible] = useState(false);
   const [docForm, setDocForm] = useState({
     kind: 'medical_record', title: '', taken_on: '', clinic: '', notes: '',
+    content_kinds: ALL_CONTENT_KIND_KEYS.slice(),
   });
   const [docFile, setDocFile] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [savingDoc, setSavingDoc] = useState(false);
@@ -891,6 +906,7 @@ export default function PetRecordScreen() {
       notes: d.notes,
       ai_summary: d.ai_summary || d.extracted || null,
       ai_status: d.ai_status || null,
+      content_kinds: Array.isArray(d.content_kinds) ? d.content_kinds : null,
     }));
     const seenPath = new Set<string>();
     setDocuments(mappedDocs.filter((d) => {
@@ -1382,9 +1398,14 @@ export default function PetRecordScreen() {
 
   // === Document handlers ===
   const openAddDoc = () => {
-    setDocForm({ kind: 'medical_record', title: '', taken_on: '', clinic: '', notes: '' });
+    setDocForm({
+      kind: 'medical_record', title: '', taken_on: '', clinic: '', notes: '',
+      content_kinds: ALL_CONTENT_KIND_KEYS.slice(),
+    });
     setDocFile(null);
     setDocError(null);
+    setMedSub('documents');
+    setTab('medical');
     setDocModalVisible(true);
   };
 
@@ -1404,6 +1425,7 @@ export default function PetRecordScreen() {
             fileSize: file.size,
             file,
           } as any);
+          setDocForm((p) => ({ ...p, title: p.title.trim() ? p.title : file.name }));
         }
       };
       input.click();
@@ -1416,6 +1438,8 @@ export default function PetRecordScreen() {
     });
     if (!result.canceled && result.assets?.[0]) {
       setDocFile(result.assets[0]);
+      const name = originalFileName(result.assets[0]);
+      setDocForm((p) => ({ ...p, title: p.title.trim() ? p.title : name }));
     }
   };
 
@@ -1483,9 +1507,10 @@ export default function PetRecordScreen() {
       const storedPath = up.data?.path || dest;
       console.log('[upload]', { bucket: 'pet-documents', path: storedPath, size, error: null });
       const title = docForm.title.trim() || originalName;
-      const { data: docData, error: insErr } = await supabase.from('pet_documents').insert({
+      const kinds = (docForm.content_kinds.length ? docForm.content_kinds : ALL_CONTENT_KIND_KEYS).slice();
+      const row: Record<string, unknown> = {
         pet_id: petId,
-        kind: docForm.kind,
+        kind: kindFromContent(kinds),
         file_path: storedPath,
         title,
         taken_on: docForm.taken_on || null,
@@ -1493,7 +1518,15 @@ export default function PetRecordScreen() {
         notes: docForm.notes.trim() || null,
         uploaded_by: user.id,
         ai_status: 'processing',
-      }).select().single();
+        content_kinds: kinds,
+      };
+      let { data: docData, error: insErr } = await supabase.from('pet_documents').insert(row).select().single();
+      if (insErr && /content_kinds/i.test(insErr.message || '')) {
+        delete row.content_kinds;
+        const retry = await supabase.from('pet_documents').insert(row).select().single();
+        docData = retry.data;
+        insErr = retry.error;
+      }
       if (insErr) {
         fail(insErr.message || 'Uploaded, but could not save the record.', { path: storedPath, size, error: insErr.message });
         return;
@@ -1524,6 +1557,7 @@ export default function PetRecordScreen() {
           path: storedPath,
           extractedText,
           pageCount,
+          kinds,
         });
       }
     } catch (e: any) {
@@ -1637,7 +1671,7 @@ export default function PetRecordScreen() {
     });
   };
 
-  const triggerExtraction = async (documentId: string, extra?: { imageBase64?: string | null; mimeType?: string; path?: string; extractedText?: string; pageCount?: number }, silent = false) => {
+  const triggerExtraction = async (documentId: string, extra?: { imageBase64?: string | null; mimeType?: string; path?: string; extractedText?: string; pageCount?: number; kinds?: string[] }, silent = false) => {
     if (!user) return;
     parsedAttempted.current.add(documentId);
     if (!silent) { setExtracting(true); setParseProgress(extra?.pageCount ? `Reading ${extra.pageCount} pages · parsing visits` : 'Analyzing document…'); }
@@ -1645,11 +1679,18 @@ export default function PetRecordScreen() {
     setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'processing' } : d));
     try {
       let path = extra?.path;
-      if (!path) {
-        const { data: row } = await supabase.from('pet_documents').select('file_path, storage_path').eq('id', documentId).maybeSingle();
-        path = row?.file_path || row?.storage_path;
+      let kinds = extra?.kinds;
+      if (!path || !kinds) {
+        const { data: row } = await supabase.from('pet_documents').select('file_path, storage_path, content_kinds').eq('id', documentId).maybeSingle();
+        path = path || row?.file_path || row?.storage_path;
+        kinds = kinds || (Array.isArray(row?.content_kinds) ? row.content_kinds : undefined);
       }
-      const payload: Record<string, unknown> = { document_id: documentId, path, mimeType: extra?.mimeType };
+      const payload: Record<string, unknown> = {
+        document_id: documentId,
+        path,
+        mimeType: extra?.mimeType,
+        kinds: kinds?.length ? kinds : ALL_CONTENT_KIND_KEYS,
+      };
       let extractedText = extra?.extractedText;
       let pageCount = extra?.pageCount || 0;
       if (!extractedText && path && /\.pdf$/i.test(path) && typeof document !== 'undefined') {
@@ -2455,7 +2496,7 @@ export default function PetRecordScreen() {
             ...activeConditions.map((c) => `${c.name} ${c.severity || ''}`),
             ...medicalRecords.slice(0, 8).map((m) => `${m.title || ''} ${m.details || ''}`),
           ].join(' ')}
-          onUpload={() => setTab('medical')}
+          onUpload={() => { setTab('medical'); setMedSub('documents'); }}
         />
 
         {/* Tabs */}
@@ -2481,7 +2522,7 @@ export default function PetRecordScreen() {
             <Card>
               <View style={styles.tileRow}>
                 <StatusTile icon={Syringe} label="Vaccinated" sub={vaxSub} tone={vaxTone} onPress={() => {
-                  if (pendingDocs[0]) { setTab('medical'); openConfirmFromParse(pendingDocs[0].id, pendingDocs[0].ai_summary || {}); }
+                  if (pendingDocs[0]) { setTab('medical'); setMedSub('documents'); openConfirmFromParse(pendingDocs[0].id, pendingDocs[0].ai_summary || {}); }
                   else { setTab('medical'); }
                 }} />
                 <StatusTile icon={Heart} label="Spayed/Neutered" sub={pet.spayed_neutered ? 'Yes' : 'Not recorded'} tone={pet.spayed_neutered ? 'ok' : 'unknown'} />
@@ -2736,8 +2777,8 @@ export default function PetRecordScreen() {
                 <Text style={{ color: Colors.white, fontFamily: Fonts.bold }}>Connect Lemonade</Text>
               </TouchableOpacity>
               {canEdit ? (
-                <TouchableOpacity style={{ borderWidth: 1.5, borderColor: Colors.white, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 10 }} onPress={openAddDoc} activeOpacity={0.85}>
-                  <Text style={{ color: Colors.white, fontFamily: Fonts.bold }}>Upload PDF</Text>
+                <TouchableOpacity style={{ borderWidth: 1.5, borderColor: Colors.white, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 10 }} onPress={() => { setTab('medical'); setMedSub('documents'); }} activeOpacity={0.85}>
+                  <Text style={{ color: Colors.white, fontFamily: Fonts.bold }}>Open Documents</Text>
                 </TouchableOpacity>
               ) : null}
               <TouchableOpacity style={{ paddingVertical: 12, alignItems: 'center', marginTop: 4 }} onPress={() => Linking.openURL('mailto:support.animals@rescue-army.com?subject=' + encodeURIComponent('Forward insurance policy — ' + (pet.name || 'pet')))} activeOpacity={0.85}>
@@ -2750,14 +2791,16 @@ export default function PetRecordScreen() {
         {/* MEDICAL HUB */}
         {tab === 'medical' && (
           <View style={styles.tabContent}>
-            {canEdit && pendingDocs.length > 0 ? (
-              <TouchableOpacity style={styles.reviewBanner} onPress={() => {
-                const d = pendingDocs[0];
-                openConfirmFromParse(d.id, d.ai_summary || {});
-              }} activeOpacity={0.85}>
-                <Text style={styles.reviewBannerTxt}>Review all pending · {pendingDocs.length} document{pendingDocs.length === 1 ? '' : 's'}</Text>
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+              <TouchableOpacity style={[styles.pillTab, medSub === 'summary' && styles.pillTabOn]} onPress={() => setMedSub('summary')} activeOpacity={0.85}>
+                <Text style={[styles.pillTabTxt, medSub === 'summary' && styles.pillTabTxtOn]}>Summary</Text>
               </TouchableOpacity>
-            ) : null}
+              <TouchableOpacity style={[styles.pillTab, medSub === 'documents' && styles.pillTabOn]} onPress={() => setMedSub('documents')} activeOpacity={0.85}>
+                <Text style={[styles.pillTabTxt, medSub === 'documents' && styles.pillTabTxtOn]}>Documents</Text>
+              </TouchableOpacity>
+            </View>
+            {medSub === 'summary' && (
+            <View>
             <MedicalDashboard
               petName={pet.name || 'Pet'}
               verdict={healthVerdict}
@@ -2806,7 +2849,7 @@ export default function PetRecordScreen() {
               aiReady={aiReady}
               onAddWeight={openWeight}
               onAddDob={openDetailsSheet}
-              onUploadRecord={openAddDoc}
+              onUploadRecord={() => { setTab('medical'); setMedSub('documents'); }}
               onRunAi={runAiHealth}
               onShareAi={async () => {
                 if (aiFindings?.id) await supabase.from('ai_health_analyses').update({ shared_with_vet_at: new Date().toISOString() }).eq('id', aiFindings.id);
@@ -2830,7 +2873,7 @@ export default function PetRecordScreen() {
               {canEdit && (
                 <TouchableOpacity style={styles.addBtn} onPress={openAddCondition} activeOpacity={0.85}>
                   <Plus color={Colors.coral} size={16} />
-                  <Text style={styles.addBtnText}>Add</Text>
+                  <Text style={styles.addBtnText}>Add manually</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -2907,7 +2950,7 @@ export default function PetRecordScreen() {
               {canEdit && (
                 <TouchableOpacity style={styles.addBtn} onPress={openAddVax} activeOpacity={0.85}>
                   <Plus color={Colors.coral} size={16} />
-                  <Text style={styles.addBtnText}>Add</Text>
+                  <Text style={styles.addBtnText}>Add manually</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -3014,85 +3057,6 @@ export default function PetRecordScreen() {
               labs: labRows,
               clinics: [],
             }} />
-
-            {/* Documents */}
-            <View style={styles.subHeader}>
-              <View style={styles.subHeaderLeft}>
-                <FileText color={Colors.navy} size={18} />
-                <Text style={styles.subHeaderText}>Documents</Text>
-              </View>
-              {canEdit && (
-                <TouchableOpacity style={styles.addBtn} onPress={openAddDoc} activeOpacity={0.85}>
-                  <Plus color={Colors.coral} size={16} />
-                  <Text style={styles.addBtnText}>Add</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-            {documents.length === 0 ? (
-              <Text style={styles.emptyText}>No documents uploaded.</Text>
-            ) : (
-              documents.map((doc) => {
-                const ai = doc.ai_summary && typeof doc.ai_summary === 'object' ? doc.ai_summary : {};
-                const title = doc.title || ai.title || ai.document_title || null;
-                const date = doc.taken_on || ai.date || ai.taken_on || null;
-                const clinic = doc.clinic || ai.clinic || ai.clinic_name || null;
-                const kindLabel = DOCUMENT_KINDS.find((d) => d.key === doc.kind)?.label || titleCase(doc.kind);
-                const status = doc.ai_status || (ai.error ? 'failed' : null);
-                const reason = ai.reason || (status === 'missing_file' ? 'no_file' : null);
-                const failLabel = reason === 'no_file' || status === 'missing_file'
-                  ? 'File missing — re-upload'
-                  : reason === 'too_large'
-                    ? 'File too large — re-upload'
-                    : reason === 'unsupported_type'
-                      ? 'Unsupported file type'
-                      : status === 'failed'
-                        ? "AI couldn't read this — retry or add manually"
-                        : null;
-                const unreviewed = (status === 'ready' || status === 'parsed') && ai.applied !== true;
-                const nItems = pendingItemCount(doc);
-                return (
-                <View key={doc.id} style={styles.docCard}>
-                  <TouchableOpacity style={styles.docMain} onPress={() => {
-                    if (unreviewed && canEdit) openConfirmFromParse(doc.id, ai);
-                    else openDocUrl(doc);
-                  }} activeOpacity={0.85}>
-                    <View style={styles.docIcon}>
-                      {status === 'processing' ? <ActivityIndicator color={Colors.navy} size="small" /> : <FileText color={Colors.navy} size={18} />}
-                    </View>
-                    <View style={styles.docInfo}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <Text style={styles.docTitle}>
-                          {status === 'processing' ? 'Reading with AI…' : (failLabel || title || kindLabel)}
-                        </Text>
-                        <View style={styles.docTypePill}><Text style={styles.docTypePillTxt}>{kindLabel}</Text></View>
-                      </View>
-                      {failLabel ? <Text style={styles.docClinic}>{failLabel}</Text> : null}
-                      {ai.ai_note ? <Text style={styles.docClinic}>{String(ai.ai_note)}</Text> : null}
-                      {date ? <Text style={styles.docDate}>{formatDate(String(date))}</Text> : null}
-                      {clinic ? <Text style={styles.docClinic}>{String(clinic)}</Text> : null}
-                    </View>
-                  </TouchableOpacity>
-                  {canEdit && unreviewed ? (
-                    <TouchableOpacity style={styles.docDeleteBtn} onPress={() => openConfirmFromParse(doc.id, ai)} activeOpacity={0.85}>
-                      <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.coral }}>Review {nItems || ''}{nItems ? ' items' : ''}</Text>
-                    </TouchableOpacity>
-                  ) : canEdit && status !== 'processing' ? (
-                    <TouchableOpacity style={styles.docDeleteBtn} onPress={() => {
-                      parsedAttempted.current.delete(doc.id);
-                      void triggerExtraction(doc.id, { path: doc.file_path }, false);
-                    }} activeOpacity={0.85}>
-                      <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Retry</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                  {canEdit ? (
-                    <TouchableOpacity style={styles.docDeleteBtn} onPress={() => deleteDoc(doc)} activeOpacity={0.85}>
-                      <Trash2 color={Colors.critical} size={14} />
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
-                );
-              })
-            )}
 
             {/* Medical Records */}
             <View style={styles.subHeader}>
@@ -3316,6 +3280,132 @@ export default function PetRecordScreen() {
                   </TouchableOpacity>
                 ) : null}
               </View>
+            )}
+            </View>
+            )}
+            {medSub === 'documents' && (
+            <View>
+            {canEdit && pendingDocs.length > 0 ? (
+              <TouchableOpacity style={styles.reviewBanner} onPress={() => {
+                const d = pendingDocs[0];
+                openConfirmFromParse(d.id, d.ai_summary || {});
+              }} activeOpacity={0.85}>
+                <Text style={styles.reviewBannerTxt}>Review all pending · {pendingDocs.length} document{pendingDocs.length === 1 ? '' : 's'}</Text>
+              </TouchableOpacity>
+            ) : null}
+            <View style={styles.subHeader}>
+              <View style={styles.subHeaderLeft}>
+                <FileText color={Colors.navy} size={18} />
+                <Text style={styles.subHeaderText}>Documents</Text>
+              </View>
+              {canEdit && (
+                <TouchableOpacity style={styles.addBtn} onPress={openAddDoc} activeOpacity={0.85}>
+                  <Plus color={Colors.coral} size={16} />
+                  <Text style={styles.addBtnText}>Upload</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            {documents.length === 0 ? (
+              <Text style={styles.emptyText}>No documents uploaded. File is required — AI fills title, date, and clinic.</Text>
+            ) : (
+              documents.map((doc) => {
+                const ai = doc.ai_summary && typeof doc.ai_summary === 'object' ? doc.ai_summary : {};
+                const title = doc.title || ai.title || ai.document_title || 'Untitled';
+                const date = doc.taken_on || ai.date || ai.taken_on || null;
+                const clinic = doc.clinic || ai.clinic || ai.clinic_name || null;
+                const kinds = (doc.content_kinds && doc.content_kinds.length ? doc.content_kinds : ALL_CONTENT_KIND_KEYS);
+                const status = doc.ai_status || (ai.error ? 'failed' : null);
+                const reason = ai.reason || (status === 'missing_file' ? 'no_file' : null);
+                const failLabel = reason === 'no_file' || status === 'missing_file'
+                  ? 'File missing — re-upload'
+                  : reason === 'too_large'
+                    ? 'File too large — re-upload'
+                    : reason === 'unsupported_type'
+                      ? 'Unsupported file type'
+                      : status === 'failed'
+                        ? "AI couldn't read this"
+                        : null;
+                const unreviewed = (status === 'ready' || status === 'parsed') && ai.applied !== true;
+                const confirmed = status === 'confirmed' || ai.applied === true;
+                const nItems = pendingItemCount(doc);
+                const statusLabel = status === 'processing'
+                  ? 'Processing'
+                  : unreviewed
+                    ? `Review ${nItems || 0} item${nItems === 1 ? '' : 's'}`
+                    : confirmed
+                      ? 'Confirmed'
+                      : (status === 'failed' || status === 'missing_file')
+                        ? 'Failed'
+                        : 'Uploaded';
+                const statusTone = status === 'processing'
+                  ? { bg: Colors.standardBg, fg: Colors.navy }
+                  : unreviewed
+                    ? { bg: Colors.urgentBg || '#FCF4DF', fg: Colors.urgent || '#E5A415' }
+                    : confirmed
+                      ? { bg: Colors.tealBg, fg: Colors.tealDark }
+                      : (status === 'failed' || status === 'missing_file')
+                        ? { bg: Colors.criticalBg, fg: Colors.critical }
+                        : { bg: Colors.surface, fg: Colors.textSecondary };
+                return (
+                <View key={doc.id} style={styles.docCard}>
+                  <TouchableOpacity style={styles.docMain} onPress={() => {
+                    if (unreviewed && canEdit) openConfirmFromParse(doc.id, ai);
+                    else openDocUrl(doc);
+                  }} activeOpacity={0.85}>
+                    <View style={styles.docIcon}>
+                      {status === 'processing' ? <ActivityIndicator color={Colors.navy} size="small" /> : <FileText color={Colors.navy} size={18} />}
+                    </View>
+                    <View style={styles.docInfo}>
+                      <Text style={styles.docTitle}>{title}</Text>
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                        {kinds.map((k) => {
+                          const label = CONTENT_KINDS.find((c) => c.key === k)?.label || k;
+                          return (
+                            <View key={k} style={styles.docTypePill}>
+                              <Text style={styles.docTypePillTxt}>{label}</Text>
+                            </View>
+                          );
+                        })}
+                        <View style={[styles.docTypePill, { backgroundColor: statusTone.bg }]}>
+                          <Text style={[styles.docTypePillTxt, { color: statusTone.fg }]}>{statusLabel}</Text>
+                        </View>
+                      </View>
+                      {failLabel ? <Text style={styles.docClinic}>{failLabel}</Text> : null}
+                      {date ? <Text style={styles.docDate}>{formatDate(String(date))}</Text> : null}
+                      {clinic ? <Text style={styles.docClinic}>{String(clinic)}</Text> : null}
+                    </View>
+                  </TouchableOpacity>
+                  {canEdit && unreviewed ? (
+                    <TouchableOpacity style={styles.docDeleteBtn} onPress={() => openConfirmFromParse(doc.id, ai)} activeOpacity={0.85}>
+                      <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.coral }}>Review</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  {canEdit && (status === 'failed' || status === 'missing_file') ? (
+                    <>
+                      <TouchableOpacity style={styles.docDeleteBtn} onPress={() => {
+                        parsedAttempted.current.delete(doc.id);
+                        void triggerExtraction(doc.id, { path: doc.file_path, kinds: doc.content_kinds || undefined }, false);
+                      }} activeOpacity={0.85}>
+                        <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Retry</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.docDeleteBtn} onPress={() => {
+                        setMedSub('summary');
+                        showBanner('Add vaccinations, labs, or visits with Add manually.', 'info');
+                      }} activeOpacity={0.85}>
+                        <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Add manually</Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : null}
+                  {canEdit ? (
+                    <TouchableOpacity style={styles.docDeleteBtn} onPress={() => deleteDoc(doc)} activeOpacity={0.85}>
+                      <Trash2 color={Colors.critical} size={14} />
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+                );
+              })
+            )}
+            </View>
             )}
           </View>
         )}
@@ -3702,32 +3792,42 @@ export default function PetRecordScreen() {
           <ScrollView style={styles.modalScroll}>
             <View style={styles.modalCard}>
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Add Document</Text>
+                <Text style={styles.modalTitle}>Upload document</Text>
                 <TouchableOpacity onPress={() => setDocModalVisible(false)}>
                   <Text style={styles.modalCloseText}>Cancel</Text>
                 </TouchableOpacity>
               </View>
-              <Text style={styles.modalLabel}>Document Type</Text>
-              <View style={styles.pillRow}>
-                {DOCUMENT_KINDS.map((dk) => (
-                  <TouchableOpacity key={dk.key} style={[styles.pill, docForm.kind === dk.key && styles.pillActive]} onPress={() => setDocForm((p) => ({ ...p, kind: dk.key }))} activeOpacity={0.85}>
-                    <Text style={[styles.pillText, docForm.kind === dk.key && styles.pillTextActive]}>{dk.label}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={styles.modalLabel}>Title</Text>
-              <TextInput style={styles.modalInput} value={docForm.title} onChangeText={(v) => setDocForm((p) => ({ ...p, title: v }))} placeholder="e.g. Chest X-Ray, Blood Panel" placeholderTextColor={Colors.textTertiary} />
-              <Text style={styles.modalLabel}>Date Taken (YYYY-MM-DD)</Text>
-              <TextInput style={styles.modalInput} value={docForm.taken_on} onChangeText={(v) => setDocForm((p) => ({ ...p, taken_on: v }))} placeholder="2025-01-15" placeholderTextColor={Colors.textTertiary} />
-              <Text style={styles.modalLabel}>Clinic</Text>
-              <TextInput style={styles.modalInput} value={docForm.clinic} onChangeText={(v) => setDocForm((p) => ({ ...p, clinic: v }))} placeholder="e.g. Riverside Animal Hospital" placeholderTextColor={Colors.textTertiary} />
-              <Text style={styles.modalLabel}>Notes</Text>
-              <TextInput style={[styles.modalInput, styles.modalInputMultiline]} value={docForm.notes} onChangeText={(v) => setDocForm((p) => ({ ...p, notes: v }))} placeholder="Findings, observations" placeholderTextColor={Colors.textTertiary} multiline numberOfLines={3} />
               <Text style={styles.modalLabel}>File *</Text>
               <TouchableOpacity style={styles.filePickBtn} onPress={pickDocFile} disabled={savingDoc} activeOpacity={0.85}>
                 <FileText color={Colors.navy} size={18} />
                 <Text style={styles.filePickText}>{docFile ? ((docFile as any).name || 'File selected') : 'Choose file...'}</Text>
               </TouchableOpacity>
+              <Text style={styles.modalLabel}>What’s in this file</Text>
+              <View style={styles.pillRow}>
+                {CONTENT_KINDS.map((ck) => {
+                  const on = docForm.content_kinds.includes(ck.key);
+                  return (
+                    <TouchableOpacity
+                      key={ck.key}
+                      style={[styles.pill, on && styles.pillActive]}
+                      onPress={() => setDocForm((p) => {
+                        const has = p.content_kinds.includes(ck.key);
+                        const next = has ? p.content_kinds.filter((k) => k !== ck.key) : [...p.content_kinds, ck.key];
+                        return { ...p, content_kinds: next.length ? next : [ck.key] };
+                      })}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[styles.pillText, on && styles.pillTextActive]}>{ck.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <Text style={styles.modalLabel}>Title</Text>
+              <TextInput style={styles.modalInput} value={docForm.title} onChangeText={(v) => setDocForm((p) => ({ ...p, title: v }))} placeholder="Defaults to filename" placeholderTextColor={Colors.textTertiary} />
+              <Text style={styles.modalLabel}>Date (optional — AI will fill)</Text>
+              <TextInput style={styles.modalInput} value={docForm.taken_on} onChangeText={(v) => setDocForm((p) => ({ ...p, taken_on: v }))} placeholder="YYYY-MM-DD" placeholderTextColor={Colors.textTertiary} />
+              <Text style={styles.modalLabel}>Clinic (optional — AI will fill)</Text>
+              <TextInput style={styles.modalInput} value={docForm.clinic} onChangeText={(v) => setDocForm((p) => ({ ...p, clinic: v }))} placeholder="Clinic name" placeholderTextColor={Colors.textTertiary} />
               {docError ? (
                 <InlineBanner message={docError} kind="error" onDismiss={() => setDocError(null)} />
               ) : null}
@@ -3737,7 +3837,7 @@ export default function PetRecordScreen() {
                 disabled={savingDoc || !docFile}
                 activeOpacity={0.85}
               >
-                {savingDoc ? <ActivityIndicator size="small" color={Colors.white} /> : <Text style={styles.modalSubmitText}>Upload Document</Text>}
+                {savingDoc ? <ActivityIndicator size="small" color={Colors.white} /> : <Text style={styles.modalSubmitText}>Upload</Text>}
               </TouchableOpacity>
             </View>
           </ScrollView>

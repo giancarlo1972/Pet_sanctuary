@@ -114,6 +114,33 @@ function formatShortDate(value: string): string {
   if (Number.isNaN(d.getTime())) return '';
   return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 }
+
+function titleCaseName(value: string | null | undefined) {
+  if (!value) return '';
+  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function compactAge(ageText?: string | null, dob?: string | null) {
+  const raw = String(ageText || '').trim();
+  const years = raw.match(/(\d+(?:\.\d+)?)\s*(y|yr|year)/i);
+  if (years) {
+    const n = Number(years[1]);
+    if (n >= 1) return `${Math.round(n)} y`;
+    return `${Math.max(1, Math.round(n * 12))} mo`;
+  }
+  const months = raw.match(/(\d+)\s*(mo|month)/i);
+  if (months) return `${months[1]} mo`;
+  if (dob) {
+    const m = String(dob).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) {
+      const y = (Date.now() - new Date(+m[1], +m[2] - 1, +m[3]).getTime()) / (365.25 * 864e5);
+      if (y >= 1) return `${Math.round(y)} y`;
+      return `${Math.max(1, Math.round(y * 12))} mo`;
+    }
+  }
+  return raw || null;
+}
+
 function inferListing(text: string) {
   const raw = text || '';
   const t = raw.toLowerCase();
@@ -560,11 +587,11 @@ export default function PetDetailsScreen() {
         {/* Pet info */}
         <View style={styles.petInfo}>
           <View style={styles.petHeader}>
-            <Text style={styles.petName}>{pet.name}</Text>
-            {pet.age_text ? <Text style={styles.petAge}>{pet.age_text}</Text> : null}
+            <Text style={styles.petName}>{titleCaseName(pet.name)}</Text>
+            {compactAge(pet.age_text, pet.dob) ? <Text style={styles.petAge}>{compactAge(pet.age_text, pet.dob)}</Text> : null}
           </View>
           <Text style={styles.petBreedLocation}>
-            {pet.breed}{pet.location ? ` · ${pet.location}` : ''}
+            {[pet.breed, pet.location].filter(Boolean).join(' · ')}
           </Text>
           {pet.dob ? (
             <Text style={styles.petBreedLocation}>Born {pet.dob}</Text>
@@ -898,7 +925,7 @@ const styles = StyleSheet.create({
 
   scrollContent: { paddingBottom: 100 },
 
-  heroWrap: { position: 'relative', width: '100%', aspectRatio: 4/3, borderRadius: 20, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 12 },
+  heroWrap: { position: 'relative', width: '100%', maxWidth: 320, height: 240, aspectRatio: 4/3, borderRadius: 16, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 12, alignSelf: 'center' },
   heroImage: { width: '100%', height: '100%' },
   heroPlaceholder: { justifyContent: 'center', alignItems: 'center' },
   heroBack: {
@@ -919,16 +946,16 @@ const styles = StyleSheet.create({
     marginTop: 12, paddingTop: 20, paddingHorizontal: 4, paddingBottom: 20,
   },
   petHeader: {
-    flexDirection: 'row', alignItems: 'baseline', gap: 8, marginBottom: 4,
+    flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 4,
   },
   petName: {
-    fontSize: FontSizes['3xl'], fontFamily: Fonts.extrabold, color: Colors.text,
+    flex: 1, fontSize: 22, fontFamily: Fonts.extrabold, fontWeight: '800', color: Colors.navy,
   },
   petAge: {
-    fontSize: FontSizes.lg, fontFamily: Fonts.bold, color: Colors.coral,
+    fontSize: 16, fontFamily: Fonts.bold, color: Colors.coral,
   },
   petBreedLocation: {
-    fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.textSecondary, marginBottom: 16,
+    fontSize: 13, fontFamily: Fonts.medium, color: '#6B7280', marginBottom: 16,
   },
 
   traitChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },

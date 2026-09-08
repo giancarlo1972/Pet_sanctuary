@@ -71,6 +71,7 @@ import { DateField } from '@/components/DateField';
 import { matchCatalog, vaccineType, durationYearsFromProduct, addYearsLocal, type CatalogRow } from '@/lib/catalog';
 import { SourceBadge } from '@/components/SourceBadge';
 import SharePetSheet from '@/components/SharePetSheet';
+import { PET_TRAITS, normalizeTraits, type PetTrait } from '@/lib/pet-traits';
 
 function blobTypeFromName(path: string) {
   if (/\.pdf$/i.test(path)) return 'application/pdf';
@@ -159,6 +160,12 @@ interface Pet {
   previous_names: string[] | null;
   coat?: string | null;
   ai_traits?: any;
+  personality?: string[] | null;
+  is_public?: boolean | null;
+  listing_type?: string | null;
+  good_with_kids?: boolean | null;
+  good_with_dogs?: boolean | null;
+  good_with_cats?: boolean | null;
 }
 
 interface Relationship {
@@ -541,6 +548,33 @@ function ageFromDob(dob?: string | null, ageText?: string | null) {
   return ageText || null;
 }
 
+function compactAge(dob?: string | null, ageText?: string | null) {
+  const fromDob = ageFromDob(dob, null);
+  const raw = fromDob || ageText || '';
+  const years = String(raw).match(/(\d+(?:\.\d+)?)\s*(y|yr|year)/i);
+  if (years) {
+    const n = Number(years[1]);
+    if (n >= 1) return `${Math.round(n)} y`;
+    return `${Math.max(1, Math.round(n * 12))} mo`;
+  }
+  const months = String(raw).match(/(\d+)\s*(mo|month)/i);
+  if (months) return `${months[1]} mo`;
+  return raw.trim() || null;
+}
+
+function petTraitChips(pet: Pet): string[] {
+  const chips = normalizeTraits(pet.personality);
+  const extras: [boolean | null | undefined, string][] = [
+    [pet.good_with_kids, 'Good with kids'],
+    [pet.good_with_dogs, 'Good with dogs'],
+    [pet.good_with_cats, 'Good with cats'],
+  ];
+  for (const [on, label] of extras) {
+    if (on && !chips.some((c) => c.toLowerCase() === label.toLowerCase())) chips.push(label);
+  }
+  return chips;
+}
+
 function parseAnyDate(v: any): string | null {
   if (v == null || v === '') return null;
   const s = String(v).trim();
@@ -671,6 +705,9 @@ export default function PetRecordScreen() {
   const [canCare, setCanCare] = useState(false);
   const [isPetOwner, setIsPetOwner] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [visOpen, setVisOpen] = useState(false);
+  const [detailsTraits, setDetailsTraits] = useState<string[]>([]);
+  const [traitCatalog, setTraitCatalog] = useState<PetTrait[]>(PET_TRAITS);
   const [historyVisible, setHistoryVisible] = useState(false);
 
   const [vaxModalVisible, setVaxModalVisible] = useState(false);
@@ -775,14 +812,18 @@ export default function PetRecordScreen() {
 
     const petRes = await supabase
       .from('pets')
-      .select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, body_condition_score, target_weight_kg, previous_names, coat, ai_traits')
+      .select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, body_condition_score, target_weight_kg, previous_names, coat, ai_traits, personality, is_public, listing_type, good_with_kids, good_with_dogs, good_with_cats')
       .eq('id', petId)
       .maybeSingle();
 
     let petData = petRes.data;
     let petErr = petRes.error;
+    if (petErr && /is_public|listing_type|personality|good_with/i.test(petErr.message || '')) {
+      const retry = await supabase.from('pets').select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, body_condition_score, target_weight_kg, previous_names, coat, ai_traits').eq('id', petId).maybeSingle();
+      petData = retry.data as typeof petData; petErr = retry.error;
+    }
     if (petErr && /coat/i.test(petErr.message || '')) {
-      const retry = await supabase.from('pets').select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, body_condition_score, target_weight_kg, previous_names, ai_traits').eq('id', petId).maybeSingle();
+      const retry = await supabase.from('pets').select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutured, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, body_condition_score, target_weight_kg, previous_names, ai_traits').eq('id', petId).maybeSingle();
       petData = retry.data as typeof petData; petErr = retry.error;
     }
     if (petErr || !petData) {
@@ -824,6 +865,11 @@ export default function PetRecordScreen() {
     setCanEdit(isOwner || isCoOwner || isOrgStaff);
     setCanCare(isOwner || isCoOwner || isCurrentFoster || isOrgStaff);
     setIsPetOwner(isOwner);
+
+    const { data: traitRows } = await supabase.from('pet_traits').select('key, label, sort_order').order('sort_order');
+    if (traitRows && traitRows.length) {
+      setTraitCatalog((traitRows as any[]).map((r) => ({ key: r.key, label: r.label })));
+    }
 
     const { data: profileData } = await supabase
       .from('profiles')
@@ -1257,6 +1303,7 @@ export default function PetRecordScreen() {
     setDetailsSex(pet?.gender || '');
     setDetailsSpayed(Boolean(pet?.spayed_neutered));
     setDetailsCoat(pet?.coat || pet?.ai_traits?.coat || inferCoat(pet?.breed_primary || pet?.breed, pet?.breed_notes) || '');
+    setDetailsTraits(pet ? petTraitChips(pet) : []);
     const ownerRel = (relationships || []).find((r) =>
       !r.ended_on && /owner/i.test(r.relationship || '') && (!pet?.owner_id || r.user_id === pet.owner_id)
     ) || (relationships || []).find((r) => !r.ended_on && /owner/i.test(r.relationship || ''));
@@ -1281,6 +1328,7 @@ export default function PetRecordScreen() {
       gender: detailsSex || null,
       spayed_neutered: detailsSpayed,
       coat: detailsCoat || null,
+      personality: detailsTraits,
     }).eq('id', petId);
     if (!error && detailsSince) {
       const ownerRel = (relationships || []).find((r) =>
@@ -1304,6 +1352,17 @@ export default function PetRecordScreen() {
     setSavingDetails(false);
     if (error) { showBanner(error.message || 'Could not save details.'); return; }
     setDetailsSheetVisible(false);
+    load();
+  };
+
+  const saveVisibility = async (makePublic: boolean) => {
+    if (!petId) return;
+    const { error } = await supabase.from('pets').update({
+      is_public: makePublic,
+      listing_type: makePublic ? 'adoptable' : 'private',
+    }).eq('id', petId);
+    if (error) { showBanner(error.message || 'Could not update visibility.'); return; }
+    setVisOpen(false);
     load();
   };
 
@@ -2669,17 +2728,60 @@ export default function PetRecordScreen() {
           ) : null}
         </View>
         <View style={styles.petBannerInfo}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Text style={[styles.petName, { flex: 1 }]}>{pet.name || 'Unnamed'}{pet.previous_names?.length ? ` (formerly ${pet.previous_names.join(', ')})` : ''}</Text>
+          <View style={styles.petHeader}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <View style={styles.petNameRow}>
+                <Text style={styles.petName} numberOfLines={1}>{titleCase(pet.name) || 'Unnamed'}</Text>
+                {compactAge(pet.date_of_birth, pet.age_text) ? (
+                  <Text style={styles.petAge}>{compactAge(pet.date_of_birth, pet.age_text)}</Text>
+                ) : null}
+              </View>
+              <Text style={styles.petBreedLocation} numberOfLines={1}>
+                {[breedDisplay !== '—' ? breedDisplay : null, pet.location].filter(Boolean).join(' · ')}
+              </Text>
+            </View>
             {isPetOwner ? (
-              <TouchableOpacity onPress={() => setShareOpen(true)} style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center' }}>
+              <TouchableOpacity onPress={() => setShareOpen(true)} style={styles.headIcon} activeOpacity={0.85}>
                 <Share2 color={Colors.navy} size={16} />
               </TouchableOpacity>
             ) : null}
+            {canEdit ? (
+              <TouchableOpacity onPress={openDetailsSheet} style={styles.editBtn} activeOpacity={0.85}>
+                <Pencil color={Colors.navy} size={14} />
+                <Text style={styles.editBtnTxt}>Edit</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
-          {breedDisplay !== '—' ? <Text style={styles.petMeta}>{breedDisplay}{pet.is_mixed ? ' (Mixed)' : ''}</Text> : null}
-          {pet.age_text ? <Text style={styles.petMeta}>{pet.age_text}</Text> : null}
-          {pet.gender ? <Text style={styles.petMeta}>{titleCase(pet.gender)}</Text> : null}
+          {petTraitChips(pet).length > 0 ? (
+            <View style={styles.traitChips}>
+              {petTraitChips(pet).map((t) => (
+                <View key={t} style={styles.traitChip}>
+                  <Text style={styles.traitText}>{t}</Text>
+                </View>
+              ))}
+            </View>
+          ) : canEdit ? (
+            <TouchableOpacity style={styles.traitChip} onPress={openDetailsSheet} activeOpacity={0.85}>
+              <Text style={styles.traitText}>Add traits</Text>
+            </TouchableOpacity>
+          ) : null}
+          {canEdit ? (
+            <TouchableOpacity
+              style={[styles.visPill, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visPillOn : styles.visPillOff]}
+              onPress={() => setVisOpen(true)}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.visTxt, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visTxtOn : styles.visTxtOff]}>
+                {(pet.is_public && pet.listing_type === 'adoptable') ? 'PUBLIC · adoptable' : 'NOT PUBLIC'}
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={[styles.visPill, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visPillOn : styles.visPillOff]}>
+              <Text style={[styles.visTxt, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visTxtOn : styles.visTxtOff]}>
+                {(pet.is_public && pet.listing_type === 'adoptable') ? 'PUBLIC · adoptable' : 'NOT PUBLIC'}
+              </Text>
+            </View>
+          )}
         </View>
 
         <VetExamCard
@@ -3872,6 +3974,21 @@ export default function PetRecordScreen() {
                 <View style={{ width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: Colors.navy, backgroundColor: detailsSpayed ? Colors.navy : Colors.white }} />
                 <Text style={styles.editActionText}>Spayed / Neutered</Text>
               </TouchableOpacity>
+              <Text style={styles.modalLabel}>Traits</Text>
+              <View style={styles.pillRow}>
+                {traitCatalog.map((t) => {
+                  const on = detailsTraits.some((x) => x.toLowerCase() === t.label.toLowerCase());
+                  return (
+                    <TouchableOpacity
+                      key={t.key}
+                      style={[styles.pill, on && styles.pillActive]}
+                      onPress={() => setDetailsTraits((prev) => on ? prev.filter((x) => x.toLowerCase() !== t.label.toLowerCase()) : [...prev, t.label])}
+                    >
+                      <Text style={[styles.pillText, on && styles.pillTextActive]}>{t.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
               <TouchableOpacity style={[styles.modalSubmitBtn, savingDetails && styles.btnDisabled]} onPress={saveDetails} disabled={savingDetails} activeOpacity={0.85}>
                 {savingDetails ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.modalSubmitText}>Save details</Text>}
               </TouchableOpacity>
@@ -4244,6 +4361,22 @@ export default function PetRecordScreen() {
       {shareOpen && petId ? (
         <SharePetSheet visible petId={petId} petName={pet.name || 'this pet'} onClose={() => setShareOpen(false)} />
       ) : null}
+      <Modal visible={visOpen} animationType="fade" transparent onRequestClose={() => setVisOpen(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setVisOpen(false)}>
+          <View style={styles.visSheet}>
+            <Text style={styles.modalTitle}>Listing visibility</Text>
+            <Text style={styles.ovFoot}>Private pets stay off Pets, Nearby, and search. Public · adoptable lists this pet for adoption.</Text>
+            <TouchableOpacity style={styles.visRow} onPress={() => saveVisibility(false)} activeOpacity={0.85}>
+              <View style={[styles.visPill, styles.visPillOff]}><Text style={[styles.visTxt, styles.visTxtOff]}>NOT PUBLIC</Text></View>
+              {!(pet.is_public && pet.listing_type === 'adoptable') ? <Text style={styles.linkTxt}>Current</Text> : null}
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.visRow} onPress={() => saveVisibility(true)} activeOpacity={0.85}>
+              <View style={[styles.visPill, styles.visPillOn]}><Text style={[styles.visTxt, styles.visTxtOn]}>PUBLIC · adoptable</Text></View>
+              {pet.is_public && pet.listing_type === 'adoptable' ? <Text style={styles.linkTxt}>Current</Text> : null}
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -4298,9 +4431,9 @@ function getSevText(sev: string): string {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
   col: { width: '100%', maxWidth: 720, alignSelf: 'center', flex: 1 },
-  heroWrap: { width: '100%', aspectRatio: 4/3, borderRadius: 20, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 12 },
+  heroWrap: { width: '100%', maxWidth: 320, height: 240, aspectRatio: 4 / 3, borderRadius: 16, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 8, alignSelf: 'center' },
   hero: { width: '100%', height: '100%' },
-  changePhoto: { position: 'absolute', right: 12, bottom: 12, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(38,38,94,0.85)', alignItems: 'center', justifyContent: 'center' },
+  changePhoto: { position: 'absolute', right: 12, bottom: 12, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(38,38,94,0.85)', alignItems: 'center', justifyContent: 'center' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
   header: {
@@ -4314,9 +4447,27 @@ const styles = StyleSheet.create({
   petBanner: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingVertical: 16, backgroundColor: Colors.white },
   petPhoto: { width: 64, height: 64, borderRadius: 32 },
   petPhotoFallback: { backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
-  petBannerInfo: { width: '100%', marginTop: 12 },
-  petName: { fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.text },
+  petBannerInfo: { width: '100%', marginTop: 12, gap: 10 },
+  petHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  petNameRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
+  petName: { flex: 1, fontSize: 22, fontFamily: Fonts.extrabold, fontWeight: '800', color: Colors.navy },
+  petAge: { fontSize: 16, fontFamily: Fonts.bold, color: Colors.coral },
+  petBreedLocation: { fontSize: 13, fontFamily: Fonts.medium, color: '#6B7280', marginTop: 2 },
   petMeta: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 2 },
+  headIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
+  editBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: Colors.surface, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 8 },
+  editBtnTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.navy },
+  traitChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  traitChip: { backgroundColor: '#F1F2F8', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
+  traitText: { fontSize: 13, fontFamily: Fonts.medium, color: Colors.navy },
+  visPill: { alignSelf: 'flex-start', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
+  visPillOff: { backgroundColor: Colors.surface },
+  visPillOn: { backgroundColor: Colors.tealBg },
+  visTxt: { fontFamily: Fonts.bold, fontSize: 11, letterSpacing: 0.3 },
+  visTxtOff: { color: Colors.textSecondary },
+  visTxtOn: { color: Colors.tealDark },
+  visSheet: { backgroundColor: Colors.white, borderRadius: 16, padding: 18, gap: 12, marginHorizontal: 24, marginTop: 'auto', marginBottom: 'auto' },
+  visRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 6 },
 
   tabBar: { flexDirection: 'row', flexWrap: 'nowrap', gap: 8, paddingHorizontal: 0, marginTop: 12, marginBottom: 0, position: 'relative' },
   hubRow: { flexDirection: 'row', gap: 8, paddingBottom: 12 },

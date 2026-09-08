@@ -9,9 +9,19 @@ export function yes(v) { return String(v || '').toLowerCase() === 'yes'; }
 export function decode(s) {
   return String(s || '')
     .replace(/<[^>]+>/g, ' ')
+    .replace(/&#(\d+);/g, (_, n) => {
+      const c = Number(n);
+      return Number.isFinite(c) && c > 0 && c < 0x110000 ? String.fromCodePoint(c) : _;
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => {
+      const c = parseInt(h, 16);
+      return Number.isFinite(c) && c > 0 && c < 0x110000 ? String.fromCodePoint(c) : _;
+    })
     .replace(/&mdash;/g, '—').replace(/&ndash;/g, '–')
     .replace(/&rsquo;/g, "'").replace(/&lsquo;/g, "'")
     .replace(/&rdquo;/g, '"').replace(/&ldquo;/g, '"')
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ')
     .replace(/\s+/g, ' ').trim();
 }

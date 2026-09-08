@@ -751,6 +751,7 @@ export default function PetRecordScreen() {
   const [selectingColorField, setSelectingColorField] = useState<'primary' | 'secondary' | null>(null);
   const [savingColor, setSavingColor] = useState(false);
   const [detailsSheetVisible, setDetailsSheetVisible] = useState(false);
+  const [detailsName, setDetailsName] = useState('');
   const [detailsDob, setDetailsDob] = useState('');
   const [detailsSex, setDetailsSex] = useState('');
   const [detailsSpayed, setDetailsSpayed] = useState(false);
@@ -1289,6 +1290,7 @@ export default function PetRecordScreen() {
 
   // === Color handlers ===
   const openDetailsSheet = () => {
+    setDetailsName(pet?.name || '');
     setBreedForm({
       breed_primary: pet?.breed_primary || '',
       breed_secondary: pet?.breed_secondary || '',
@@ -1314,9 +1316,15 @@ export default function PetRecordScreen() {
 
   const saveDetails = async () => {
     if (!petId) return;
+    const name = detailsName.trim();
+    if (!name) {
+      showBanner('Name is required.');
+      return;
+    }
     setSavingDetails(true);
     const pair = dedupeBreedPair(breedForm.breed_primary, breedForm.breed_secondary);
     const { error } = await supabase.from('pets').update({
+      name,
       breed_primary: pair.primary,
       breed_secondary: pair.secondary,
       is_mixed: pair.secondary ? true : breedForm.is_mixed,
@@ -2743,7 +2751,16 @@ export default function PetRecordScreen() {
           <View style={styles.petHeader}>
             <View style={{ flex: 1, minWidth: 0 }}>
               <View style={styles.petNameRow}>
-                <Text style={styles.petName} numberOfLines={1}>{titleCase(pet.name) || 'Unnamed'}</Text>
+                <TouchableOpacity
+                  onPress={openDetailsSheet}
+                  disabled={!canEdit}
+                  style={styles.petNameTap}
+                  activeOpacity={canEdit ? 0.75 : 1}
+                  accessibilityLabel={canEdit ? 'Edit name' : undefined}
+                >
+                  <Text style={styles.petName} numberOfLines={1}>{titleCase(pet.name) || 'Unnamed'}</Text>
+                  {canEdit ? <Pencil color={Colors.navy} size={15} /> : null}
+                </TouchableOpacity>
                 {compactAge(pet.date_of_birth, pet.age_text) ? (
                   <Text style={styles.petAge}>{compactAge(pet.date_of_birth, pet.age_text)}</Text>
                 ) : null}
@@ -3937,6 +3954,16 @@ export default function PetRecordScreen() {
                 <Text style={styles.modalTitle}>Edit details</Text>
                 <TouchableOpacity onPress={() => setDetailsSheetVisible(false)}><X color={Colors.textTertiary} size={22} /></TouchableOpacity>
               </View>
+              <Text style={styles.modalLabel}>Name *</Text>
+              <TextInput
+                style={styles.modalInput}
+                value={detailsName}
+                onChangeText={setDetailsName}
+                placeholder="Pet name"
+                placeholderTextColor={Colors.textTertiary}
+                autoCapitalize="words"
+                autoCorrect={false}
+              />
               <Text style={styles.modalLabel}>Primary breed</Text>
               <TouchableOpacity style={styles.dropdownBtn} onPress={() => setSelectingBreedField('primary')} activeOpacity={0.85}>
                 <Text style={breedForm.breed_primary ? styles.dropdownText : styles.dropdownPlaceholder}>{breedForm.breed_primary || 'Select breed'}</Text>
@@ -4001,7 +4028,12 @@ export default function PetRecordScreen() {
                   );
                 })}
               </View>
-              <TouchableOpacity style={[styles.modalSubmitBtn, savingDetails && styles.btnDisabled]} onPress={saveDetails} disabled={savingDetails} activeOpacity={0.85}>
+              <TouchableOpacity
+                style={[styles.modalSubmitBtn, (savingDetails || !detailsName.trim()) && styles.btnDisabled]}
+                onPress={saveDetails}
+                disabled={savingDetails || !detailsName.trim()}
+                activeOpacity={0.85}
+              >
                 {savingDetails ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.modalSubmitText}>Save details</Text>}
               </TouchableOpacity>
             </View>
@@ -4461,8 +4493,9 @@ const styles = StyleSheet.create({
   petPhotoFallback: { backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
   petBannerInfo: { width: '100%', marginTop: 12, gap: 10 },
   petHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  petNameRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
-  petName: { flex: 1, fontSize: 22, fontFamily: Fonts.extrabold, fontWeight: '800', color: Colors.navy },
+  petNameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  petNameTap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 },
+  petName: { flexShrink: 1, fontSize: 22, fontFamily: Fonts.extrabold, fontWeight: '800', color: Colors.navy },
   petAge: { fontSize: 16, fontFamily: Fonts.bold, color: Colors.coral },
   petBreedLocation: { fontSize: 13, fontFamily: Fonts.medium, color: '#6B7280', marginTop: 2 },
   petMeta: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 2 },

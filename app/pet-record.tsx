@@ -455,6 +455,21 @@ const CONTENT_KINDS = [
   { key: 'other', label: 'Other' },
 ] as const;
 const ALL_CONTENT_KIND_KEYS = CONTENT_KINDS.map((k) => k.key);
+const DOC_ACCORDIONS = [
+  { key: 'labs', label: 'Labs' },
+  { key: 'vaccinations', label: 'Vaccines' },
+  { key: 'exam_visit', label: 'Records' },
+  { key: 'imaging', label: 'Imaging' },
+  { key: 'insurance', label: 'Insurance' },
+  { key: 'other', label: 'Other' },
+] as const;
+
+function docAccordionKeys(d: { content_kinds?: string[] | null }): string[] {
+  const raw = d.content_kinds?.length ? d.content_kinds : [];
+  const known = DOC_ACCORDIONS.map((a) => a.key).filter((k) => k !== 'other');
+  const hit = known.filter((k) => raw.includes(k));
+  return hit.length ? hit : ['other'];
+}
 
 function kindFromContent(kinds: string[]) {
   if (kinds.length === 1) {
@@ -617,6 +632,7 @@ export default function PetRecordScreen() {
   const [pet, setPet] = useState<Pet | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
   const [docKindFilter, setDocKindFilter] = useState<string | null>(null);
+  const [docOpen, setDocOpen] = useState<Record<string, boolean>>({});
   const [openMed, setOpenMed] = useState<Record<string, boolean>>({ vaccinations: true });
   const [examNote, setExamNote] = useState<string | null>(null);
   const [petExams, setPetExams] = useState<any[]>([]);
@@ -2292,6 +2308,102 @@ export default function PetRecordScreen() {
     const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
     return (ai.vaccinations?.length || 0) + (ai.labs?.length || 0) + (ai.visits?.length || 0) + (ai.conditions?.length || 0) + (ai.weight?.value ? 1 : 0);
   };
+  const renderDocRow = (doc: PetDocument) => {
+    const ai = doc.ai_summary && typeof doc.ai_summary === 'object' ? doc.ai_summary : {};
+    const title = doc.title || ai.title || ai.document_title || 'Untitled';
+    const date = doc.taken_on || ai.date || ai.taken_on || null;
+    const clinic = doc.clinic || ai.clinic || ai.clinic_name || null;
+    const kinds = (doc.content_kinds && doc.content_kinds.length ? doc.content_kinds : ALL_CONTENT_KIND_KEYS);
+    const status = doc.ai_status || (ai.error ? 'failed' : null);
+    const reason = ai.reason || (status === 'missing_file' ? 'no_file' : null);
+    const failLabel = reason === 'no_file' || status === 'missing_file'
+      ? 'File missing — re-upload'
+      : reason === 'too_large'
+        ? 'File too large — re-upload'
+        : reason === 'unsupported_type'
+          ? 'Unsupported file type'
+          : status === 'failed'
+            ? "AI couldn't read this"
+            : null;
+    const unreviewed = (status === 'ready' || status === 'parsed') && ai.applied !== true;
+    const confirmed = status === 'confirmed' || ai.applied === true;
+    const nItems = pendingItemCount(doc);
+    const statusLabel = status === 'processing'
+      ? 'Processing'
+      : unreviewed
+        ? `Review ${nItems || 0} item${nItems === 1 ? '' : 's'}`
+        : confirmed
+          ? 'Confirmed'
+          : (status === 'failed' || status === 'missing_file')
+            ? 'Failed'
+            : 'Uploaded';
+    const statusTone = status === 'processing'
+      ? { bg: Colors.standardBg, fg: Colors.navy }
+      : unreviewed
+        ? { bg: Colors.urgentBg || '#FCF4DF', fg: Colors.urgent || '#E5A415' }
+        : confirmed
+          ? { bg: Colors.tealBg, fg: Colors.tealDark }
+          : (status === 'failed' || status === 'missing_file')
+            ? { bg: Colors.criticalBg, fg: Colors.critical }
+            : { bg: Colors.surface, fg: Colors.textSecondary };
+    return (
+      <View key={doc.id} style={styles.docCard}>
+        <TouchableOpacity style={styles.docMain} onPress={() => {
+          if (unreviewed && canEdit) openConfirmFromParse(doc.id, ai);
+          else openDocUrl(doc);
+        }} activeOpacity={0.85}>
+          <View style={styles.docIcon}>
+            {status === 'processing' ? <ActivityIndicator color={Colors.navy} size="small" /> : <FileText color={Colors.navy} size={18} />}
+          </View>
+          <View style={styles.docInfo}>
+            <Text style={styles.docTitle}>{title}</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+              {kinds.map((k) => {
+                const label = CONTENT_KINDS.find((c) => c.key === k)?.label || k;
+                return (
+                  <View key={k} style={styles.docTypePill}>
+                    <Text style={styles.docTypePillTxt}>{label}</Text>
+                  </View>
+                );
+              })}
+              <View style={[styles.docTypePill, { backgroundColor: statusTone.bg }]}>
+                <Text style={[styles.docTypePillTxt, { color: statusTone.fg }]}>{statusLabel}</Text>
+              </View>
+            </View>
+            {failLabel ? <Text style={styles.docClinic}>{failLabel}</Text> : null}
+            {date ? <Text style={styles.docDate}>{formatDate(String(date))}</Text> : null}
+            {clinic ? <Text style={styles.docClinic}>{String(clinic)}</Text> : null}
+          </View>
+        </TouchableOpacity>
+        {canEdit && unreviewed ? (
+          <TouchableOpacity style={styles.docDeleteBtn} onPress={() => openConfirmFromParse(doc.id, ai)} activeOpacity={0.85}>
+            <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.coral }}>Review</Text>
+          </TouchableOpacity>
+        ) : null}
+        {canEdit && (status === 'failed' || status === 'missing_file') ? (
+          <>
+            <TouchableOpacity style={styles.docDeleteBtn} onPress={() => {
+              parsedAttempted.current.delete(doc.id);
+              void triggerExtraction(doc.id, { path: doc.file_path, kinds: doc.content_kinds || undefined }, false);
+            }} activeOpacity={0.85}>
+              <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Retry</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.docDeleteBtn} onPress={() => {
+              setTab('medical');
+              showBanner('Add vaccinations, labs, or visits with Add manually.', 'info');
+            }} activeOpacity={0.85}>
+              <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Add manually</Text>
+            </TouchableOpacity>
+          </>
+        ) : null}
+        {canEdit ? (
+          <TouchableOpacity style={styles.docDeleteBtn} onPress={() => deleteDoc(doc)} activeOpacity={0.85}>
+            <Trash2 color={Colors.critical} size={14} />
+          </TouchableOpacity>
+        ) : null}
+      </View>
+    );
+  };
   const nowMs = Date.now();
   const vaxDues = currentVax.map((v) => v.next_due_on).filter(Boolean).map((d) => {
     const p = parseLocalParts(String(d));
@@ -2921,7 +3033,7 @@ export default function PetRecordScreen() {
                 vaccines: documents.filter((d) => (d.content_kinds?.length ? d.content_kinds : ALL_CONTENT_KIND_KEYS).includes('vaccinations')).length,
                 records: documents.filter((d) => (d.content_kinds?.length ? d.content_kinds : ALL_CONTENT_KIND_KEYS).includes('exam_visit')).length,
               }}
-              onOpenDocs={(kind) => { setDocKindFilter(kind); setTab('documents'); }}
+              onOpenDocs={(kind) => { setDocKindFilter(kind); setDocOpen((s) => ({ ...s, [kind]: true })); setTab('documents'); }}
               onRunAi={runAiHealth}
               onShareAi={async () => {
                 if (aiFindings?.id) await supabase.from('ai_health_analyses').update({ shared_with_vet_at: new Date().toISOString() }).eq('id', aiFindings.id);
@@ -3366,128 +3478,51 @@ export default function PetRecordScreen() {
                 <Text style={styles.reviewBannerTxt}>Review all pending · {pendingDocs.length} document{pendingDocs.length === 1 ? '' : 's'}</Text>
               </TouchableOpacity>
             ) : null}
-            <View style={styles.subHeader}>
-              <View style={styles.subHeaderLeft}>
-                <FileText color={Colors.navy} size={18} />
-                <Text style={styles.subHeaderText}>Documents</Text>
+            <View style={styles.docDash}>
+              <View style={styles.docDashCounts}>
+                {DOC_ACCORDIONS.filter((s) => s.key !== 'other').map((s, i) => {
+                  const n = documents.filter((d) => docAccordionKeys(d).includes(s.key)).length;
+                  const on = docOpen[s.key] || docKindFilter === s.key;
+                  return (
+                    <React.Fragment key={s.key}>
+                      {i > 0 ? <Text style={styles.docDashDot}>·</Text> : null}
+                      <TouchableOpacity onPress={() => setDocOpen((prev) => ({ ...prev, [s.key]: !on }))} activeOpacity={0.85}>
+                        <Text style={[styles.docDashTxt, on && styles.docDashTxtOn]}>{s.label} {n}</Text>
+                      </TouchableOpacity>
+                    </React.Fragment>
+                  );
+                })}
               </View>
-              {canEdit && (
-                <TouchableOpacity onPress={openAddDoc} activeOpacity={0.85}>
-                  <Text style={styles.addLink}>Add manually</Text>
+              {canEdit ? (
+                <TouchableOpacity style={styles.docUploadBtn} onPress={openAddDoc} activeOpacity={0.85}>
+                  <Text style={styles.docUploadTxt}>Upload</Text>
                 </TouchableOpacity>
-              )}
+              ) : null}
             </View>
-            {docKindFilter ? (
-              <TouchableOpacity style={styles.filterChip} onPress={() => setDocKindFilter(null)} activeOpacity={0.85}>
-                <Text style={styles.filterChipTxt}>
-                  {docKindFilter === 'labs' ? 'Labs' : docKindFilter === 'vaccinations' ? 'Vaccines' : docKindFilter === 'exam_visit' ? 'Records' : docKindFilter === 'insurance' ? 'Insurance' : docKindFilter}
-                  {'  ·  Clear'}
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-            {(docKindFilter
-              ? documents.filter((d) => (d.content_kinds?.length ? d.content_kinds : ALL_CONTENT_KIND_KEYS).includes(docKindFilter))
-              : documents
-            ).length === 0 ? (
+            {documents.length === 0 ? (
               <Text style={styles.emptyText}>No documents uploaded. File is required — AI fills title, date, and clinic.</Text>
-            ) : (
-              documents.filter((d) => !docKindFilter || (d.content_kinds?.length ? d.content_kinds : ALL_CONTENT_KIND_KEYS).includes(docKindFilter)).map((doc) => {
-                const ai = doc.ai_summary && typeof doc.ai_summary === 'object' ? doc.ai_summary : {};
-                const title = doc.title || ai.title || ai.document_title || 'Untitled';
-                const date = doc.taken_on || ai.date || ai.taken_on || null;
-                const clinic = doc.clinic || ai.clinic || ai.clinic_name || null;
-                const kinds = (doc.content_kinds && doc.content_kinds.length ? doc.content_kinds : ALL_CONTENT_KIND_KEYS);
-                const status = doc.ai_status || (ai.error ? 'failed' : null);
-                const reason = ai.reason || (status === 'missing_file' ? 'no_file' : null);
-                const failLabel = reason === 'no_file' || status === 'missing_file'
-                  ? 'File missing — re-upload'
-                  : reason === 'too_large'
-                    ? 'File too large — re-upload'
-                    : reason === 'unsupported_type'
-                      ? 'Unsupported file type'
-                      : status === 'failed'
-                        ? "AI couldn't read this"
-                        : null;
-                const unreviewed = (status === 'ready' || status === 'parsed') && ai.applied !== true;
-                const confirmed = status === 'confirmed' || ai.applied === true;
-                const nItems = pendingItemCount(doc);
-                const statusLabel = status === 'processing'
-                  ? 'Processing'
-                  : unreviewed
-                    ? `Review ${nItems || 0} item${nItems === 1 ? '' : 's'}`
-                    : confirmed
-                      ? 'Confirmed'
-                      : (status === 'failed' || status === 'missing_file')
-                        ? 'Failed'
-                        : 'Uploaded';
-                const statusTone = status === 'processing'
-                  ? { bg: Colors.standardBg, fg: Colors.navy }
-                  : unreviewed
-                    ? { bg: Colors.urgentBg || '#FCF4DF', fg: Colors.urgent || '#E5A415' }
-                    : confirmed
-                      ? { bg: Colors.tealBg, fg: Colors.tealDark }
-                      : (status === 'failed' || status === 'missing_file')
-                        ? { bg: Colors.criticalBg, fg: Colors.critical }
-                        : { bg: Colors.surface, fg: Colors.textSecondary };
-                return (
-                <View key={doc.id} style={styles.docCard}>
-                  <TouchableOpacity style={styles.docMain} onPress={() => {
-                    if (unreviewed && canEdit) openConfirmFromParse(doc.id, ai);
-                    else openDocUrl(doc);
-                  }} activeOpacity={0.85}>
-                    <View style={styles.docIcon}>
-                      {status === 'processing' ? <ActivityIndicator color={Colors.navy} size="small" /> : <FileText color={Colors.navy} size={18} />}
-                    </View>
-                    <View style={styles.docInfo}>
-                      <Text style={styles.docTitle}>{title}</Text>
-                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
-                        {kinds.map((k) => {
-                          const label = CONTENT_KINDS.find((c) => c.key === k)?.label || k;
-                          return (
-                            <View key={k} style={styles.docTypePill}>
-                              <Text style={styles.docTypePillTxt}>{label}</Text>
-                            </View>
-                          );
-                        })}
-                        <View style={[styles.docTypePill, { backgroundColor: statusTone.bg }]}>
-                          <Text style={[styles.docTypePillTxt, { color: statusTone.fg }]}>{statusLabel}</Text>
-                        </View>
-                      </View>
-                      {failLabel ? <Text style={styles.docClinic}>{failLabel}</Text> : null}
-                      {date ? <Text style={styles.docDate}>{formatDate(String(date))}</Text> : null}
-                      {clinic ? <Text style={styles.docClinic}>{String(clinic)}</Text> : null}
-                    </View>
+            ) : DOC_ACCORDIONS.map((section) => {
+              const items = documents.filter((d) => docAccordionKeys(d).includes(section.key));
+              if (section.key === 'other' && items.length === 0) return null;
+              const open = Boolean(docOpen[section.key] || docKindFilter === section.key);
+              return (
+                <View key={section.key} style={styles.docAccord}>
+                  <TouchableOpacity
+                    style={styles.docAccordHead}
+                    onPress={() => setDocOpen((prev) => ({ ...prev, [section.key]: !open }))}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.docAccordTitle}>{section.label}</Text>
+                    <Text style={styles.docAccordMeta}>{items.length} · {open ? 'Hide' : 'Show'}</Text>
                   </TouchableOpacity>
-                  {canEdit && unreviewed ? (
-                    <TouchableOpacity style={styles.docDeleteBtn} onPress={() => openConfirmFromParse(doc.id, ai)} activeOpacity={0.85}>
-                      <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.coral }}>Review</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                  {canEdit && (status === 'failed' || status === 'missing_file') ? (
-                    <>
-                      <TouchableOpacity style={styles.docDeleteBtn} onPress={() => {
-                        parsedAttempted.current.delete(doc.id);
-                        void triggerExtraction(doc.id, { path: doc.file_path, kinds: doc.content_kinds || undefined }, false);
-                      }} activeOpacity={0.85}>
-                        <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Retry</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.docDeleteBtn} onPress={() => {
-                        setTab('medical');
-                        showBanner('Add vaccinations, labs, or visits with Add manually.', 'info');
-                      }} activeOpacity={0.85}>
-                        <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Add manually</Text>
-                      </TouchableOpacity>
-                    </>
-                  ) : null}
-                  {canEdit ? (
-                    <TouchableOpacity style={styles.docDeleteBtn} onPress={() => deleteDoc(doc)} activeOpacity={0.85}>
-                      <Trash2 color={Colors.critical} size={14} />
-                    </TouchableOpacity>
+                  {open ? (
+                    items.length === 0
+                      ? <Text style={styles.emptyText}>No {section.label.toLowerCase()} documents.</Text>
+                      : items.map(renderDocRow)
                   ) : null}
                 </View>
-                );
-              })
-            )}
+              );
+            })}
             </View>
         )}
 
@@ -4492,7 +4527,18 @@ const styles = StyleSheet.create({
   condEditText: { fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.navy },
   condDeleteBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: Colors.critical },
 
-  docCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.white, borderRadius: 14, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: Colors.border },
+  docDash: { backgroundColor: Colors.white, borderRadius: 16, borderWidth: 1.5, borderColor: Colors.navy, padding: 14, gap: 12, marginBottom: 12 },
+  docDashCounts: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+  docDashTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.navy },
+  docDashTxtOn: { color: Colors.coral },
+  docDashDot: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.textTertiary },
+  docUploadBtn: { alignSelf: 'flex-start', backgroundColor: Colors.coral, borderRadius: 999, paddingHorizontal: 16, paddingVertical: 8 },
+  docUploadTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.white },
+  docAccord: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, marginBottom: 8, overflow: 'hidden' },
+  docAccordHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12 },
+  docAccordTitle: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.navy },
+  docAccordMeta: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.tealDark },
+    docCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.white, borderRadius: 14, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: Colors.border },
   docMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
   docIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
   docInfo: { flex: 1 },

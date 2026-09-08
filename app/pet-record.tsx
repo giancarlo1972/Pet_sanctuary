@@ -52,7 +52,7 @@ import { isUsablePhoto } from '@/lib/photos';
 import { ConfirmDialog, type ConfirmConfig } from '@/components/ConfirmDialog';
 import { VetVaccinationModal, type Vaccination as FullVaccination, type VetClinic as ClinicInfo } from '@/components/VetVaccinationModal';
 import { VetClinics } from '@/components/VetClinics';
-import { VetSummaryExport, type SummaryData } from '@/components/VetSummaryExport';
+import { exportVetSummaryTxt, exportVetSummaryPdf } from '@/components/VetSummaryExport';
 import SignedImage from '@/components/SignedImage';
 import { useSignedUrls } from '@/hooks/useSignedUrls';
 import { Colors } from '@/constants/Colors';
@@ -633,6 +633,7 @@ export default function PetRecordScreen() {
   const [tab, setTab] = useState<Tab>('overview');
   const [docKindFilter, setDocKindFilter] = useState<string | null>(null);
   const [docOpen, setDocOpen] = useState<Record<string, boolean>>({});
+  const [dashMenu, setDashMenu] = useState(false);
   const [openMed, setOpenMed] = useState<Record<string, boolean>>({ vaccinations: true });
   const [examNote, setExamNote] = useState<string | null>(null);
   const [petExams, setPetExams] = useState<any[]>([]);
@@ -3047,6 +3048,7 @@ export default function PetRecordScreen() {
                 setAiShared(true);
               }}
               onSelectRun={(r) => setAiFindings({ ...r, ran_at: r.created_at, conclusion: r.conclusion || r.summary })}
+              onMenu={() => setDashMenu(true)}
             />
             <TouchableOpacity onPress={() => toggleMed('records')} style={styles.ovCardHead}>
               <Text style={styles.ovKicker}>RECORDS</Text>
@@ -3061,11 +3063,6 @@ export default function PetRecordScreen() {
                 <Heart color={Colors.navy} size={18} />
                 <Text style={styles.subHeaderText}>Conditions & Allergies</Text>
               </View>
-              {canEdit && (
-                <TouchableOpacity onPress={openAddCondition} activeOpacity={0.85}>
-                  <Text style={styles.addLink}>Add manually</Text>
-                </TouchableOpacity>
-              )}
             </View>
 
             {conditions.length === 0 ? (
@@ -3137,11 +3134,6 @@ export default function PetRecordScreen() {
                 <Syringe color={Colors.navy} size={18} />
                 <Text style={styles.subHeaderText}>Vaccinations</Text>
               </View>
-              {canEdit && (
-                <TouchableOpacity onPress={openAddVax} activeOpacity={0.85}>
-                  <Text style={styles.addLink}>Add manually</Text>
-                </TouchableOpacity>
-              )}
             </View>
 
             {vaccinations.length === 0 ? (
@@ -3205,47 +3197,6 @@ export default function PetRecordScreen() {
                 );
               })
             )}
-
-            {/* Vet Summary Export */}
-            <VetSummaryExport data={{
-              pet: {
-                name: pet.name,
-                species: pet.species,
-                breed: breedDisplay,
-                gender: pet.gender,
-                date_of_birth: pet.date_of_birth,
-                microchipped: pet.microchipped,
-                spayed_neutered: pet.spayed_neutered,
-                weight_lb: latestLb,
-                weight_kg: pet.weight_kg,
-                body_condition_score: lastExam?.vitals?.bcs ?? pet.body_condition_score,
-                target_weight_lb: targetLb,
-                target_weight_kg: pet.target_weight_kg,
-                previous_names: pet.previous_names,
-                weight_unit: 'lb',
-              },
-              vaccinations: vaccinations.map((v) => ({
-                vaccine: v.vaccine,
-                administered_on: v.administered_on,
-                next_due_on: v.next_due_on,
-                lot_number: v.lot_number,
-                manufacturer: v.manufacturer,
-                vet_clinic: v.vet_clinic,
-                vet_name: v.vet_name,
-                superseded: v.superseded,
-              })),
-              conditions: conditions.map((c) => ({
-                kind: c.kind,
-                name: c.name,
-                severity: c.severity,
-                diagnosed_on: c.diagnosed_on,
-                is_active: c.is_active,
-              })),
-              lastExam,
-              meds: medsGiven,
-              labs: labRows,
-              clinics: [],
-            }} />
 
             {/* Medical Records */}
             {medicalRecords.length > 0 ? (
@@ -3507,7 +3458,14 @@ export default function PetRecordScreen() {
               ) : null}
             </View>
             {documents.length === 0 ? (
-              <Text style={styles.emptyText}>No documents uploaded. File is required — AI fills title, date, and clinic.</Text>
+              <View style={{ paddingVertical: 20, alignItems: 'center', gap: 12 }}>
+                <Text style={styles.emptyText}>No documents uploaded. File is required — AI fills title, date, and clinic.</Text>
+                {canEdit ? (
+                  <TouchableOpacity style={styles.docUploadHero} onPress={openAddDoc} activeOpacity={0.85}>
+                    <Text style={styles.docUploadHeroTxt}>Upload document</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
             ) : DOC_ACCORDIONS.map((section) => {
               const items = documents.filter((d) => docAccordionKeys(d).includes(section.key));
               if (section.key === 'other' && items.length === 0) return null;
@@ -4014,6 +3972,58 @@ export default function PetRecordScreen() {
             </View>
           </ScrollView>
         </View>
+      </Modal>
+
+      <Modal visible={dashMenu} animationType="fade" transparent onRequestClose={() => setDashMenu(false)}>
+        <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setDashMenu(false)}>
+          <View style={styles.menuCard}>
+            <Text style={styles.menuTitle}>Export</Text>
+            <TouchableOpacity style={styles.menuRow} onPress={() => {
+              if (!pet) return;
+              exportVetSummaryTxt({
+                pet: {
+                  name: pet.name, species: pet.species, breed: breedDisplay, gender: pet.gender,
+                  date_of_birth: pet.date_of_birth, microchipped: pet.microchipped, spayed_neutered: pet.spayed_neutered,
+                  weight_lb: latestLb, weight_kg: pet.weight_kg,
+                  body_condition_score: lastExam?.vitals?.bcs ?? pet.body_condition_score,
+                  target_weight_lb: targetLb, target_weight_kg: pet.target_weight_kg,
+                  previous_names: pet.previous_names, weight_unit: 'lb',
+                },
+                vaccinations: vaccinations.map((v) => ({
+                  vaccine: v.vaccine, administered_on: v.administered_on, next_due_on: v.next_due_on,
+                  lot_number: v.lot_number, manufacturer: v.manufacturer, vet_clinic: v.vet_clinic, vet_name: v.vet_name, superseded: v.superseded,
+                })),
+                conditions: conditions.map((c) => ({ kind: c.kind, name: c.name, severity: c.severity, diagnosed_on: c.diagnosed_on, is_active: c.is_active })),
+                lastExam, meds: medsGiven, labs: labRows, clinics: [],
+              });
+              setDashMenu(false);
+            }} activeOpacity={0.85}>
+              <Text style={styles.menuRowTxt}>Export .txt</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuRow} onPress={async () => {
+              if (!pet) return;
+              await exportVetSummaryPdf({
+                pet: {
+                  name: pet.name, species: pet.species, breed: breedDisplay, gender: pet.gender,
+                  date_of_birth: pet.date_of_birth, microchipped: pet.microchipped, spayed_neutered: pet.spayed_neutered,
+                  weight_lb: latestLb, weight_kg: pet.weight_kg,
+                  body_condition_score: lastExam?.vitals?.bcs ?? pet.body_condition_score,
+                  target_weight_lb: targetLb, target_weight_kg: pet.target_weight_kg,
+                  previous_names: pet.previous_names, weight_unit: 'lb',
+                },
+                vaccinations: vaccinations.map((v) => ({
+                  vaccine: v.vaccine, administered_on: v.administered_on, next_due_on: v.next_due_on,
+                  lot_number: v.lot_number, manufacturer: v.manufacturer, vet_clinic: v.vet_clinic, vet_name: v.vet_name, superseded: v.superseded,
+                })),
+                conditions: conditions.map((c) => ({ kind: c.kind, name: c.name, severity: c.severity, diagnosed_on: c.diagnosed_on, is_active: c.is_active })),
+                lastExam, meds: medsGiven, labs: labRows, clinics: [],
+              });
+              setDashMenu(false);
+            }} activeOpacity={0.85}>
+              <Text style={styles.menuRowTxt}>Export PDF</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
       </Modal>
 
       <ConfirmDialog config={confirmConfig} onClose={() => setConfirmConfig(null)} />
@@ -4549,6 +4559,13 @@ const styles = StyleSheet.create({
   docDashDot: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.textTertiary },
   docUploadBtn: { alignSelf: 'flex-start', backgroundColor: Colors.coral, borderRadius: 999, paddingHorizontal: 16, paddingVertical: 8 },
   docUploadTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.white },
+  docUploadHero: { backgroundColor: Colors.coral, borderRadius: 14, paddingHorizontal: 28, paddingVertical: 16, minWidth: 220, alignItems: 'center' },
+  docUploadHeroTxt: { fontFamily: Fonts.bold, fontSize: 16, color: Colors.white },
+  menuOverlay: { flex: 1, backgroundColor: 'rgba(38,38,94,0.35)', justifyContent: 'flex-start', alignItems: 'flex-end', paddingTop: 120, paddingRight: 20 },
+  menuCard: { backgroundColor: Colors.white, borderRadius: 14, minWidth: 200, paddingVertical: 8, borderWidth: 1, borderColor: Colors.border },
+  menuTitle: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.textTertiary, paddingHorizontal: 14, paddingVertical: 6 },
+  menuRow: { paddingHorizontal: 14, paddingVertical: 12 },
+  menuRowTxt: { fontFamily: Fonts.bold, fontSize: 15, color: Colors.navy },
   docAccord: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, marginBottom: 8, overflow: 'hidden' },
   docAccordHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12 },
   docAccordTitle: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.navy },

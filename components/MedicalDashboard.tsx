@@ -55,6 +55,7 @@ export default function MedicalDashboard(props: {
   onUploadRecord?: () => void;
   docCounts?: { labs: number; vaccines: number; records: number };
   onOpenDocs?: (kind: 'labs' | 'vaccinations' | 'exam_visit') => void;
+  onMenu?: () => void;
 }) {
   const [labOpen, setLabOpen] = useState<Record<string, boolean>>({ Hematology: true, Chemistry: true, Endocrinology: true, Urinalysis: true });
 
@@ -164,6 +165,11 @@ export default function MedicalDashboard(props: {
   return (
     <View style={{ gap: 16 }}>
       <View style={styles.navy}>
+        {props.onMenu ? (
+          <TouchableOpacity style={styles.menuBtn} onPress={props.onMenu} activeOpacity={0.85} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Text style={styles.menuTxt}>⋮</Text>
+          </TouchableOpacity>
+        ) : null}
         <View style={styles.kpiRow}>
           <View style={styles.kpi}>
             <Text style={styles.kpiKLight}>Health score</Text>
@@ -380,7 +386,9 @@ export default function MedicalDashboard(props: {
 }
 
 const styles = StyleSheet.create({
-  navy: { backgroundColor: '#26265E', borderRadius: 16, padding: 16, gap: 12 },
+  navy: { backgroundColor: '#26265E', borderRadius: 16, padding: 16, gap: 12, position: 'relative' },
+  menuBtn: { position: 'absolute', top: 8, right: 8, zIndex: 2, width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
+  menuTxt: { color: Colors.white, fontSize: 22, lineHeight: 24, fontFamily: Fonts.bold },
   kpiRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   kpiTile: { width: '48%', backgroundColor: Colors.white, borderRadius: 16, padding: 14, minHeight: 118, overflow: 'hidden', gap: 4 },
   kpiVDark: { fontFamily: Fonts.extrabold, fontSize: 26, color: Colors.navy },

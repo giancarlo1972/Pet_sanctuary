@@ -184,51 +184,47 @@ function generateHtml(data: SummaryData) {
   </body></html>`;
 }
 
+export function exportVetSummaryTxt(data: SummaryData) {
+  const text = '\uFEFF' + generateVetSummaryText(data);
+  if (typeof window !== 'undefined') {
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `vet-summary-${data.pet.name || 'pet'}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+}
+
+export async function exportVetSummaryPdf(data: SummaryData) {
+  const html = generateHtml(data);
+  try {
+    const Print = await import('expo-print');
+    await Print.printAsync({ html });
+  } catch {
+    if (typeof window !== 'undefined') {
+      const w = window.open('', '_blank');
+      if (w) {
+        w.document.write(html);
+        w.document.close();
+        w.focus();
+        w.print();
+      }
+    }
+  }
+}
+
 export function VetSummaryExport({ data }: { data: SummaryData }) {
   const [busy, setBusy] = useState(false);
-
-  const downloadTxt = () => {
-    const text = '\uFEFF' + generateVetSummaryText(data);
-    if (typeof window !== 'undefined') {
-      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `vet-summary-${data.pet.name || 'pet'}.txt`;
-      a.click();
-      URL.revokeObjectURL(url);
-    }
-  };
-
-  const downloadPdf = async () => {
-    setBusy(true);
-    const html = generateHtml(data);
-    try {
-      const Print = await import('expo-print');
-      await Print.printAsync({ html });
-    } catch {
-      if (typeof window !== 'undefined') {
-        const w = window.open('', '_blank');
-        if (w) {
-          w.document.write(html);
-          w.document.close();
-          w.focus();
-          w.print();
-        }
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <View style={styles.container}>
       <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-        <TouchableOpacity style={styles.exportBtn} onPress={downloadTxt} activeOpacity={0.85}>
+        <TouchableOpacity style={styles.exportBtn} onPress={() => exportVetSummaryTxt(data)} activeOpacity={0.85}>
           <Download color={Colors.navy} size={16} />
           <Text style={styles.exportText}>Export .txt</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.pdfBtn} onPress={downloadPdf} activeOpacity={0.85} disabled={busy}>
+        <TouchableOpacity style={styles.pdfBtn} onPress={async () => { setBusy(true); await exportVetSummaryPdf(data); setBusy(false); }} activeOpacity={0.85} disabled={busy}>
           {busy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.pdfText}>Export PDF</Text>}
         </TouchableOpacity>
       </View>

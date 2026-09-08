@@ -43,6 +43,8 @@ function mapPet(a) {
     photo_url: photoFrom(a),
     main_photo_url: photoFrom(a),
     location: a.animalLocationCitystate || null,
+    lat: Number(a.animalLocationLatitude) || null,
+    lng: Number(a.animalLocationLongitude) || null,
     status,
     vaccinated: yes(a.animalUptodate) || yes(a.animalShotsCurrent),
     spayed_neutered: yes(a.animalAltered),
@@ -63,6 +65,7 @@ export async function onRequestGet(context) {
   const petFields = [
     'animalID','animalName','animalBreed','animalSpecies','animalSex','animalGeneralAge','animalBirthdate','animalAgeString',
     'animalDescriptionPlain','animalThumbnailUrl','animalPictures','animalLocationCitystate',
+    'animalLocationLatitude','animalLocationLongitude',
     'animalStatus','animalAltered','animalMicrochipped','animalNeedsFoster','animalOrgID',
     'animalUptodate','animalShotsCurrent','animalUrl',
   ];

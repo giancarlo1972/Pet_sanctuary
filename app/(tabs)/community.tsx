@@ -810,10 +810,14 @@ export default function CommunityScreen() {
                         </View>
                         <TouchableOpacity
                           style={styles.bookBtn}
-                          onPress={() => router.push(user ? `/book-service?providerId=${p.user_id}` : '/auth')}
+                          onPress={() => {
+                            if (!user) { router.push('/auth'); return; }
+                            if (p.user_id === user.id) { router.push('/service-provider'); return; }
+                            router.push(`/book-service?providerId=${p.user_id}`);
+                          }}
                           activeOpacity={0.85}
                         >
-                          <Text style={styles.bookBtnTxt}>Request booking</Text>
+                          <Text style={styles.bookBtnTxt}>{user && p.user_id === user.id ? 'Edit your listing' : 'Request booking'}</Text>
                         </TouchableOpacity>
                       </View>
                     </View>

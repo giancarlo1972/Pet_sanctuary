@@ -71,14 +71,12 @@ interface FosterPet {
 interface ProviderRow {
   user_id: string;
   name: string;
+  avatar_url: string | null;
   services: string[];
+  is_volunteer: boolean;
   rating: number | null;
   reviews_count: number;
   radius_mi: number;
-  rate_text: string | null;
-  bio: string | null;
-  city: string;
-  verified: boolean;
 }
 
 const TYPE_FILTERS = ['All', 'Shelters', 'Rescue groups', 'Clinics', 'Sponsors'] as const;
@@ -162,6 +160,7 @@ export default function CommunityScreen() {
   const [confirmConfig, setConfirmConfig] = useState<ConfirmConfig | null>(null);
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [providersLoading, setProvidersLoading] = useState(false);
+  const [providersError, setProvidersError] = useState(false);
 
   useEffect(() => {
     if (params.seg === 'services') setActiveSegment('services');
@@ -277,36 +276,34 @@ export default function CommunityScreen() {
     setProvidersLoading(true);
     try {
       const { data, error } = await supabase
-        .from('service_provider_profiles')
-        .select('user_id, services, bio, rate_text, radius_mi, rating, reviews_count, verified')
+        .from('public_service_providers')
+        .select('user_id, full_name, avatar_url, services, is_volunteer, rating, reviews_count, radius_mi, show_on_map')
         .limit(80);
-      if (error || !data) { setProviders([]); setProvidersLoading(false); return; }
-      const ids = data.map((d: any) => d.user_id);
-      const { data: profs } = ids.length
-        ? await supabase.from('profiles').select('id, full_name, address_city, address_state').in('id', ids)
-        : { data: [] as any[] };
-      const pmap: Record<string, any> = {};
-      (profs || []).forEach((p: any) => { pmap[p.id] = p; });
-      setProviders(data.map((d: any) => {
-        const p = pmap[d.user_id] || {};
-        return {
-          user_id: d.user_id,
-          name: p.full_name || 'Provider',
-          services: d.services || [],
-          rating: d.rating != null ? Number(d.rating) : null,
-          reviews_count: d.reviews_count || 0,
-          radius_mi: d.radius_mi || 10,
-          rate_text: d.rate_text,
-          bio: d.bio,
-          city: [p.address_city, p.address_state].filter(Boolean).join(', '),
-          verified: Boolean(d.verified),
-        } as ProviderRow;
-      }));
+      if (error) {
+        setProviders([]);
+        setProvidersError(true);
+        if (user) setBanner({ message: 'Could not load service providers.', kind: 'error' });
+        return;
+      }
+      setProvidersError(false);
+      setProviders((data || []).map((d: any) => ({
+        user_id: d.user_id,
+        name: d.full_name || 'Provider',
+        avatar_url: d.avatar_url || null,
+        services: d.services || [],
+        is_volunteer: Boolean(d.is_volunteer),
+        rating: d.rating != null ? Number(d.rating) : null,
+        reviews_count: d.reviews_count || 0,
+        radius_mi: d.radius_mi || 10,
+      })));
     } catch {
       setProviders([]);
+      setProvidersError(true);
+      if (user) setBanner({ message: 'Could not load service providers.', kind: 'error' });
+    } finally {
+      setProvidersLoading(false);
     }
-    setProvidersLoading(false);
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => { loadOrgs(); loadFosters(); loadStories(); loadProviders(); }, [loadOrgs, loadFosters, loadStories, loadProviders]);
   useFocusEffect(useCallback(() => { loadOrgs(); loadFosters(); loadStories(); loadProviders(); }, [loadOrgs, loadFosters, loadStories, loadProviders]));
@@ -538,7 +535,7 @@ export default function CommunityScreen() {
           </TouchableOpacity>
         ))}
       </View>
-      {loading ? (
+      {(loading && activeSegment !== 'services') ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={Colors.coral} />
         </View>
@@ -677,6 +674,21 @@ export default function CommunityScreen() {
                 <View style={styles.loadingContainer}>
                   <ActivityIndicator size="large" color={Colors.coral} />
                 </View>
+              ) : providersError && !user ? (
+                <View style={styles.emptyState}>
+                  <Sparkles color={Colors.textTertiary} size={40} />
+                  <Text style={styles.emptyTitle}>Sign in to see service providers</Text>
+                  <Text style={styles.emptyDesc}>Sitters, walkers, and trainers list their services here.</Text>
+                  <TouchableOpacity style={styles.signInBtn} onPress={() => router.push('/auth')} activeOpacity={0.85}>
+                    <Text style={styles.signInBtnText}>Sign in</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : providersError ? (
+                <View style={styles.emptyState}>
+                  <Sparkles color={Colors.textTertiary} size={40} />
+                  <Text style={styles.emptyTitle}>Could not load service providers</Text>
+                  <Text style={styles.emptyDesc}>Pull to refresh and try again.</Text>
+                </View>
               ) : providers.length === 0 ? (
                 <View style={styles.emptyState}>
                   <Sparkles color={Colors.textTertiary} size={40} />
@@ -690,18 +702,27 @@ export default function CommunityScreen() {
                   const rating = p.rating != null ? `${p.rating.toFixed(1)}★ · ${p.reviews_count} review${p.reviews_count === 1 ? '' : 's'}` : 'New';
                   return (
                     <View key={p.user_id} style={styles.orgRow}>
-                      <View style={[styles.orgInitialTile, { backgroundColor: Colors.teal }]}>
-                        <Text style={styles.orgInitialText}>✦</Text>
+                      <View style={[styles.orgInitialTile, { backgroundColor: Colors.teal, overflow: 'hidden' }]}>
+                        {p.avatar_url ? (
+                          <Image source={{ uri: p.avatar_url }} style={styles.providerAvatar} />
+                        ) : (
+                          <Text style={styles.orgInitialText}>✦</Text>
+                        )}
                       </View>
                       <View style={styles.orgInfo}>
                         <View style={styles.orgNameRow}>
                           <Text style={styles.orgName} numberOfLines={1}>{p.name}</Text>
-                          {p.verified ? <ShieldCheck color={Colors.teal} size={15} /> : null}
+                          {p.is_volunteer ? <ShieldCheck color={Colors.teal} size={15} /> : null}
                         </View>
                         <Text style={styles.orgMeta} numberOfLines={1}>
-                          {[rating, p.city, `${p.radius_mi} mi`, p.rate_text].filter(Boolean).join(' · ')}
+                          {[rating, `${p.radius_mi} mi`].filter(Boolean).join(' · ')}
                         </Text>
                         <View style={styles.fosterChipsRow}>
+                          {p.is_volunteer ? (
+                            <View style={styles.fosterChip}>
+                              <Text style={styles.fosterChipText}>Volunteer</Text>
+                            </View>
+                          ) : null}
                           {(p.services || []).slice(0, 4).map((k) => (
                             <View key={k} style={styles.fosterChip}>
                               <Text style={styles.fosterChipText}>{PROVIDER_SERVICES.find((x) => x.key === k)?.label || k}</Text>
@@ -975,6 +996,11 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.textSecondary,
     textAlign: 'center', marginTop: 8,
   },
+  signInBtn: {
+    backgroundColor: Colors.coral, borderRadius: 14, paddingHorizontal: 24, paddingVertical: 14, marginTop: 16,
+  },
+  signInBtnText: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.white },
+  providerAvatar: { width: 44, height: 44, borderRadius: 12 },
   bookBtn: {
     alignSelf: 'flex-start', marginTop: 8, backgroundColor: Colors.teal,
     borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,

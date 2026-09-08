@@ -3538,7 +3538,7 @@ export default function PetRecordScreen() {
                 const add = (name?: string | null, date?: string | null, extra?: { phone?: string | null; address?: string | null; isDoc?: boolean }) => {
                   const n = String(name || '').trim();
                   if (!n) return;
-                  const key = n.toLowerCase().replace(/\s+/g, ' ');
+                  const key = n;
                   const cur = map.get(key) || { name: n, phone: null as string | null, address: null as string | null, docCount: 0, dates: [] as string[] };
                   if (extra?.phone && !cur.phone) cur.phone = extra.phone;
                   if (extra?.address && !cur.address) cur.address = extra.address;
@@ -3984,7 +3984,15 @@ export default function PetRecordScreen() {
               <Text style={styles.modalLabel}>Date (optional — AI will fill)</Text>
               <TextInput style={styles.modalInput} value={docForm.taken_on} onChangeText={(v) => setDocForm((p) => ({ ...p, taken_on: v }))} placeholder="YYYY-MM-DD" placeholderTextColor={Colors.textTertiary} />
               <Text style={styles.modalLabel}>Clinic (optional — AI will fill)</Text>
-              <TextInput style={styles.modalInput} value={docForm.clinic} onChangeText={(v) => setDocForm((p) => ({ ...p, clinic: v }))} placeholder="Clinic name" placeholderTextColor={Colors.textTertiary} />
+              <SearchablePicker
+                items={clinics.map((c) => ({ id: c.id, name: c.name, label: c.name, sub: c.address || undefined }))}
+                value={clinics.find((c) => c.name === docForm.clinic)?.id || null}
+                onChange={(_id, item) => setDocForm((p) => ({ ...p, clinic: item?.name || '' }))}
+                onCustom={(label) => setDocForm((p) => ({ ...p, clinic: label }))}
+                placeholder="Search clinics…"
+                allowCustom
+              />
+              {docForm.clinic ? <Text style={styles.docClinic}>{docForm.clinic}</Text> : null}
               {docError ? (
                 <InlineBanner message={docError} kind="error" onDismiss={() => setDocError(null)} />
               ) : null}

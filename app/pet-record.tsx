@@ -695,6 +695,7 @@ export default function PetRecordScreen() {
   });
   const [docFile, setDocFile] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [savingDoc, setSavingDoc] = useState(false);
+  const [docError, setDocError] = useState<string | null>(null);
 
   const [extracting, setExtracting] = useState(false);
   const [extractionReview, setExtractionReview] = useState<{
@@ -1383,10 +1384,12 @@ export default function PetRecordScreen() {
   const openAddDoc = () => {
     setDocForm({ kind: 'medical_record', title: '', taken_on: '', clinic: '', notes: '' });
     setDocFile(null);
+    setDocError(null);
     setDocModalVisible(true);
   };
 
   const pickDocFile = async () => {
+    setDocError(null);
     if (Platform.OS === 'web') {
       const input = document.createElement('input');
       input.type = 'file';
@@ -1394,14 +1397,20 @@ export default function PetRecordScreen() {
       input.onchange = (e) => {
         const file = (e.target as HTMLInputElement).files?.[0];
         if (file) {
-          setDocFile({ uri: URL.createObjectURL(file), name: file.name, mimeType: file.type } as any);
+          setDocFile({
+            uri: URL.createObjectURL(file),
+            name: file.name,
+            mimeType: file.type,
+            fileSize: file.size,
+            file,
+          } as any);
         }
       };
       input.click();
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images', 'videos'],
+      mediaTypes: ['images'],
       allowsEditing: false,
       quality: 0.8,
     });
@@ -1411,36 +1420,54 @@ export default function PetRecordScreen() {
   };
 
   const saveDoc = async () => {
-    if (!petId || !user || !docFile) return;
+    const fail = (message: string, extra?: { path?: string | null; size?: number | null; error?: any }) => {
+      const line = {
+        bucket: 'pet-documents',
+        path: extra?.path ?? null,
+        size: extra?.size ?? (docFile as any)?.fileSize ?? null,
+        error: extra?.error ?? message,
+      };
+      console.error('[upload]', line);
+      setDocError(message);
+      showBanner(message);
+    };
+    if (!docFile) { fail('Choose a file first.'); return; }
+    if (!petId) { fail('Missing pet id.'); return; }
+    if (!user) { fail('Sign in to upload.'); return; }
+    setDocError(null);
     setSavingDoc(true);
+    let dest = '';
+    let size = 0;
     try {
       const originalName = originalFileName(docFile);
       const mimeGuess = String((docFile as any).mimeType || (docFile as any).type || '');
-      if (!docFile.uri) throw new Error('No file selected.');
-      const resp = await fetch(docFile.uri);
-      if (!resp.ok) throw new Error(`Could not read file (${resp.status})`);
-      const blob = await resp.blob();
+      const nativeFile: File | undefined = (docFile as any).file;
+      if (!nativeFile && !docFile.uri) throw new Error('No file selected.');
+      const blob: Blob = nativeFile || await (await fetch(docFile.uri)).blob();
       const isPdf = /pdf/i.test(mimeGuess) || /\.pdf$/i.test(originalName) || /pdf/i.test(blob.type);
       let body: Blob = blob;
       let contentType = blob.type || mimeGuess || (isPdf ? 'application/pdf' : 'image/jpeg');
       let ext = (originalName.split('.').pop() || '').toLowerCase();
-      if (!isPdf && typeof File !== 'undefined') {
+      if (!isPdf && (blob.size > 1_500_000 || /image\//i.test(contentType))) {
         try {
-          const file = new File([blob], originalName, { type: contentType });
-          const prepared = await prepareImageFile(file);
-          body = prepared.blob;
-          contentType = prepared.mediaType;
-          ext = 'jpg';
+          const file = nativeFile || (typeof File !== 'undefined' ? new File([blob], originalName, { type: contentType }) : null);
+          if (file && file.size > 1_500_000) {
+            const prepared = await prepareImageFile(file as File);
+            body = prepared.blob;
+            contentType = prepared.mediaType;
+            ext = 'jpg';
+          }
         } catch (e) {
-          console.warn('[pet-record] image compress skipped', e);
+          console.warn('[upload] image compress skipped', e);
         }
       }
       if (!ext || ext.length > 5) ext = isPdf ? 'pdf' : 'jpg';
-      const dest = `${petId}/${Date.now()}.${ext}`;
-      const buf = await body.arrayBuffer();
-      let up = await supabase.storage.from('pet-documents').upload(dest, buf, { contentType, upsert: false });
+      dest = `${petId}/${Date.now()}.${ext}`;
+      size = body.size;
+      console.log('[upload]', { bucket: 'pet-documents', path: dest, size, error: null });
+      let up = await supabase.storage.from('pet-documents').upload(dest, body, { contentType, upsert: false });
       if (up.error && Platform.OS !== 'web') {
-        console.warn('[pet-record] arrayBuffer upload failed, retrying FormData', {
+        console.warn('[upload] arrayBuffer upload failed, retrying FormData', {
           message: up.error.message,
           name: up.error.name,
           statusCode: (up.error as any).statusCode,
@@ -1450,19 +1477,11 @@ export default function PetRecordScreen() {
         up = await supabase.storage.from('pet-documents').upload(dest, fd as any, { contentType, upsert: true });
       }
       if (up.error) {
-        console.error('[pet-record] storage upload', {
-          message: up.error.message,
-          name: up.error.name,
-          statusCode: (up.error as any).statusCode,
-          dest,
-          contentType,
-          size: body.size,
-          error: up.error,
-        });
-        showBanner(up.error.message || 'Could not upload document.');
+        fail(up.error.message || 'Could not upload document.', { path: dest, size, error: up.error.message });
         return;
       }
       const storedPath = up.data?.path || dest;
+      console.log('[upload]', { bucket: 'pet-documents', path: storedPath, size, error: null });
       const title = docForm.title.trim() || originalName;
       const { data: docData, error: insErr } = await supabase.from('pet_documents').insert({
         pet_id: petId,
@@ -1476,8 +1495,7 @@ export default function PetRecordScreen() {
         ai_status: 'processing',
       }).select().single();
       if (insErr) {
-        console.error('[pet-record] doc insert after upload:', insErr);
-        showBanner(insErr.message || 'Uploaded, but could not save the record.');
+        fail(insErr.message || 'Uploaded, but could not save the record.', { path: storedPath, size, error: insErr.message });
         return;
       }
       setDocModalVisible(false);
@@ -1509,8 +1527,7 @@ export default function PetRecordScreen() {
         });
       }
     } catch (e: any) {
-      console.error('[pet-record] saveDoc', e);
-      showBanner(e?.message || 'Could not upload document.');
+      fail(e?.message || 'Could not upload document.', { path: dest || null, size, error: e?.message });
     } finally {
       setSavingDoc(false);
     }
@@ -3707,11 +3724,19 @@ export default function PetRecordScreen() {
               <Text style={styles.modalLabel}>Notes</Text>
               <TextInput style={[styles.modalInput, styles.modalInputMultiline]} value={docForm.notes} onChangeText={(v) => setDocForm((p) => ({ ...p, notes: v }))} placeholder="Findings, observations" placeholderTextColor={Colors.textTertiary} multiline numberOfLines={3} />
               <Text style={styles.modalLabel}>File *</Text>
-              <TouchableOpacity style={styles.filePickBtn} onPress={pickDocFile} activeOpacity={0.85}>
+              <TouchableOpacity style={styles.filePickBtn} onPress={pickDocFile} disabled={savingDoc} activeOpacity={0.85}>
                 <FileText color={Colors.navy} size={18} />
-                <Text style={styles.filePickText}>{docFile ? 'File selected' : 'Choose file...'}</Text>
+                <Text style={styles.filePickText}>{docFile ? ((docFile as any).name || 'File selected') : 'Choose file...'}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.modalSubmitBtn, savingDoc && styles.btnDisabled]} onPress={saveDoc} disabled={savingDoc || !docFile} activeOpacity={0.85}>
+              {docError ? (
+                <InlineBanner message={docError} kind="error" onDismiss={() => setDocError(null)} />
+              ) : null}
+              <TouchableOpacity
+                style={[styles.modalSubmitBtn, (savingDoc || !docFile) && styles.btnDisabled]}
+                onPress={saveDoc}
+                disabled={savingDoc || !docFile}
+                activeOpacity={0.85}
+              >
                 {savingDoc ? <ActivityIndicator size="small" color={Colors.white} /> : <Text style={styles.modalSubmitText}>Upload Document</Text>}
               </TouchableOpacity>
             </View>

@@ -51,7 +51,6 @@ import { prepareImageFile } from '@/lib/prepare-image';
 import { isUsablePhoto } from '@/lib/photos';
 import { ConfirmDialog, type ConfirmConfig } from '@/components/ConfirmDialog';
 import { VetVaccinationModal, type Vaccination as FullVaccination, type VetClinic as ClinicInfo } from '@/components/VetVaccinationModal';
-import { VetLabResults } from '@/components/VetLabResults';
 import { VetClinics } from '@/components/VetClinics';
 import { VetSummaryExport, type SummaryData } from '@/components/VetSummaryExport';
 import SignedImage from '@/components/SignedImage';
@@ -104,7 +103,7 @@ async function fileToDataUrl(uri: string): Promise<string> {
   });
 }
 
-type Tab = 'overview' | 'insurance' | 'medical';
+type Tab = 'overview' | 'medical' | 'insurance' | 'documents' | 'clinics';
 
 const EXAM_SYSTEMS = [
   'Subjective', 'Oral-Nasal-Throat', 'Ears', 'Eyes', 'Cardiovascular', 'Respiratory',
@@ -617,7 +616,7 @@ export default function PetRecordScreen() {
 
   const [pet, setPet] = useState<Pet | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
-  const [medSub, setMedSub] = useState<'summary' | 'documents'>('summary');
+  const [docKindFilter, setDocKindFilter] = useState<string | null>(null);
   const [openMed, setOpenMed] = useState<Record<string, boolean>>({ vaccinations: true });
   const [examNote, setExamNote] = useState<string | null>(null);
   const [petExams, setPetExams] = useState<any[]>([]);
@@ -1404,8 +1403,8 @@ export default function PetRecordScreen() {
     });
     setDocFile(null);
     setDocError(null);
-    setMedSub('documents');
-    setTab('medical');
+    setDocKindFilter(null);
+    setTab('documents');
     setDocModalVisible(true);
   };
 
@@ -2336,8 +2335,10 @@ export default function PetRecordScreen() {
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'overview', label: 'Overview' },
-    { key: 'insurance', label: 'Insurance' },
     { key: 'medical', label: 'Medical' },
+    { key: 'insurance', label: 'Insurance' },
+    { key: 'documents', label: 'Documents' },
+    { key: 'clinics', label: 'Clinics' },
   ];
   const displayPhoto = isUsablePhoto(pet.main_photo_url)
     ? pet.main_photo_url
@@ -2532,7 +2533,7 @@ export default function PetRecordScreen() {
             ...activeConditions.map((c) => `${c.name} ${c.severity || ''}`),
             ...medicalRecords.slice(0, 8).map((m) => `${m.title || ''} ${m.details || ''}`),
           ].join(' ')}
-          onUpload={() => { setTab('medical'); setMedSub('documents'); }}
+          onUpload={() => { setDocKindFilter(null); setTab('documents'); }}
         />
 
         {/* Tabs */}
@@ -2543,7 +2544,10 @@ export default function PetRecordScreen() {
               <TouchableOpacity
                 key={t.key}
                 style={[styles.pillTab, active && styles.pillTabOn]}
-                onPress={() => setTab(t.key)}
+                onPress={() => {
+                  if (t.key === 'documents') setDocKindFilter(null);
+                  setTab(t.key);
+                }}
                 activeOpacity={0.85}
               >
                 <Text style={[styles.pillTabTxt, active && styles.pillTabTxtOn]}>{t.label}</Text>
@@ -2558,7 +2562,7 @@ export default function PetRecordScreen() {
             <Card>
               <View style={styles.tileRow}>
                 <StatusTile icon={Syringe} label="Vaccinated" sub={vaxSub} tone={vaxTone} onPress={() => {
-                  if (pendingDocs[0]) { setTab('medical'); setMedSub('documents'); openConfirmFromParse(pendingDocs[0].id, pendingDocs[0].ai_summary || {}); }
+                  if (pendingDocs[0]) { setDocKindFilter(null); setTab('documents'); openConfirmFromParse(pendingDocs[0].id, pendingDocs[0].ai_summary || {}); }
                   else { setTab('medical'); }
                 }} />
                 <StatusTile icon={Heart} label="Spayed/Neutered" sub={pet.spayed_neutered ? 'Yes' : 'Not recorded'} tone={pet.spayed_neutered ? 'ok' : 'unknown'} />
@@ -2813,7 +2817,7 @@ export default function PetRecordScreen() {
                 <Text style={{ color: Colors.white, fontFamily: Fonts.bold }}>Connect Lemonade</Text>
               </TouchableOpacity>
               {canEdit ? (
-                <TouchableOpacity style={{ borderWidth: 1.5, borderColor: Colors.white, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 10 }} onPress={() => { setTab('medical'); setMedSub('documents'); }} activeOpacity={0.85}>
+                <TouchableOpacity style={{ borderWidth: 1.5, borderColor: Colors.white, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 10 }} onPress={() => { setDocKindFilter('insurance'); setTab('documents'); }} activeOpacity={0.85}>
                   <Text style={{ color: Colors.white, fontFamily: Fonts.bold }}>Open Documents</Text>
                 </TouchableOpacity>
               ) : null}
@@ -2827,16 +2831,6 @@ export default function PetRecordScreen() {
         {/* MEDICAL HUB */}
         {tab === 'medical' && (
           <View style={styles.tabContent}>
-            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-              <TouchableOpacity style={[styles.pillTab, medSub === 'summary' && styles.pillTabOn]} onPress={() => setMedSub('summary')} activeOpacity={0.85}>
-                <Text style={[styles.pillTabTxt, medSub === 'summary' && styles.pillTabTxtOn]}>Summary</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.pillTab, medSub === 'documents' && styles.pillTabOn]} onPress={() => setMedSub('documents')} activeOpacity={0.85}>
-                <Text style={[styles.pillTabTxt, medSub === 'documents' && styles.pillTabTxtOn]}>Documents</Text>
-              </TouchableOpacity>
-            </View>
-            {medSub === 'summary' && (
-            <View>
             <MedicalDashboard
               petName={pet.name || 'Pet'}
               verdict={healthVerdict}
@@ -2885,7 +2879,13 @@ export default function PetRecordScreen() {
               aiReady={aiReady}
               onAddWeight={openWeight}
               onAddDob={openDetailsSheet}
-              onUploadRecord={() => { setTab('medical'); setMedSub('documents'); }}
+              onUploadRecord={() => { setDocKindFilter(null); setTab('documents'); }}
+              docCounts={{
+                labs: documents.filter((d) => (d.content_kinds?.length ? d.content_kinds : ALL_CONTENT_KIND_KEYS).includes('labs')).length,
+                vaccines: documents.filter((d) => (d.content_kinds?.length ? d.content_kinds : ALL_CONTENT_KIND_KEYS).includes('vaccinations')).length,
+                records: documents.filter((d) => (d.content_kinds?.length ? d.content_kinds : ALL_CONTENT_KIND_KEYS).includes('exam_visit')).length,
+              }}
+              onOpenDocs={(kind) => { setDocKindFilter(kind); setTab('documents'); }}
               onRunAi={runAiHealth}
               onShareAi={async () => {
                 if (aiFindings?.id) await supabase.from('ai_health_analyses').update({ shared_with_vet_at: new Date().toISOString() }).eq('id', aiFindings.id);
@@ -2907,9 +2907,8 @@ export default function PetRecordScreen() {
                 <Text style={styles.subHeaderText}>Conditions & Allergies</Text>
               </View>
               {canEdit && (
-                <TouchableOpacity style={styles.addBtn} onPress={openAddCondition} activeOpacity={0.85}>
-                  <Plus color={Colors.coral} size={16} />
-                  <Text style={styles.addBtnText}>Add manually</Text>
+                <TouchableOpacity onPress={openAddCondition} activeOpacity={0.85}>
+                  <Text style={styles.addLink}>Add manually</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -2984,9 +2983,8 @@ export default function PetRecordScreen() {
                 <Text style={styles.subHeaderText}>Vaccinations</Text>
               </View>
               {canEdit && (
-                <TouchableOpacity style={styles.addBtn} onPress={openAddVax} activeOpacity={0.85}>
-                  <Plus color={Colors.coral} size={16} />
-                  <Text style={styles.addBtnText}>Add manually</Text>
+                <TouchableOpacity onPress={openAddVax} activeOpacity={0.85}>
+                  <Text style={styles.addLink}>Add manually</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -3095,16 +3093,15 @@ export default function PetRecordScreen() {
             }} />
 
             {/* Medical Records */}
+            {medicalRecords.length > 0 ? (
+            <>
             <View style={styles.subHeader}>
               <View style={styles.subHeaderLeft}>
                 <Stethoscope color={Colors.navy} size={18} />
                 <Text style={styles.subHeaderText}>Medical Records</Text>
               </View>
             </View>
-            {medicalRecords.length === 0 ? (
-              <Text style={styles.emptyText}>No medical records.</Text>
-            ) : (
-              medicalRecords.map((rec) => (
+            {medicalRecords.map((rec) => (
                 <View key={rec.id} style={styles.medCard}>
                   <View style={styles.medTopRow}>
                     <View style={styles.medBadge}>
@@ -3115,10 +3112,13 @@ export default function PetRecordScreen() {
                   </View>
                   {rec.title ? <Text style={styles.medTitle}>{rec.title}</Text> : null}
                 </View>
-              ))
-            )}
+            ))}
+            </>
+            ) : null}
           </View>
             )}
+            {labRows.length > 0 ? (
+            <>
             <TouchableOpacity onPress={() => toggleMed('labs')} style={styles.ovCardHead}>
               <Text style={styles.ovKicker}>LABS</Text>
               <Text style={styles.linkTxt}>{openMed.labs === false ? 'Show' : 'Hide'}</Text>
@@ -3144,7 +3144,7 @@ export default function PetRecordScreen() {
                     const flag = (cur.flag || '').toLowerCase();
                     return { key, label: cur.analyte || cur.name, cur, prev, delta, flag, nums: sorted.map((r) => parseFloat(r.value ?? r.value_num ?? r.value_text)).filter((n) => !isNaN(n)) };
                   });
-                  if (items.length === 0) return <VetLabResults petId={petId} userId={user!.id} clinics={clinics} canEdit={canEdit} />;
+                  if (items.length === 0) return null;
                   return (
                     <View style={{ gap: 8 }}>
                       {items.map((it) => (
@@ -3162,12 +3162,13 @@ export default function PetRecordScreen() {
                           {labSpark === it.key && it.nums.length > 1 ? <LabSparkline values={it.nums} color={it.flag === 'high' || it.flag === 'abnormal' ? Colors.critical : Colors.navy} /> : null}
                         </TouchableOpacity>
                       ))}
-                      <VetLabResults petId={petId} userId={user!.id} clinics={clinics} canEdit={canEdit} />
                     </View>
                   );
                 })()}
               </View>
             )}
+            </>
+            ) : null}
             <TouchableOpacity onPress={() => toggleMed('visits')} style={styles.ovCardHead}>
               <Text style={styles.ovKicker}>VISITS</Text>
               <Text style={styles.linkTxt}>{openMed.visits === false ? 'Show' : 'Hide'}</Text>
@@ -3180,7 +3181,6 @@ export default function PetRecordScreen() {
                   <WeightLineChart points={weightEntries.slice().reverse()} targetLb={targetLb} height={180} />
                 </View>
               ) : null}
-              <VetClinics petId={petId} userId={user!.id} canEdit={canEdit} />
 
             {!historyVisible ? (
               <View style={styles.historyLocked}>
@@ -3317,10 +3317,11 @@ export default function PetRecordScreen() {
                 ) : null}
               </View>
             )}
-            </View>
-            )}
-            {medSub === 'documents' && (
-            <View>
+          </View>
+        )}
+
+        {tab === 'documents' && (
+            <View style={styles.tabContent}>
             {canEdit && pendingDocs.length > 0 ? (
               <TouchableOpacity style={styles.reviewBanner} onPress={() => {
                 const d = pendingDocs[0];
@@ -3335,16 +3336,26 @@ export default function PetRecordScreen() {
                 <Text style={styles.subHeaderText}>Documents</Text>
               </View>
               {canEdit && (
-                <TouchableOpacity style={styles.addBtn} onPress={openAddDoc} activeOpacity={0.85}>
-                  <Plus color={Colors.coral} size={16} />
-                  <Text style={styles.addBtnText}>Upload</Text>
+                <TouchableOpacity onPress={openAddDoc} activeOpacity={0.85}>
+                  <Text style={styles.addLink}>Add manually</Text>
                 </TouchableOpacity>
               )}
             </View>
-            {documents.length === 0 ? (
+            {docKindFilter ? (
+              <TouchableOpacity style={styles.filterChip} onPress={() => setDocKindFilter(null)} activeOpacity={0.85}>
+                <Text style={styles.filterChipTxt}>
+                  {docKindFilter === 'labs' ? 'Labs' : docKindFilter === 'vaccinations' ? 'Vaccines' : docKindFilter === 'exam_visit' ? 'Records' : docKindFilter === 'insurance' ? 'Insurance' : docKindFilter}
+                  {'  ·  Clear'}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+            {(docKindFilter
+              ? documents.filter((d) => (d.content_kinds?.length ? d.content_kinds : ALL_CONTENT_KIND_KEYS).includes(docKindFilter))
+              : documents
+            ).length === 0 ? (
               <Text style={styles.emptyText}>No documents uploaded. File is required — AI fills title, date, and clinic.</Text>
             ) : (
-              documents.map((doc) => {
+              documents.filter((d) => !docKindFilter || (d.content_kinds?.length ? d.content_kinds : ALL_CONTENT_KIND_KEYS).includes(docKindFilter)).map((doc) => {
                 const ai = doc.ai_summary && typeof doc.ai_summary === 'object' ? doc.ai_summary : {};
                 const title = doc.title || ai.title || ai.document_title || 'Untitled';
                 const date = doc.taken_on || ai.date || ai.taken_on || null;
@@ -3425,7 +3436,7 @@ export default function PetRecordScreen() {
                         <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Retry</Text>
                       </TouchableOpacity>
                       <TouchableOpacity style={styles.docDeleteBtn} onPress={() => {
-                        setMedSub('summary');
+                        setTab('medical');
                         showBanner('Add vaccinations, labs, or visits with Add manually.', 'info');
                       }} activeOpacity={0.85}>
                         <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Add manually</Text>
@@ -3442,7 +3453,46 @@ export default function PetRecordScreen() {
               })
             )}
             </View>
-            )}
+        )}
+
+        {tab === 'clinics' && (
+          <View style={styles.tabContent}>
+            <VetClinics
+              petId={petId}
+              userId={user!.id}
+              canEdit={canEdit}
+              onChanged={load}
+              entries={(() => {
+                const map = new Map<string, { name: string; phone: string | null; address: string | null; docCount: number; dates: string[] }>();
+                const add = (name?: string | null, date?: string | null, extra?: { phone?: string | null; address?: string | null; isDoc?: boolean }) => {
+                  const n = String(name || '').trim();
+                  if (!n) return;
+                  const key = n.toLowerCase().replace(/\s+/g, ' ');
+                  const cur = map.get(key) || { name: n, phone: null as string | null, address: null as string | null, docCount: 0, dates: [] as string[] };
+                  if (extra?.phone && !cur.phone) cur.phone = extra.phone;
+                  if (extra?.address && !cur.address) cur.address = extra.address;
+                  if (date) cur.dates.push(String(date));
+                  if (extra?.isDoc) cur.docCount += 1;
+                  map.set(key, cur);
+                };
+                for (const d of documents) {
+                  const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary : {};
+                  add(d.clinic || ai.clinic || ai.clinic_name, d.taken_on || ai.date || ai.taken_on, { isDoc: true });
+                  for (const v of ai.visits || []) add(v.clinic, v.date);
+                  for (const e of ai.exams || []) add(e.clinic, e.visit_date || e.date);
+                }
+                for (const e of petExams) add(e.clinic, e.visit_date);
+                for (const v of vaccinations) add(v.vet_clinic, v.administered_on);
+                for (const r of medicalRecords) add((r as any).clinic || (r as any).clinic_name, r.record_date);
+                for (const c of clinics) add(c.name, null, { phone: c.phone, address: c.address });
+                return [...map.values()]
+                  .map((c) => {
+                    const dates = c.dates.filter(Boolean).sort();
+                    return { name: c.name, phone: c.phone, address: c.address, lastVisit: dates[dates.length - 1] || null, docCount: c.docCount };
+                  })
+                  .sort((a, b) => (b.lastVisit || '').localeCompare(a.lastVisit || '') || a.name.localeCompare(b.name));
+              })()}
+            />
           </View>
         )}
 
@@ -4128,9 +4178,9 @@ const styles = StyleSheet.create({
   petName: { fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.text },
   petMeta: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 2 },
 
-  tabBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingHorizontal: 0, marginTop: 12, marginBottom: 0, position: 'relative' },
+  tabBar: { flexDirection: 'row', flexWrap: 'nowrap', gap: 8, paddingHorizontal: 0, marginTop: 12, marginBottom: 0, position: 'relative' },
   hubRow: { flexDirection: 'row', gap: 8, paddingBottom: 12 },
-  pillTab: { backgroundColor: Colors.white, borderWidth: 1, borderColor: '#E8EAF0', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
+  pillTab: { backgroundColor: Colors.white, borderWidth: 1, borderColor: '#E8EAF0', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, flexShrink: 0 },
   pillTabOn: { backgroundColor: Colors.navy, borderColor: Colors.navy },
   pillTabTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.text },
   pillTabTxtOn: { color: Colors.white },
@@ -4223,6 +4273,9 @@ const styles = StyleSheet.create({
   subHeaderText: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.text },
   addBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: Colors.surface },
   addBtnText: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.coral },
+  addLink: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.coral, paddingVertical: 8, paddingHorizontal: 4 },
+  filterChip: { alignSelf: 'flex-start', backgroundColor: Colors.surface, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, marginBottom: 4 },
+  filterChipTxt: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.navy },
 
   vaxCard: { backgroundColor: Colors.white, borderRadius: 14, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: Colors.border },
   vaxCardOverdue: { borderColor: Colors.critical, borderWidth: 1.5 },

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, Modal, ActivityIndicator } from 'react-native';
-import { Plus, Building2, Phone, Globe, Trash2, Pencil } from 'lucide-react-native';
+import { Building2, Phone, Trash2, Pencil } from 'lucide-react-native';
 import { InlineBanner } from '@/components/InlineBanner';
 import { ConfirmDialog, type ConfirmConfig } from '@/components/ConfirmDialog';
 import { Colors } from '@/constants/Colors';
@@ -15,7 +15,30 @@ export interface VetClinic {
   website: string | null;
 }
 
-export function VetClinics({ petId, userId, canEdit }: { petId: string; userId: string; canEdit: boolean }) {
+export type ClinicEntry = {
+  name: string;
+  phone?: string | null;
+  address?: string | null;
+  lastVisit?: string | null;
+  docCount?: number;
+};
+
+function formatDate(iso?: string | null) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10);
+  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+export function VetClinics({
+  petId, userId, canEdit, entries, onChanged,
+}: {
+  petId: string;
+  userId: string;
+  canEdit: boolean;
+  entries?: ClinicEntry[];
+  onChanged?: () => void;
+}) {
   const [clinics, setClinics] = useState<VetClinic[]>([]);
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
@@ -66,6 +89,7 @@ export function VetClinics({ petId, userId, canEdit }: { petId: string; userId: 
     setSaving(false);
     setModalVisible(false);
     load();
+    onChanged?.();
   };
 
   const del = (c: VetClinic) => {
@@ -78,9 +102,14 @@ export function VetClinics({ petId, userId, canEdit }: { petId: string; userId: 
         const { error } = await supabase.from('vet_clinics').delete().eq('id', c.id);
         if (error) { setBanner({ message: 'Could not delete clinic.', kind: 'error' }); return; }
         load();
+        onChanged?.();
       },
     });
   };
+
+  const rows: ClinicEntry[] = entries
+    ? entries
+    : clinics.map((c) => ({ name: c.name, phone: c.phone, address: c.address }));
 
   return (
     <View>
@@ -88,49 +117,50 @@ export function VetClinics({ petId, userId, canEdit }: { petId: string; userId: 
       <View style={styles.subHeader}>
         <View style={styles.subHeaderLeft}>
           <Building2 color={Colors.navy} size={18} />
-          <Text style={styles.subHeaderText}>Vet Clinics</Text>
+          <Text style={styles.subHeaderText}>Clinics</Text>
         </View>
         {canEdit && (
-          <TouchableOpacity style={styles.addBtn} onPress={openAdd} activeOpacity={0.85}>
-            <Plus color={Colors.coral} size={16} />
-            <Text style={styles.addBtnText}>Add</Text>
+          <TouchableOpacity onPress={openAdd} activeOpacity={0.85}>
+            <Text style={styles.addLink}>Add clinic</Text>
           </TouchableOpacity>
         )}
       </View>
 
-      {loading ? (
+      {loading && !entries ? (
         <ActivityIndicator size="small" color={Colors.coral} style={{ paddingVertical: 20 }} />
-      ) : clinics.length === 0 ? (
-        <Text style={styles.emptyText}>No clinics recorded.</Text>
+      ) : rows.length === 0 ? (
+        <Text style={styles.emptyText}>No clinics on file yet.</Text>
       ) : (
-        clinics.map((c) => (
-          <View key={c.id} style={styles.clinicCard}>
+        rows.map((c) => (
+          <View key={c.name} style={styles.clinicCard}>
             <View style={styles.clinicInfo}>
               <Text style={styles.clinicName}>{c.name}</Text>
-              {c.address ? <Text style={styles.clinicDetail}>{c.address}</Text> : null}
               {c.phone ? (
                 <View style={styles.clinicRow}>
                   <Phone color={Colors.textSecondary} size={13} />
                   <Text style={styles.clinicDetail}>{c.phone}</Text>
                 </View>
               ) : null}
-              {c.website ? (
-                <View style={styles.clinicRow}>
-                  <Globe color={Colors.textSecondary} size={13} />
-                  <Text style={styles.clinicDetail}>{c.website}</Text>
-                </View>
-              ) : null}
+              <Text style={styles.clinicDetail}>Last visit {formatDate(c.lastVisit)}</Text>
+              <Text style={styles.clinicDetail}>{c.docCount ?? 0} document{(c.docCount ?? 0) === 1 ? '' : 's'}</Text>
+              {c.address ? <Text style={styles.clinicDetail}>{c.address}</Text> : null}
             </View>
-            {canEdit && (
+            {canEdit && !entries ? (
               <View style={styles.clinicActions}>
-                <TouchableOpacity style={styles.clinicEditBtn} onPress={() => openEdit(c)} activeOpacity={0.85}>
+                <TouchableOpacity style={styles.clinicEditBtn} onPress={() => {
+                  const match = clinics.find((x) => x.name === c.name);
+                  if (match) openEdit(match);
+                }} activeOpacity={0.85}>
                   <Pencil color={Colors.navy} size={14} />
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.clinicDeleteBtn} onPress={() => del(c)} activeOpacity={0.85}>
+                <TouchableOpacity style={styles.clinicDeleteBtn} onPress={() => {
+                  const match = clinics.find((x) => x.name === c.name);
+                  if (match) del(match);
+                }} activeOpacity={0.85}>
                   <Trash2 color={Colors.critical} size={14} />
                 </TouchableOpacity>
               </View>
-            )}
+            ) : null}
           </View>
         ))
       )}
@@ -163,8 +193,7 @@ const styles = StyleSheet.create({
   subHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, marginTop: 16 },
   subHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   subHeaderText: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.text },
-  addBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: Colors.surface },
-  addBtnText: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.coral },
+  addLink: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.coral },
   emptyText: { fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.textSecondary, textAlign: 'center', paddingVertical: 16 },
   clinicCard: { flexDirection: 'row', backgroundColor: Colors.white, borderRadius: 14, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: Colors.border },
   clinicInfo: { flex: 1 },

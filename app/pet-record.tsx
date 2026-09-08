@@ -3036,9 +3036,9 @@ export default function PetRecordScreen() {
               onAddDob={openDetailsSheet}
               onUploadRecord={() => { setDocKindFilter(null); setTab('documents'); }}
               docCounts={{
-                labs: documents.filter((d) => (d.content_kinds?.length ? d.content_kinds : ALL_CONTENT_KIND_KEYS).includes('labs')).length,
-                vaccines: documents.filter((d) => (d.content_kinds?.length ? d.content_kinds : ALL_CONTENT_KIND_KEYS).includes('vaccinations')).length,
-                records: documents.filter((d) => (d.content_kinds?.length ? d.content_kinds : ALL_CONTENT_KIND_KEYS).includes('exam_visit')).length,
+                labs: documents.filter((d) => docAccordionKeys(d).includes('labs')).length + labRows.length,
+                vaccines: documents.filter((d) => docAccordionKeys(d).includes('vaccinations')).length + vaccinations.filter((v) => v.confirmed !== false).length,
+                records: documents.filter((d) => docAccordionKeys(d).includes('exam_visit')).length,
               }}
               onOpenDocs={(kind) => { setDocKindFilter(kind); setDocOpen((s) => ({ ...s, [kind]: true })); setTab('documents'); }}
               onRunAi={runAiHealth}

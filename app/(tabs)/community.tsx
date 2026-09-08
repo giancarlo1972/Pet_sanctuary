@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -48,7 +48,54 @@ interface OrgRow {
   status: string | null;
   ein_verified: boolean | null;
   tax_deductible: boolean | null;
-  external_id?: string | null;
+  data_source?: string | null;
+}
+
+const ORG_CACHE_KEY = 'ra_community_orgs_v1';
+const ORG_PAGE = 50;
+
+const orgCache = {
+  async getItem(key: string) {
+    try {
+      if (typeof localStorage !== 'undefined') return localStorage.getItem(key);
+    } catch { /* ignore */ }
+    return null;
+  },
+  async setItem(key: string, value: string) {
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.setItem(key, value);
+    } catch { /* ignore */ }
+  },
+};
+
+async function readOrgCache(): Promise<OrgRow[] | null> {
+  try {
+    const raw = await orgCache.getItem(ORG_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeOrgCache(rows: OrgRow[]) {
+  orgCache.setItem(ORG_CACHE_KEY, JSON.stringify(rows)).catch(() => {});
+}
+
+function mapOrgRow(o: any): OrgRow {
+  return {
+    id: o.id,
+    name: o.name,
+    org_type: o.org_type,
+    location: [o.city, o.state].filter(Boolean).join(', ') || null,
+    logo_url: o.logo_url,
+    description: o.description || null,
+    status: o.status,
+    ein_verified: o.ein_verified ?? null,
+    tax_deductible: o.tax_deductible ?? null,
+    data_source: o.data_source || null,
+  };
 }
 
 interface FosterPet {
@@ -150,6 +197,8 @@ export default function CommunityScreen() {
   const [orgs, setOrgs] = useState<OrgRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [orgHasMore, setOrgHasMore] = useState(false);
+  const orgPageRef = useRef(0);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('All');
   const [fosterPets, setFosterPets] = useState<FosterPet[]>([]);
   const [fostersLoading, setFostersLoading] = useState(false);
@@ -204,58 +253,42 @@ export default function CommunityScreen() {
     setFostersLoading(false);
   }, []);
 
-  const loadOrgs = useCallback(async () => {
+  const loadOrgs = useCallback(async (opts?: { append?: boolean }) => {
+    const append = Boolean(opts?.append);
+    const page = append ? orgPageRef.current + 1 : 0;
+    const from = page * ORG_PAGE;
+    const to = from + ORG_PAGE - 1;
+    const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     try {
-      let local: OrgRow[] = [];
-      const full = await supabase
+      let { data, error } = await supabase
         .from('organizations')
-        .select('id, name, org_type, city, state, address, logo_url, description, status, ein_verified, tax_deductible, external_id')
+        .select('id, name, org_type, city, state, logo_url, status, data_source')
         .eq('status', 'approved')
-        .order('name');
-      const { data, error } = full.error
-        ? await supabase
-            .from('organizations')
-            .select('id, name, org_type, city, state, address, logo_url, description, status')
-            .eq('status', 'approved')
-            .order('name')
-        : full;
-      if (!error && data) {
-        local = data.map((o: any) => ({
-          id: o.id,
-          name: o.name,
-          org_type: o.org_type,
-          location: [o.city, o.state].filter(Boolean).join(', ') || o.address || null,
-          logo_url: o.logo_url,
-          description: o.description,
-          status: o.status,
-          ein_verified: o.ein_verified ?? null,
-          tax_deductible: o.tax_deductible ?? null,
-          external_id: o.external_id || null,
-        }));
+        .order('name', { ascending: true })
+        .range(from, to);
+      if (error) {
+        const retry = await supabase
+          .from('organizations')
+          .select('id, name, org_type, city, state, logo_url, status')
+          .eq('status', 'approved')
+          .order('name', { ascending: true })
+          .range(from, to);
+        data = retry.data as typeof data;
+        error = retry.error;
       }
-
-      let remote: OrgRow[] = [];
-      try {
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 10000);
-        const resp = await fetch('/api/rescuegroups?state=NY', { signal: ctrl.signal });
-        clearTimeout(t);
-        if (resp.ok) {
-          const json = await resp.json();
-          remote = (json.orgs || []).map((o: any) => ({
-            ...o,
-            external_id: o.id,
-          })) as OrgRow[];
-        }
-      } catch { /* ignore */ }
-
-      const byName = new Map(local.map((o) => [o.name.toLowerCase(), o]));
-      const byExt = new Map(local.filter((o) => o.external_id).map((o) => [String(o.external_id), o]));
-      const extra = remote.filter((r) => !byExt.has(r.id) && !byName.has((r.name || '').toLowerCase()));
-      setOrgs([...local, ...extra]);
-    } catch { /* ignore */ }
-    setLoading(false);
-    setRefreshing(false);
+      const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
+      console.log('[community] orgs query', ms, 'ms');
+      if (error || !data) return;
+      const rows = data.map(mapOrgRow);
+      orgPageRef.current = page;
+      setOrgHasMore(rows.length === ORG_PAGE);
+      setOrgs((prev) => (append ? [...prev, ...rows] : rows));
+      if (!append) writeOrgCache(rows);
+    } catch { /* keep cache */ }
+    finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
 
   const loadStories = useCallback(async () => {
@@ -334,8 +367,18 @@ export default function CommunityScreen() {
     }
   }, [user?.id]);
 
-  useEffect(() => { loadOrgs(); loadFosters(); loadStories(); loadProviders(); }, [loadOrgs, loadFosters, loadStories, loadProviders]);
-  useFocusEffect(useCallback(() => { loadOrgs(); loadFosters(); loadStories(); loadProviders(); }, [loadOrgs, loadFosters, loadStories, loadProviders]));
+  useEffect(() => {
+    let live = true;
+    readOrgCache().then((cached) => {
+      if (!live || !cached?.length) return;
+      setOrgs(cached);
+      setLoading(false);
+    });
+    return () => { live = false; };
+  }, []);
+
+  useEffect(() => { loadFosters(); loadStories(); loadProviders(); }, [loadFosters, loadStories, loadProviders]);
+  useFocusEffect(useCallback(() => { loadOrgs(); }, [loadOrgs]));
 
   const getSection = (org: OrgRow) => {
     const raw = (org.org_type || 'shelter').toLowerCase();
@@ -564,7 +607,7 @@ export default function CommunityScreen() {
           </TouchableOpacity>
         ))}
       </View>
-      {(loading && activeSegment !== 'services') ? (
+      {(loading && activeSegment !== 'services' && orgs.length === 0) ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={Colors.coral} />
         </View>
@@ -575,8 +618,8 @@ export default function CommunityScreen() {
               <View style={styles.apiBanner}>
                 <View style={styles.apiDot} />
                 <Text style={styles.apiBannerText}>
-                  <Text style={styles.apiBannerBold}>Connected to RescueGroups.org API</Text>
-                  {' — '}{filteredOrgs.length} of {orgs.length} organizations
+                  <Text style={styles.apiBannerBold}>{orgs.length} organizations</Text>
+                  {' — '}approved directory
                 </Text>
               </View>
               <TextInput
@@ -625,7 +668,14 @@ export default function CommunityScreen() {
                   <Text style={styles.emptyDesc}>Try a different search or filter.</Text>
                 </View>
               ) : (
-                filteredOrgs.map(renderOrgRow)
+                <>
+                  {filteredOrgs.map(renderOrgRow)}
+                  {orgHasMore && !orgQuery.trim() && typeFilter === 'All' ? (
+                    <TouchableOpacity style={styles.showMoreBtn} onPress={() => loadOrgs({ append: true })} activeOpacity={0.85}>
+                      <Text style={styles.showMoreText}>Show more</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </>
               )}
             </>
           )}
@@ -849,6 +899,12 @@ const styles = StyleSheet.create({
     flex: 1, fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, lineHeight: 18,
   },
   apiBannerBold: { fontFamily: Fonts.bold, color: Colors.text },
+  showMoreBtn: {
+    alignSelf: 'center', marginTop: 8, marginBottom: 16,
+    paddingHorizontal: 18, paddingVertical: 10, borderRadius: 14,
+    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border,
+  },
+  showMoreText: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.navy },
   filterChipsRow: { gap: 8, marginBottom: 16 },
   filterChip: {
     paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999,

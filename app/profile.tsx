@@ -2,12 +2,12 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
-  Switch, Modal, TextInput, ScrollView,
+  Switch, TextInput, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   ChevronLeft, ChevronRight, ShieldCheck, LogOut, Phone, IdCard, GraduationCap,
-  PawPrint, Check, Plus, Sparkles,
+  PawPrint, Plus, Sparkles,
 } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts } from '@/constants/Fonts';
@@ -21,7 +21,7 @@ import SignedImage from '@/components/SignedImage';
 import { isUsablePhoto } from '@/lib/photos';
 import OnDutyCard from '@/components/OnDutyCard';
 import {
-  ROLE_CARDS, TABS_BY_VIEW, SUBS, PROVIDER_SERVICES, cardFor, normalizeCategories,
+  ROLE_CARDS, TABS_BY_VIEW, SUBS, PROVIDER_SERVICES, normalizeCategories,
   dashAction, type RoleCategory,
 } from '@/lib/role-categories';
 import { hoursLeft, serviceLabel } from '@/lib/helper-duty';
@@ -67,7 +67,6 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
   const [view, setView] = useState<RoleCategory>('owner');
   const [tab, setTab] = useState('pets');
   const [sub, setSub] = useState('own');
-  const [pillOpen, setPillOpen] = useState(false);
   const [verified, setVerified] = useState(false);
   const [verif, setVerif] = useState({ id_verified: false, phone_verified: false, responder_training: 'none', id_status: '' as string, phone: '' as string });
   const [ownerOn, setOwnerOn] = useState(true);
@@ -92,9 +91,9 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
   const [helpReqs, setHelpReqs] = useState<any[]>([]);
   const [orgMembers, setOrgMembers] = useState<any[]>([]);
 
-  const card = cardFor(view);
   const tabs = TABS_BY_VIEW[view];
   const subs = SUBS[tab] || [];
+  const showPlatform = actingIsPlatform || isPlatformAdmin(null, email);
 
   useEffect(() => {
     if (!tabs.some((t) => t.key === tab)) setTab(tabs[0].key);
@@ -279,19 +278,6 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
     if (error) setBanner({ kind: 'error', message: error.message || 'Could not save.' });
   };
 
-  const toggleCategory = async (key: RoleCategory) => {
-    if (key === 'organization' || key === 'campaign') {
-      if (!cats.includes(key)) {
-        setBanner({ kind: 'info', message: 'Organizations and Campaign managers go through verification before their tools unlock.' });
-      }
-    }
-    const next: RoleCategory[] = cats.includes(key) ? cats.filter((k) => k !== key) : [...cats, key];
-    const final: RoleCategory[] = next.length ? next : ['owner'];
-    setCats(final);
-    if (!final.includes(view)) setView(final[0]);
-    await saveFlags({ role_categories: final });
-  };
-
   const petBucket = (r: PetRel) => {
     const rel = (r.relationship || '').toLowerCase();
     if (rel === 'foster') return 'foster';
@@ -455,10 +441,32 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
             </View>
             <Text style={s.meta} numberOfLines={1}>{[city || email, year ? `member since ${year}` : null].filter(Boolean).join(' · ')}</Text>
           </View>
-          <TouchableOpacity style={[s.pill, { backgroundColor: card.color }]} onPress={() => setPillOpen(true)} activeOpacity={0.85}>
-            <Text style={s.pillTxt} numberOfLines={1}>{card.title}</Text>
-            <Text style={s.pillTxt}>▾</Text>
-          </TouchableOpacity>
+          {showPlatform ? (
+            <TouchableOpacity style={s.plat} onPress={() => router.push('/platform')} activeOpacity={0.85}>
+              <Text style={s.platTxt}>Platform</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
+        <View style={s.navy}>
+          <Text style={s.navyK}>ROLE CATEGORIES</Text>
+          <View style={s.chips}>
+            {ROLE_CARDS.map((c) => {
+              const held = cats.includes(c.key);
+              const selected = view === c.key;
+              return (
+                <TouchableOpacity
+                  key={c.key}
+                  style={[s.rc, held && s.rcHeld, selected && s.rcOn]}
+                  onPress={() => held ? setView(c.key) : router.push('/onboarding?add=1')}
+                  activeOpacity={0.85}
+                >
+                  <Text style={[s.rcTxt, !held && s.rcTxtOff]}>{c.title}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <Text style={s.navyHint}>Org and Campaign tools unlock after verification.</Text>
         </View>
 
         {duty?.on ? (
@@ -525,21 +533,6 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
           </>
         ) : (
           <View style={{ gap: 14 }}>
-            <View style={s.navy}>
-              <Text style={s.navyK}>ROLE CATEGORIES</Text>
-              <View style={s.chips}>
-                {ROLE_CARDS.map((c) => {
-                  const on = cats.includes(c.key);
-                  return (
-                    <TouchableOpacity key={c.key} style={[s.rc, on && { backgroundColor: c.color, borderColor: c.color }]} onPress={() => toggleCategory(c.key)}>
-                      <Text style={[s.rcTxt, on && { color: Colors.white }]}>{c.title}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-              <Text style={s.navyHint}>Org and Campaign tools unlock after verification.</Text>
-            </View>
-
             <View style={s.card}>
               <ToggleRow label="Pet owner" value={ownerOn} onChange={(v) => { setOwnerOn(v); saveFlags({ pet_owner_active: v }); }} />
               <ToggleRow label="Volunteer" value={volOn} onChange={(v) => { setVolOn(v); saveFlags({ volunteer_active: v }); }} />
@@ -586,30 +579,6 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
           </View>
         )}
       </Page>
-
-      <Modal visible={pillOpen} transparent animationType="fade" onRequestClose={() => setPillOpen(false)}>
-        <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setPillOpen(false)}>
-          <View style={s.sheet}>
-            <Text style={s.sheetTitle}>Switch view</Text>
-            {cats.map((k) => {
-              const c = cardFor(k);
-              return (
-                <TouchableOpacity key={k} style={s.sheetRow} onPress={() => { setView(k); setPillOpen(false); }}>
-                  <View style={[s.tile, { backgroundColor: c.color }]}><Text style={s.tileMark}>{c.mark}</Text></View>
-                  <Text style={s.rowTitle}>{c.title}</Text>
-                  {view === k ? <Check color={Colors.teal} size={16} /> : null}
-                </TouchableOpacity>
-              );
-            })}
-            {actingIsPlatform || isPlatformAdmin(null, email) ? (
-              <TouchableOpacity style={s.sheetRow} onPress={() => { setPillOpen(false); router.push('/platform'); }}>
-                <View style={[s.tile, { backgroundColor: Colors.navy }]}><Text style={s.tileMark}>P</Text></View>
-                <Text style={s.rowTitle}>Platform</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-        </TouchableOpacity>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -650,8 +619,8 @@ const s = StyleSheet.create({
   avTxt: { fontFamily: Fonts.bold, color: Colors.white, fontSize: 18 },
   name: { fontFamily: Fonts.extrabold, fontSize: 16, color: Colors.navy, flexShrink: 1 },
   meta: { fontFamily: Fonts.regular, fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
-  pill: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: 140 },
-  pillTxt: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.white },
+  plat: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, backgroundColor: Colors.navy },
+  platTxt: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.white },
   duty: { backgroundColor: Colors.tealBg, borderRadius: 12, padding: 12, gap: 4 },
   dutyTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.tealDark },
   dutyN: { fontFamily: Fonts.medium, fontSize: 12, color: Colors.tealDark },
@@ -677,12 +646,15 @@ const s = StyleSheet.create({
   stTxt: { fontFamily: Fonts.bold, fontSize: 11 },
   dash: { borderWidth: 1.5, borderStyle: 'dashed', borderColor: Colors.coral, borderRadius: 14, paddingVertical: 14, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8, backgroundColor: Colors.white },
   dashTxt: { fontFamily: Fonts.bold, fontSize: 15, color: Colors.coral },
-  navy: { backgroundColor: '#26265E', borderRadius: 16, padding: 16, gap: 10 },
+  navy: { backgroundColor: '#26265E', borderRadius: 16, padding: 14, gap: 10 },
   navyK: { fontFamily: Fonts.extrabold, fontSize: 11, letterSpacing: 0.8, color: '#B9BCE0' },
   navyHint: { fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  rc: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: 'rgba(255,255,255,0.08)' },
+  rc: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', backgroundColor: 'transparent' },
+  rcHeld: { backgroundColor: 'rgba(255,255,255,0.16)', borderColor: 'rgba(255,255,255,0.45)' },
+  rcOn: { backgroundColor: Colors.coral, borderColor: Colors.coral },
   rcTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.white },
+  rcTxtOff: { color: 'rgba(255,255,255,0.55)' },
   card: { backgroundColor: Colors.white, borderRadius: 16, borderWidth: 1, borderColor: Colors.border, overflow: 'hidden' },
   kicker: { fontFamily: Fonts.extrabold, fontSize: 11, letterSpacing: 0.8, color: Colors.textTertiary, paddingHorizontal: 14, paddingTop: 12 },
   toggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.border },
@@ -694,10 +666,6 @@ const s = StyleSheet.create({
   link: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.coral },
   logout: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12 },
   logoutTxt: { fontFamily: Fonts.semibold, fontSize: 15, color: Colors.critical },
-  overlay: { flex: 1, backgroundColor: 'rgba(15,15,40,0.4)', justifyContent: 'flex-end' },
-  sheet: { backgroundColor: Colors.white, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, gap: 8 },
-  sheetTitle: { fontFamily: Fonts.extrabold, fontSize: 16, color: Colors.navy, marginBottom: 8 },
-  sheetRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10 },
   ok: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.tealDark },
   no: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.critical },
 });

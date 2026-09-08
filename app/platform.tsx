@@ -62,7 +62,15 @@ export default function PlatformScreen() {
   const [orgs, setOrgs] = useState<any[]>([]);
   const [issues, setIssues] = useState<any[]>([]);
 
-  const fail = (e: any, fallback: string) => setBanner({ kind: 'error', message: e?.message || fallback });
+  const fail = (e: any, fallback: string) => {
+    const raw = String(e?.message || fallback);
+    const message = /organizations_status_check/i.test(raw)
+      ? 'Organization status must be pending, approved, rejected, or suspended.'
+      : /organizations_org_type_check/i.test(raw)
+        ? 'Organization type is not allowed. Use shelter, rescue_group, clinic, or sponsor.'
+        : raw;
+    setBanner({ kind: 'error', message });
+  };
   const acting = actingAs ? actingLabel(actingAs) : 'platform_admin';
 
   const audit = async (action: string, targetType: string, targetId?: string, meta?: Record<string, unknown>) => {

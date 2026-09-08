@@ -65,7 +65,7 @@ export default function RegisterOrganizationScreen() {
         phone: phone.trim() || null,
         ein: ein.trim() || null,
         created_by: user.id,
-        status: 'pending_review',
+        status: 'pending',
         ein_verified: false,
         tax_deductible: false,
         donations_enabled: false,
@@ -74,7 +74,13 @@ export default function RegisterOrganizationScreen() {
       setBanner({ message: 'Organization registered! It will be reviewed by our team.', kind: 'success' });
       setTimeout(() => router.replace(`/organization-details?id=${data.id}`), 1500);
     } catch (err: any) {
-      setBanner({ message: err.message || 'Could not register organization. Please try again.', kind: 'error' });
+      const raw = String(err.message || '');
+      const message = /organizations_status_check/i.test(raw)
+        ? 'Could not register — organization status must be pending until review.'
+        : /organizations_org_type_check/i.test(raw)
+          ? 'Could not register — pick Shelter, Rescue group, Clinic, or Sponsor.'
+          : (err.message || 'Could not register organization. Please try again.');
+      setBanner({ message, kind: 'error' });
     }
     setLoading(false);
   };

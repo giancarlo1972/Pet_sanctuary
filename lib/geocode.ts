@@ -54,7 +54,12 @@ export async function geocodeMany(queries: string[]): Promise<Map<string, { lat:
   return out;
 }
 
-export async function reverseGeocode(lat: number, lng: number): Promise<{ city?: string; state?: string; stateCode?: string } | null> {
+export async function reverseGeocode(lat: number, lng: number): Promise<{
+  city?: string;
+  state?: string;
+  stateCode?: string;
+  label?: string;
+} | null> {
   try {
     const res = await fetch(`/api/geocode?lat=${lat}&lng=${lng}`);
     const json = await res.json();
@@ -62,6 +67,7 @@ export async function reverseGeocode(lat: number, lng: number): Promise<{ city?:
       city: json.city || undefined,
       state: json.state || undefined,
       stateCode: json.state_code || undefined,
+      label: json.label || undefined,
     };
   } catch {
     return null;

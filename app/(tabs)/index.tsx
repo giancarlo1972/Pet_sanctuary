@@ -104,6 +104,7 @@ const REPORT_TYPE_LABELS: Record<string, string> = {
   injured: 'Injured animal',
   road_accident: 'Road accident',
   cruelty: 'Cruelty/Neglect',
+  lost_found: 'Lost or found',
 };
 
 const REPORT_TYPE_ICONS: Record<string, { icon: typeof AlertTriangle }> = {
@@ -116,6 +117,7 @@ const REPORT_TYPE_ICONS: Record<string, { icon: typeof AlertTriangle }> = {
   injured: { icon: AlertTriangle },
   road_accident: { icon: Car },
   cruelty: { icon: AlertTriangle },
+  lost_found: { icon: AlertTriangle },
 };
 
 const SEVERITY_STYLE: Record<string, { bg: string; color: string; label: string }> = {

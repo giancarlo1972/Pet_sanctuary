@@ -6,7 +6,7 @@ export type HelpFlags = {
   alert_radius_mi: number;
 };
 
-const VOL_TYPES = ['lost', 'stray', 'foster', 'support', 'inform'];
+const VOL_TYPES = ['lost', 'stray', 'lost_found', 'foster', 'support', 'inform'];
 const RESP_TYPES = ['emergency', 'injured', 'road_accident', 'cruelty'];
 
 export function typesForFlags(flags: HelpFlags | null): string[] | null {

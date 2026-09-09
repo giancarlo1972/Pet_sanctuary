@@ -6,7 +6,7 @@ Look at this photo. Return JSON only, no extra words:
   "colors": ["main colors"],
   "age_guess": "baby | young | adult | senior | unknown",
   "condition": "appears healthy | injured | skinny | unknown",
-  "suggested_report_type": "lost | stray | injured | emergency",
+  "suggested_report_type": "road_accident | injured | lost_found | cruelty",
   "confidence": 0.0,
   "short_description": "two sentences a volunteer can use, no personal names"
 }

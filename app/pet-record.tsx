@@ -47,7 +47,8 @@ import {
   Share2,
 } from 'lucide-react-native';
 import { InlineBanner } from '@/components/InlineBanner';
-import { prepareImageFile } from '@/lib/prepare-image';
+import { prepareImageFile, compressImage } from '@/lib/prepare-image';
+import { pickImage } from '@/lib/pick-image';
 import { isUsablePhoto } from '@/lib/photos';
 import { ConfirmDialog, type ConfirmConfig } from '@/components/ConfirmDialog';
 import { VetVaccinationModal, type Vaccination as FullVaccination, type VetClinic as ClinicInfo } from '@/components/VetVaccinationModal';
@@ -1395,59 +1396,29 @@ export default function PetRecordScreen() {
   // === Photo handlers ===
   const uploadPhoto = async () => {
     if (!petId || !user || photos.length >= 10) return;
-    if (Platform.OS === 'web') {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = 'image/*';
-      input.onchange = async (e) => {
-        const file = (e.target as HTMLInputElement).files?.[0];
-        if (!file) return;
-        setPhotoUploading(true);
-        const prepared = await prepareImageFile(file);
-        const filePath = `${petId}/${Date.now()}.jpg`;
-        const { error: upErr } = await supabase.storage.from('pet-photos').upload(filePath, prepared.blob, { contentType: 'image/jpeg', upsert: true });
-        if (upErr) { console.error('[pet-record] photo upload (web):', upErr); showBanner('Could not upload photo.'); setPhotoUploading(false); return; }
-        const { error: insErr } = await supabase.from('pet_photos').insert({
-          pet_id: petId,
-          photo_url: filePath,
-          sort_order: photos.length,
-          is_profile: true,
-          uploaded_by: user.id,
-        });
-        if (insErr) { console.error('[pet-record] photo insert (web):', insErr); }
-        await supabase.from('pets').update({ main_photo_url: filePath }).eq('id', petId);
-        setPhotoUploading(false);
-        load();
-      };
-      input.click();
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images',
-      allowsEditing: false,
-      quality: 0.8,
-    });
-    if (result.canceled || !result.assets?.[0]) return;
-    const asset = result.assets[0];
     setPhotoUploading(true);
-    const resp = await fetch(asset.uri);
-    const blob = await resp.blob();
-    const file = new File([blob], 'pet.jpg', { type: 'image/jpeg' });
-    const prepared = await prepareImageFile(file);
-    const filePath = `${petId}/${Date.now()}.jpg`;
-    const { error: upErr } = await supabase.storage.from('pet-photos').upload(filePath, prepared.blob, { contentType: 'image/jpeg', upsert: true });
-    if (upErr) { console.error('[pet-record] photo upload:', upErr); showBanner('Could not upload photo.'); setPhotoUploading(false); return; }
-    const { error: insErr } = await supabase.from('pet_photos').insert({
-      pet_id: petId,
-      photo_url: filePath,
-      sort_order: photos.length,
-      is_profile: true,
-      uploaded_by: user.id,
-    });
-    if (insErr) { console.error('[pet-record] photo insert:', insErr); }
-    await supabase.from('pets').update({ main_photo_url: filePath }).eq('id', petId);
-    setPhotoUploading(false);
-    load();
+    try {
+      const picked = await pickImage();
+      if (!picked) { setPhotoUploading(false); return; }
+      const filePath = `${petId}/${Date.now()}.jpg`;
+      const { error: upErr } = await supabase.storage.from('pet-photos').upload(filePath, picked.blob, { contentType: 'image/jpeg', upsert: true });
+      if (upErr) { console.error('[pet-record] photo upload:', upErr); showBanner('Could not upload photo.'); setPhotoUploading(false); return; }
+      const { error: insErr } = await supabase.from('pet_photos').insert({
+        pet_id: petId,
+        photo_url: filePath,
+        sort_order: photos.length,
+        is_profile: true,
+        uploaded_by: user.id,
+      });
+      if (insErr) { console.error('[pet-record] photo insert:', insErr); }
+      await supabase.from('pets').update({ main_photo_url: filePath }).eq('id', petId);
+      setPhotoUploading(false);
+      load();
+    } catch (e) {
+      console.error('[pet-record] photo upload:', e);
+      showBanner('Could not upload photo.');
+      setPhotoUploading(false);
+    }
   };
 
   const setProfilePhoto = async (photo: PetPhoto) => {
@@ -1501,18 +1472,29 @@ export default function PetRecordScreen() {
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'image/*,application/pdf';
-      input.onchange = (e) => {
+      input.onchange = async (e) => {
         const file = (e.target as HTMLInputElement).files?.[0];
-        if (file) {
+        if (!file) return;
+        if (file.type.startsWith('image/')) {
+          const blob = await compressImage(file);
           setDocFile({
-            uri: URL.createObjectURL(file),
-            name: file.name,
-            mimeType: file.type,
-            fileSize: file.size,
-            file,
+            uri: URL.createObjectURL(blob),
+            name: file.name.replace(/\.[^.]+$/, '.jpg'),
+            mimeType: 'image/jpeg',
+            fileSize: blob.size,
+            file: blob,
           } as any);
           setDocForm((p) => ({ ...p, title: p.title.trim() ? p.title : file.name }));
+          return;
         }
+        setDocFile({
+          uri: URL.createObjectURL(file),
+          name: file.name,
+          mimeType: file.type,
+          fileSize: file.size,
+          file,
+        } as any);
+        setDocForm((p) => ({ ...p, title: p.title.trim() ? p.title : file.name }));
       };
       input.click();
       return;
@@ -1520,7 +1502,8 @@ export default function PetRecordScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsEditing: false,
-      quality: 0.8,
+      quality: 0.6,
+      exif: false,
     });
     if (!result.canceled && result.assets?.[0]) {
       setDocFile(result.assets[0]);

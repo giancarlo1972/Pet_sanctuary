@@ -14,6 +14,7 @@ import { InlineBanner } from '@/components/InlineBanner';
 import SignedImage from '@/components/SignedImage';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
+import { pickImage } from '@/lib/pick-image';
 
 interface PhotoUploadProps {
   photos: string[];
@@ -68,18 +69,18 @@ export default function PhotoUpload({
   };
 
   const openCamera = async () => {
-    if (Platform.OS === 'web') {
-      setBanner({ message: 'Camera is not available on web. Please use photo library.', kind: 'info' });
-      return;
-    }
-
     try {
       setUploading(true);
+      if (Platform.OS === 'web') {
+        const picked = await pickImage({ camera: true });
+        if (picked) onPhotosChange([...photos, picked.uri]);
+        return;
+      }
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: 'images',
-        allowsEditing: true,
-        aspect: [4, 3],
-        quality: 0.8,
+        allowsEditing: false,
+        quality: 0.6,
+        exif: false,
       });
 
       if (!result.canceled && result.assets && result.assets[0]) {
@@ -97,13 +98,18 @@ export default function PhotoUpload({
   const openImageLibrary = async () => {
     try {
       setUploading(true);
+      if (Platform.OS === 'web') {
+        const picked = await pickImage();
+        if (picked) onPhotosChange([...photos, picked.uri]);
+        return;
+      }
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: 'images',
-        allowsEditing: true,
-        aspect: [4, 3],
-        quality: 0.8,
-        allowsMultipleSelection: Platform.OS !== 'web', // Multiple selection not supported on web
-        selectionLimit: Platform.OS !== 'web' ? maxPhotos - photos.length : 1,
+        allowsEditing: false,
+        quality: 0.6,
+        exif: false,
+        allowsMultipleSelection: true,
+        selectionLimit: maxPhotos - photos.length,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {

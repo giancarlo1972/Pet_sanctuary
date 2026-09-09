@@ -253,12 +253,6 @@ export function VetLabResults({
           <FlaskConical color={Colors.navy} size={18} />
           <Text style={styles.subHeaderText}>Lab Results</Text>
         </View>
-        {canEdit && (
-          <TouchableOpacity style={styles.addBtn} onPress={openAddPanel} activeOpacity={0.85}>
-            <Plus color={Colors.coral} size={16} />
-            <Text style={styles.addBtnText}>Add Panel</Text>
-          </TouchableOpacity>
-        )}
       </View>
 
       {loading ? (

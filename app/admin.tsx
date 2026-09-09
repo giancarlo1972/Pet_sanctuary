@@ -352,7 +352,7 @@ export default function AdminScreen() {
             <Text style={styles.meta}>Status: {editOrg.status || 'unknown'}</Text>
             <TextInput style={styles.input} value={editName} onChangeText={setEditName} placeholder="Name" />
             <View style={styles.row}>
-              {['approved','rejected','suspended','pending_review'].map((st) => (
+              {['approved','rejected','suspended','pending'].map((st) => (
                 <TouchableOpacity key={st} style={styles.ghost} onPress={async () => {
                   await supabase.from('organizations').update({ status: st, name: editName.trim() || editOrg.name }).eq('id', editOrg.id);
                   setEditOrg(null); load();

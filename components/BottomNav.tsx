@@ -1,14 +1,15 @@
 import React from 'react';
 import { View, StyleSheet, TouchableOpacity } from 'react-native';
 import { useRouter, usePathname } from 'expo-router';
-import { Home, PawPrint, Users, User } from 'lucide-react-native';
+import { Home, PawPrint, MapPin, Users, Siren } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 
 const TABS = [
   { href: '/(tabs)', label: 'Home', icon: Home },
   { href: '/(tabs)/pets', label: 'Pets', icon: PawPrint },
+  { href: '/(tabs)/nearby', label: 'Nearby', icon: MapPin },
+  { href: '/(tabs)/reports', label: 'Reports', icon: Siren },
   { href: '/(tabs)/community', label: 'Community', icon: Users },
-  { href: '/profile', label: 'Profile', icon: User },
 ];
 
 export default function BottomNav() {
@@ -22,6 +23,8 @@ export default function BottomNav() {
           pathname === tab.href ||
           (tab.href === '/(tabs)' && pathname === '/') ||
           (tab.href === '/(tabs)/pets' && pathname === '/pets') ||
+          (tab.href === '/(tabs)/nearby' && pathname === '/nearby') ||
+          (tab.href === '/(tabs)/reports' && pathname === '/reports') ||
           (tab.href === '/(tabs)/community' && pathname === '/community');
         const Icon = tab.icon;
         return (

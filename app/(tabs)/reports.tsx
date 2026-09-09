@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
@@ -81,11 +81,16 @@ const CAMPAIGNS = [
 
 export default function ReportsTabScreen() {
   const { user } = useAuth();
-  const [tab, setTab] = useState<Tab>('reports');
+  const params = useLocalSearchParams<{ tab?: string }>();
+  const [tab, setTab] = useState<Tab>(params.tab === 'fund' ? 'fund' : 'reports');
   const [reports, setReports] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [radiusLabel, setRadiusLabel] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (params.tab === 'fund') setTab('fund');
+  }, [params.tab]);
 
   const loadReports = useCallback(async () => {
     try {

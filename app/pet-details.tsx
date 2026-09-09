@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Platform,
   Linking,
+  useWindowDimensions,
 } from 'react-native';
 import { InlineBanner } from '@/components/InlineBanner';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -114,8 +115,77 @@ function formatShortDate(value: string): string {
   if (Number.isNaN(d.getTime())) return '';
   return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 }
+
+function decodeHtml(value: string | null | undefined) {
+  return String(value || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&#(\d+);/g, (_, n) => {
+      const c = Number(n);
+      return Number.isFinite(c) && c > 0 && c < 0x110000 ? String.fromCodePoint(c) : _;
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => {
+      const c = parseInt(h, 16);
+      return Number.isFinite(c) && c > 0 && c < 0x110000 ? String.fromCodePoint(c) : _;
+    })
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&rsquo;/gi, "'")
+    .replace(/&lsquo;/gi, "'")
+    .replace(/&rdquo;/gi, '"')
+    .replace(/&ldquo;/gi, '"')
+    .replace(/&mdash;/gi, '—')
+    .replace(/&ndash;/gi, '–')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function titleCaseWord(word: string) {
+  if (!word) return '';
+  if (/^[A-Z]{2,4}$/.test(word) && word.length <= 3) return word;
+  return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+}
+
+function titleCaseName(value: string | null | undefined) {
+  const raw = decodeHtml(value).replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  const parts = raw.split(/\s+aka\s+/i);
+  const title = (s: string) => s.split(/\s+/).map(titleCaseWord).join(' ');
+  if (parts.length > 1) return `${title(parts[0])} (aka ${parts.slice(1).map(title).join(', ')})`;
+  return title(raw);
+}
+
+function firstName(value: string | null | undefined) {
+  const token = String(value || '').split(/\s|aka/i).map((s) => s.trim()).find(Boolean) || '';
+  return titleCaseName(token) || 'me';
+}
+
+function compactAge(ageText?: string | null, dob?: string | null) {
+  const raw = String(ageText || '').trim();
+  const years = raw.match(/(\d+(?:\.\d+)?)\s*(y|yr|year)/i);
+  if (years) {
+    const n = Number(years[1]);
+    if (n >= 1) return `${Math.round(n)} y`;
+    return `${Math.max(1, Math.round(n * 12))} mo`;
+  }
+  const months = raw.match(/(\d+)\s*(mo|month)/i);
+  if (months) return `${months[1]} mo`;
+  if (dob) {
+    const m = String(dob).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) {
+      const y = (Date.now() - new Date(+m[1], +m[2] - 1, +m[3]).getTime()) / (365.25 * 864e5);
+      if (y >= 1) return `${Math.round(y)} y`;
+      return `${Math.max(1, Math.round(y * 12))} mo`;
+    }
+  }
+  return raw || null;
+}
+
 function inferListing(text: string) {
-  const raw = text || '';
+  const raw = decodeHtml(text || '');
   const t = raw.toLowerCase();
   const email = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || null;
   const phone = raw.match(/\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/)?.[0] || null;
@@ -142,6 +212,8 @@ export default function PetDetailsScreen() {
   const safeBack = useSafeBack('/(tabs)');
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const compactBar = width < 480;
   const [isFavorite, setIsFavorite] = useState(false);
   const [favoriteId, setFavoriteId] = useState<string | null>(null);
   const [pet, setPet] = useState<PetRecord | null>(null);
@@ -186,7 +258,7 @@ export default function PetDetailsScreen() {
   }, [id]);
 
   const loadPet = async () => {
-    if (!id) return;
+    if (!id) { setError('Pet not found'); setLoading(false); return; }
     setLoading(true);
     setError(null);
     const petId = String(id);
@@ -217,7 +289,7 @@ export default function PetDetailsScreen() {
           gender: a.gender,
           status: a.status || 'Available',
           availability: a.availability || 'both',
-          description: a.description,
+          description: decodeHtml(a.description),
           main_photo_url: a.photo_url,
           location: a.location,
           personality: inferred.chips.length ? inferred.chips : null,
@@ -253,7 +325,7 @@ export default function PetDetailsScreen() {
       setLoading(false);
       return;
     }
-    setPet(data);
+    setPet({ ...data, description: decodeHtml(data.description) });
     setLoading(false);
 
     // --- Phase 2: gated extras — any failure must never block rendering ---
@@ -560,11 +632,11 @@ export default function PetDetailsScreen() {
         {/* Pet info */}
         <View style={styles.petInfo}>
           <View style={styles.petHeader}>
-            <Text style={styles.petName}>{pet.name}</Text>
-            {pet.age_text ? <Text style={styles.petAge}>{pet.age_text}</Text> : null}
+            <Text style={styles.petName} numberOfLines={2}>{titleCaseName(pet.name)}</Text>
+            {compactAge(pet.age_text, pet.dob) ? <Text style={styles.petAge}>{compactAge(pet.age_text, pet.dob)}</Text> : null}
           </View>
           <Text style={styles.petBreedLocation}>
-            {pet.breed}{pet.location ? ` · ${pet.location}` : ''}
+            {[pet.breed, pet.location].filter(Boolean).join(' · ')}
           </Text>
           {pet.dob ? (
             <Text style={styles.petBreedLocation}>Born {pet.dob}</Text>
@@ -593,7 +665,7 @@ export default function PetDetailsScreen() {
                 </TouchableOpacity>
               </View>
               <Text style={styles.description}>
-                {descTab === 'full' ? pet.description : inferListing(pet.description).about}
+                {descTab === 'full' ? decodeHtml(pet.description) : inferListing(pet.description).about}
               </Text>
               {listingPhone ? (
                 <TouchableOpacity onPress={() => Linking.openURL('tel:' + listingPhone.replace(/[^\d+]/g, ''))}>
@@ -806,72 +878,163 @@ export default function PetDetailsScreen() {
             </View>
           ) : null}
         </View>
-        <View style={{ height: 90 + insets.bottom }} />
+        <View style={{ height: (compactBar ? 148 : 90) + insets.bottom }} />
       </View>
 
       {/* Bottom actions — fixed footer with top border */}
-      <View style={[styles.bottomActions, { paddingBottom: 16 + insets.bottom }]}>
-        <TouchableOpacity
-          style={styles.messageBtn}
-          onPress={() => {
-            if (String(pet.id).startsWith('rg-a-')) {
-              if (listingEmail) {
-                Linking.openURL(`mailto:${listingEmail}?subject=${encodeURIComponent('Adoption inquiry: ' + pet.name)}`);
-              } else if (listingPhone) {
-                Linking.openURL('tel:' + listingPhone.replace(/[^\d+]/g, ''));
-              }
-              return;
-            }
-            if (!user) { router.push('/auth'); return; }
-            (async () => {
-              try {
-                const { data, error } = await supabase.rpc('get_or_create_conversation', {
-                  p_subject_type: 'pet',
-                  p_subject_id: pet.id,
-                });
-                if (error) throw error;
-                router.push(`/chat?conversationId=${data}` as any);
-              } catch (err) { console.error('[pet-details] conversation failed:', err); }
-            })();
-          }}
-          activeOpacity={0.85}
-        >
-          <MessageCircle color={Colors.navy} size={18} />
-          <Text style={styles.messageBtnText}>Message</Text>
-        </TouchableOpacity>
-        {/adopted/i.test(pet.status || '') && (
-          <TouchableOpacity style={styles.adoptButton} onPress={claimAdoptedPet}>
-            <Text style={styles.adoptText}>Add {pet.name} to my pets</Text>
-          </TouchableOpacity>
-        )}
-        {(pet.availability === 'foster' || pet.availability === 'both') && (
-          existingApps.foster ? (
-            <View style={styles.appliedPill}>
-              <FileText color={Colors.textTertiary} size={14} />
-              <Text style={styles.appliedPillText}>Application {existingApps.foster}</Text>
+      <View style={[styles.bottomActions, compactBar && styles.bottomActionsStack, { paddingBottom: 12 + insets.bottom }]}>
+        {compactBar ? (
+          <>
+            <View style={styles.barRow}>
+              <TouchableOpacity
+                style={[styles.messageBtn, styles.messageBtnSm]}
+                onPress={() => {
+                  if (String(pet.id).startsWith('rg-a-')) {
+                    if (listingEmail) {
+                      Linking.openURL(`mailto:${listingEmail}?subject=${encodeURIComponent('Adoption inquiry: ' + pet.name)}`);
+                    } else if (listingPhone) {
+                      Linking.openURL('tel:' + listingPhone.replace(/[^\d+]/g, ''));
+                    }
+                    return;
+                  }
+                  if (!user) { router.push('/auth'); return; }
+                  (async () => {
+                    try {
+                      const { data, error } = await supabase.rpc('get_or_create_conversation', {
+                        p_subject_type: 'pet',
+                        p_subject_id: pet.id,
+                      });
+                      if (error) throw error;
+                      router.push(`/chat?conversationId=${data}` as any);
+                    } catch (err) { console.error('[pet-details] conversation failed:', err); }
+                  })();
+                }}
+                activeOpacity={0.85}
+              >
+                <MessageCircle color={Colors.navy} size={16} />
+                <Text style={[styles.messageBtnText, styles.messageBtnTextSm]} numberOfLines={1}>Message</Text>
+              </TouchableOpacity>
+              {user ? (
+                <TouchableOpacity
+                  style={[styles.messageBtn, styles.messageBtnSm]}
+                  onPress={() => router.push('/(tabs)/community?seg=services')}
+                  activeOpacity={0.85}
+                >
+                  <Text style={[styles.messageBtnText, styles.messageBtnTextSm]} numberOfLines={1}>Find a sitter/walker</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
-          ) : (
-            <TouchableOpacity style={styles.fosterButton} onPress={() => openAppForm('foster')}>
-              <Text style={styles.fosterText}>Foster me</Text>
-            </TouchableOpacity>
-          )
-        )}
-        {(pet.availability === 'adoption' || pet.availability === 'both') && (
-          existingApps.adopt ? (
-            <View style={styles.appliedPill}>
-              <FileText color={Colors.textTertiary} size={14} />
-              <Text style={styles.appliedPillText}>Application {existingApps.adopt}</Text>
+            <View style={styles.barRow}>
+              {/adopted/i.test(pet.status || '') ? (
+                <TouchableOpacity style={styles.adoptButton} onPress={claimAdoptedPet}>
+                  <Text style={styles.adoptText} numberOfLines={1}>Add {firstName(pet.name)} to my pets</Text>
+                </TouchableOpacity>
+              ) : null}
+              {(pet.availability === 'foster' || pet.availability === 'both') && (
+                existingApps.foster ? (
+                  <View style={styles.appliedPill}>
+                    <FileText color={Colors.textTertiary} size={14} />
+                    <Text style={styles.appliedPillText} numberOfLines={1}>Application {existingApps.foster}</Text>
+                  </View>
+                ) : (
+                  <TouchableOpacity style={styles.fosterButton} onPress={() => openAppForm('foster')}>
+                    <Text style={styles.fosterText} numberOfLines={1}>Foster me</Text>
+                  </TouchableOpacity>
+                )
+              )}
+              {(pet.availability === 'adoption' || pet.availability === 'both') && (
+                existingApps.adopt ? (
+                  <View style={styles.appliedPill}>
+                    <FileText color={Colors.textTertiary} size={14} />
+                    <Text style={styles.appliedPillText} numberOfLines={1}>Application {existingApps.adopt}</Text>
+                  </View>
+                ) : (
+                  <TouchableOpacity style={styles.adoptButton} onPress={() => openAppForm('adopt')}>
+                    <Text style={styles.adoptText} numberOfLines={1}>Adopt {firstName(pet.name)}</Text>
+                  </TouchableOpacity>
+                )
+              )}
+              {pet.availability === 'none' && !/adopted/i.test(pet.status || '') ? (
+                <View style={styles.unavailablePill}>
+                  <Text style={styles.unavailablePillText} numberOfLines={1}>Not available</Text>
+                </View>
+              ) : null}
             </View>
-          ) : (
-            <TouchableOpacity style={styles.adoptButton} onPress={() => openAppForm('adopt')}>
-              <Text style={styles.adoptText}>Adopt {pet.name}</Text>
+          </>
+        ) : (
+          <>
+            <TouchableOpacity
+              style={styles.messageBtn}
+              onPress={() => {
+                if (String(pet.id).startsWith('rg-a-')) {
+                  if (listingEmail) {
+                    Linking.openURL(`mailto:${listingEmail}?subject=${encodeURIComponent('Adoption inquiry: ' + pet.name)}`);
+                  } else if (listingPhone) {
+                    Linking.openURL('tel:' + listingPhone.replace(/[^\d+]/g, ''));
+                  }
+                  return;
+                }
+                if (!user) { router.push('/auth'); return; }
+                (async () => {
+                  try {
+                    const { data, error } = await supabase.rpc('get_or_create_conversation', {
+                      p_subject_type: 'pet',
+                      p_subject_id: pet.id,
+                    });
+                    if (error) throw error;
+                    router.push(`/chat?conversationId=${data}` as any);
+                  } catch (err) { console.error('[pet-details] conversation failed:', err); }
+                })();
+              }}
+              activeOpacity={0.85}
+            >
+              <MessageCircle color={Colors.navy} size={18} />
+              <Text style={styles.messageBtnText} numberOfLines={1}>Message</Text>
             </TouchableOpacity>
-          )
-        )}
-        {pet.availability === 'none' && (
-          <View style={styles.unavailablePill}>
-            <Text style={styles.unavailablePillText}>Not available for foster or adoption</Text>
-          </View>
+            {/adopted/i.test(pet.status || '') && (
+              <TouchableOpacity style={styles.adoptButton} onPress={claimAdoptedPet}>
+                <Text style={styles.adoptText} numberOfLines={1}>Add {firstName(pet.name)} to my pets</Text>
+              </TouchableOpacity>
+            )}
+            {(pet.availability === 'foster' || pet.availability === 'both') && (
+              existingApps.foster ? (
+                <View style={styles.appliedPill}>
+                  <FileText color={Colors.textTertiary} size={14} />
+                  <Text style={styles.appliedPillText} numberOfLines={1}>Application {existingApps.foster}</Text>
+                </View>
+              ) : (
+                <TouchableOpacity style={styles.fosterButton} onPress={() => openAppForm('foster')}>
+                  <Text style={styles.fosterText} numberOfLines={1}>Foster me</Text>
+                </TouchableOpacity>
+              )
+            )}
+            {(pet.availability === 'adoption' || pet.availability === 'both') && (
+              existingApps.adopt ? (
+                <View style={styles.appliedPill}>
+                  <FileText color={Colors.textTertiary} size={14} />
+                  <Text style={styles.appliedPillText} numberOfLines={1}>Application {existingApps.adopt}</Text>
+                </View>
+              ) : (
+                <TouchableOpacity style={styles.adoptButton} onPress={() => openAppForm('adopt')}>
+                  <Text style={styles.adoptText} numberOfLines={1}>Adopt {firstName(pet.name)}</Text>
+                </TouchableOpacity>
+              )
+            )}
+            {user ? (
+              <TouchableOpacity
+                style={styles.messageBtn}
+                onPress={() => router.push('/(tabs)/community?seg=services')}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.messageBtnText} numberOfLines={1}>Find a sitter/walker</Text>
+              </TouchableOpacity>
+            ) : null}
+            {pet.availability === 'none' && (
+              <View style={styles.unavailablePill}>
+                <Text style={styles.unavailablePillText} numberOfLines={1}>Not available for foster or adoption</Text>
+              </View>
+            )}
+          </>
         )}
       </View>
       </Page>
@@ -889,7 +1052,7 @@ const styles = StyleSheet.create({
 
   scrollContent: { paddingBottom: 100 },
 
-  heroWrap: { position: 'relative', width: '100%', aspectRatio: 4/3, borderRadius: 20, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 12 },
+  heroWrap: { position: 'relative', width: '100%', maxWidth: 320, height: 240, aspectRatio: 4/3, borderRadius: 16, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 12, alignSelf: 'center' },
   heroImage: { width: '100%', height: '100%' },
   heroPlaceholder: { justifyContent: 'center', alignItems: 'center' },
   heroBack: {
@@ -910,16 +1073,16 @@ const styles = StyleSheet.create({
     marginTop: 12, paddingTop: 20, paddingHorizontal: 4, paddingBottom: 20,
   },
   petHeader: {
-    flexDirection: 'row', alignItems: 'baseline', gap: 8, marginBottom: 4,
+    flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 4,
   },
   petName: {
-    fontSize: FontSizes['3xl'], fontFamily: Fonts.extrabold, color: Colors.text,
+    flex: 1, fontSize: 22, fontFamily: Fonts.extrabold, fontWeight: '800', color: Colors.navy,
   },
   petAge: {
-    fontSize: FontSizes.lg, fontFamily: Fonts.bold, color: Colors.coral,
+    fontSize: 16, fontFamily: Fonts.bold, color: Colors.coral, marginTop: 4, flexShrink: 0,
   },
   petBreedLocation: {
-    fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.textSecondary, marginBottom: 16,
+    fontSize: 13, fontFamily: Fonts.medium, color: '#6B7280', marginBottom: 16,
   },
 
   traitChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
@@ -1091,27 +1254,31 @@ const styles = StyleSheet.create({
     width: '100%',
     position: 'absolute', bottom: 0, left: 0, right: 0,
     flexDirection: 'row', backgroundColor: Colors.white,
-    paddingHorizontal: 20, paddingTop: 16, gap: 12,
+    paddingHorizontal: 20, paddingTop: 12, gap: 10,
     borderTopWidth: 1, borderTopColor: '#EEF0F4',
     elevation: 8, shadowColor: Colors.shadow, shadowOffset: { width: 0, height: -2 },
     shadowOpacity: 0.08, shadowRadius: 8,
   },
+  bottomActionsStack: { flexDirection: 'column', gap: 8 },
+  barRow: { flexDirection: 'row', gap: 8, width: '100%' },
   messageBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    paddingVertical: 16, borderRadius: 14, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border,
+    flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 14, paddingHorizontal: 10, borderRadius: 14, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border,
   },
+  messageBtnSm: { paddingVertical: 10 },
   messageBtnText: {
     fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.navy,
   },
+  messageBtnTextSm: { fontSize: 13 },
   fosterButton: {
-    flex: 1, paddingVertical: 16, borderRadius: 14,
-    borderWidth: 1.5, borderColor: Colors.navy, alignItems: 'center',
+    flex: 1, minWidth: 0, paddingVertical: 14, paddingHorizontal: 10, borderRadius: 14,
+    borderWidth: 1.5, borderColor: Colors.navy, alignItems: 'center', justifyContent: 'center',
   },
   fosterText: {
     fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.navy,
   },
   adoptButton: {
-    flex: 1, paddingVertical: 16, borderRadius: 14, backgroundColor: Colors.coral, alignItems: 'center',
+    flex: 1, minWidth: 0, paddingVertical: 14, paddingHorizontal: 10, borderRadius: 14, backgroundColor: Colors.coral, alignItems: 'center', justifyContent: 'center',
   },
   adoptText: {
     fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.white,

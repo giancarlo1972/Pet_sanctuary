@@ -9,6 +9,7 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
+import SignInPrompt from '@/components/SignInPrompt';
 
 const REPORT_TYPE_LABELS: Record<string, string> = {
   lost: 'Lost Pet', stray: 'Stray Pet', foster: 'Foster', support: 'Support',
@@ -45,7 +46,7 @@ interface ReportRow {
 }
 
 export default function ReportsTrackingScreen() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [reports, setReports] = useState<ReportRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -76,6 +77,9 @@ export default function ReportsTrackingScreen() {
         <Text style={styles.topTitle}>My Reports</Text>
         <View style={styles.topBtn} />
       </View>
+      {!user ? (
+        authLoading ? null : <SignInPrompt title="Sign in to see your reports" message="Reports you file are tracked on your account." />
+      ) : (
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} colors={[Colors.coral]} />}>
         {loading ? (
           <ActivityIndicator size="large" color={Colors.coral} style={{ marginTop: 40 }} />
@@ -113,6 +117,7 @@ export default function ReportsTrackingScreen() {
           })
         )}
       </ScrollView>
+      )}
     </SafeAreaView>
   );
 }

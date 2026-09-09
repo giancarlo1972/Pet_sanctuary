@@ -11,6 +11,7 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
+import SignInPrompt from '@/components/SignInPrompt';
 
 type Member = { user_id: string; role: string; profiles: { full_name: string | null; email: string | null } | null };
 type Request = { id: string; scope: string; status: string; requester_id: string; pet_id: string; pets: { name: string } | null; profiles: { full_name: string | null } | null };
@@ -45,6 +46,7 @@ export default function OrgAdminScreen() {
     }
     if (!o?.id) { setOrg(null); setLoading(false); return; }
     setOrg(o);
+    try {
     const [{ data: m }, { data: r }, { count }] = await Promise.all([
       supabase.from('organization_members').select('user_id, role, profiles(full_name, email)').eq('organization_id', o.id).order('role'),
       supabase.from('record_access_requests').select('id, scope, status, requester_id, pet_id, pets(name), profiles:requester_id(full_name)')
@@ -52,7 +54,11 @@ export default function OrgAdminScreen() {
       supabase.from('pets').select('id', { count: 'exact', head: true }).eq('shelter_id', o.id),
     ]);
     setMembers((m as any) ?? []); setRequests((r as any) ?? []); setPetCount(count ?? 0);
-    setLoading(false);
+    } catch (e: any) {
+      setError(e?.message || 'Could not load organization.');
+    } finally {
+      setLoading(false);
+    }
   }, [user, actingAs, actingIsOrgAdmin]);
   useEffect(() => { if (!authLoading) load(); }, [authLoading, load]);
 
@@ -93,6 +99,16 @@ export default function OrgAdminScreen() {
     if (e) setError(e.message); else await log(`access_request.${decision}`, { subject_type: 'record_access_request', subject_id: r.id });
     setBusy(null); load();
   };
+
+  if (!user) {
+    return (
+      <Shell>
+        {authLoading ? null : (
+          <SignInPrompt title="Sign in to manage this organization" message="Team, pets, and requests are only for organization members." />
+        )}
+      </Shell>
+    );
+  }
 
   if (authLoading || loading) return <Shell><ActivityIndicator color={Colors.teal} style={{ marginTop: 40 }} /></Shell>;
   if (!user || !org) return (

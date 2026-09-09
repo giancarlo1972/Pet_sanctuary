@@ -1,4 +1,6 @@
-/** Longest side ~1600px, JPEG 0.8 — vaccine text stays readable, Claude stays under 10 MB. */
+/** Compress images over 1.5 MB (or longer than 1600px). Claude limit is 10 MB. */
+
+const COMPRESS_BYTES = 1_500_000;
 
 export async function fileToDataUrl(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -25,6 +27,9 @@ export async function prepareImageFile(file: File): Promise<{ blob: Blob; dataUr
     i.src = dataUrl;
   });
   const longest = Math.max(img.width, img.height) || 1;
+  if (file.size <= COMPRESS_BYTES && longest <= 1600) {
+    return { blob: file, dataUrl, mediaType: file.type || 'image/jpeg' };
+  }
   const scale = longest > 1600 ? 1600 / longest : 1;
   const w = Math.max(1, Math.round(img.width * scale));
   const h = Math.max(1, Math.round(img.height * scale));

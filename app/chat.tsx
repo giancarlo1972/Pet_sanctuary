@@ -9,6 +9,7 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
+import SignInPrompt from '@/components/SignInPrompt';
 
 interface Message {
   id: string;
@@ -27,7 +28,7 @@ function formatTime(dateString: string): string {
 
 export default function ChatScreen() {
   const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [input, setInput] = useState('');
@@ -35,7 +36,8 @@ export default function ChatScreen() {
   const scrollRef = useRef<ScrollView>(null);
 
   const loadMessages = useCallback(async () => {
-    if (!conversationId) return;
+    if (!user) { setLoading(false); return; }
+    if (!conversationId) { setLoading(false); return; }
     try {
       const { data, error } = await supabase
         .from('messages')
@@ -46,7 +48,7 @@ export default function ChatScreen() {
       if (!error && data) setMessages(data);
     } catch { /* ignore */ }
     setLoading(false);
-  }, [conversationId]);
+  }, [conversationId, user]);
 
   useEffect(() => { loadMessages(); }, [loadMessages]);
 
@@ -78,7 +80,9 @@ export default function ChatScreen() {
         <Text style={styles.topTitle}>Conversation</Text>
         <View style={styles.topBtn} />
       </View>
-      {loading ? (
+      {!user ? (
+        authLoading ? null : <SignInPrompt title="Sign in to message" message="Messages stay between you and the other person." />
+      ) : loading ? (
         <View style={styles.loadingContainer}><ActivityIndicator size="large" color={Colors.coral} /></View>
       ) : (
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }} keyboardVerticalOffset={90}>

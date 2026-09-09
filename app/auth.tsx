@@ -29,17 +29,20 @@ async function afterLogin(email: string) {
   const user = sess.user;
   const loginEmail = (user?.email || email || '').toLowerCase();
   let role = '';
+  let onboarded = true;
   if (user?.id) {
-    const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle();
+    const { data: profile } = await supabase.from('profiles').select('role, onboarding_done').eq('id', user.id).maybeSingle();
     role = profile?.role || '';
+    if (profile && profile.onboarding_done === false) onboarded = false;
   }
+  const dest = onboarded ? '/' : '/onboarding';
   const label = isPlatformAdmin(role, loginEmail) ? 'Rescue Army admin' : 'Member';
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
     try { sessionStorage.setItem('ra_login_toast', label); } catch {}
-    window.location.assign('/');
+    window.location.assign(dest);
     return;
   }
-  router.replace('/(tabs)');
+  router.replace(onboarded ? '/(tabs)' : '/onboarding');
 }
 
 export default function AuthScreen() {

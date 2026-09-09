@@ -5,7 +5,7 @@ import { Fonts } from '@/constants/Fonts';
 import { AreaChart, HealthRing, RefBand } from '@/components/MedicalCharts';
 import { LabSparkline as MiniSpark } from '@/components/PetCharts';
 import { SourceBadge } from '@/components/SourceBadge';
-import { Card, InnerTile } from '@/components/Card';
+import { Card } from '@/components/Card';
 export { EXAM_PILLS } from '@/components/VetExamCard';
 
 export function classifyLab(name: string): 'Hematology' | 'Chemistry' | 'Endocrinology' | 'Urinalysis' {
@@ -53,6 +53,9 @@ export default function MedicalDashboard(props: {
   onAddWeight?: () => void;
   onAddDob?: () => void;
   onUploadRecord?: () => void;
+  docCounts?: { labs: number; vaccines: number; records: number };
+  onOpenDocs?: (kind: 'labs' | 'vaccinations' | 'exam_visit') => void;
+  onMenu?: () => void;
 }) {
   const [labOpen, setLabOpen] = useState<Record<string, boolean>>({ Hematology: true, Chemistry: true, Endocrinology: true, Urinalysis: true });
 
@@ -74,6 +77,7 @@ export default function MedicalDashboard(props: {
       const cat = props.labCatalog.find((c) => c.name.toLowerCase() === key || (c.name || '').toLowerCase() === String(cur.analyte || '').toLowerCase());
       const flag = String(cur.flag || '').toLowerCase();
       const nums = sorted.map((r) => parseFloat(r.value ?? r.value_num ?? r.value_text)).filter((n) => !Number.isNaN(n));
+      const dates = sorted.map((r) => r.collected_on || r.created_at).filter(Boolean);
       return {
         key,
         label: cur.analyte || cur.name,
@@ -83,16 +87,16 @@ export default function MedicalDashboard(props: {
         flag,
         delta: !Number.isNaN(curN) && !Number.isNaN(prevN) ? curN - prevN : null,
         nums,
-        dates: sorted.map((r) => r.collected_on || r.created_at),
+        dates,
         low: cur.ref_low ?? cat?.ref_low ?? null,
         high: cur.ref_high ?? cat?.ref_high ?? null,
-        n: sorted.length,
-        first: sorted[0]?.collected_on || sorted[0]?.created_at,
-        last: cur.collected_on || cur.created_at,
+        n: dates.length || sorted.length,
+        first: dates[0] || sorted[0]?.collected_on || sorted[0]?.created_at,
+        last: dates[dates.length - 1] || cur.collected_on || cur.created_at,
         abnormal: flag === 'high' || flag === 'low' || flag === 'abnormal',
         source: cur.source,
       };
-    }).sort((a, b) => Number(b.abnormal) - Number(a.abnormal) || a.label.localeCompare(b.label));
+    }).filter((it) => it.n > 0).sort((a, b) => Number(b.abnormal) - Number(a.abnormal) || a.label.localeCompare(b.label));
   }, [props.labRows, props.labCatalog]);
 
   const grouped = {
@@ -106,18 +110,33 @@ export default function MedicalDashboard(props: {
     props.vitals.filter((v) => v[key] != null).map((v) => ({ v: Number(v[key]), at: formatDate(v.recorded_at) }));
 
   const computedRisks = useMemo(() => {
-    const list: string[] = [];
-    if (props.bcs != null && props.bcs >= 8) list.push(`Obesity · BCS ${props.bcs}`);
+    type Tone = 'red' | 'yellow' | 'gray' | 'neutral';
+    const list: { label: string; tone: Tone }[] = [];
+    const push = (label: string, tone: Tone) => {
+      if (list.some((x) => x.label.toLowerCase() === label.toLowerCase())) return;
+      list.push({ label, tone });
+    };
+    const overPct = props.latestLb != null && props.targetLb != null && props.targetLb > 0
+      ? ((props.latestLb - props.targetLb) / props.targetLb) * 100
+      : null;
+    if (props.bcs != null && props.bcs >= 8) push('Obesity', 'red');
+    if (overPct != null && overPct > 15) push('Overweight', 'red');
+    else if (overPct != null && overPct > 5) push('Above target', 'yellow');
     for (const r of props.risks || []) {
       const t = String(r || '').trim();
       if (!t) continue;
-      if (list.some((x) => x.toLowerCase() === t.toLowerCase() || t.toLowerCase().includes('obes'))) continue;
-      list.push(t);
+      if (/obes/i.test(t) || /overweight|above target/i.test(t)) continue;
+      push(t, /limited health record/i.test(t) ? 'gray' : 'neutral');
     }
     return list.slice(0, 3);
-  }, [props.bcs, props.risks]);
-  const mainRisk = computedRisks[0] || 'None flagged';
-  const riskWarn = /obes|bcs\s*[89]/i.test(mainRisk);
+  }, [props.bcs, props.risks, props.latestLb, props.targetLb]);
+  const mainRisk = computedRisks[0]?.label || 'None flagged';
+  const riskTone = computedRisks[0]?.tone;
+
+  const overPct = props.latestLb != null && props.targetLb != null && props.targetLb > 0
+    ? ((props.latestLb - props.targetLb) / props.targetLb) * 100
+    : null;
+  const overPctLabel = overPct == null ? null : `${overPct > 0 ? '+' : ''}${overPct.toFixed(1)}%`;
 
   const [expand, setExpand] = useState<Record<string, boolean>>({});
 
@@ -145,36 +164,63 @@ export default function MedicalDashboard(props: {
 
   return (
     <View style={{ gap: 16 }}>
-      <View style={styles.kpiRow}>
-        <InnerTile style={styles.kpiTile}>
-          <Text style={styles.kpiK}>Health score</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-            <HealthRing score={props.healthScore} light size={64} />
-            <Text style={styles.kpiHintDark}>{props.verdict}</Text>
+      <View style={styles.navy}>
+        {props.onMenu ? (
+          <TouchableOpacity style={styles.menuBtn} onPress={props.onMenu} activeOpacity={0.85} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Text style={styles.menuTxt}>⋮</Text>
+          </TouchableOpacity>
+        ) : null}
+        <View style={styles.kpiRow}>
+          <View style={styles.kpi}>
+            <Text style={styles.kpiKLight}>Health score</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <HealthRing score={props.healthScore} size={64} />
+              <Text style={styles.kpiHint}>{props.verdict}</Text>
+            </View>
           </View>
-        </InnerTile>
-        <InnerTile style={styles.kpiTile}>
-          <Text style={styles.kpiK}>Weight</Text>
-          <Text style={styles.kpiVDark}>{props.latestLb != null ? props.latestLb : '—'}<Text style={styles.kpiUDark}> lb</Text></Text>
-          <Delta d={wDelta} />
-          {props.targetLb != null ? <Text style={styles.kpiHintDark}>target {props.targetLb} lb</Text> : null}
-          {props.weightPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.35, width: 90 }}><MiniSpark values={props.weightPts.map((p) => p.v)} color={Colors.teal} height={28} /></View> : null}
-        </InnerTile>
-        <InnerTile style={styles.kpiTile}>
-          <Text style={styles.kpiK}>BCS</Text>
-          <Text style={styles.kpiVDark}>{props.bcs != null ? props.bcs : '—'}<Text style={styles.kpiUDark}> /9</Text></Text>
-          <Delta d={bcsDelta} />
-          {props.bcsPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.35, width: 90 }}><MiniSpark values={props.bcsPts.map((p) => p.v)} color={Colors.accent} height={28} /></View> : null}
-        </InnerTile>
-        <InnerTile style={[styles.kpiTile, riskWarn ? { backgroundColor: Colors.standardBg } : null]}>
-          <Text style={styles.kpiK}>Main risk</Text>
-          <Text style={[styles.kpiVDark, { fontSize: 16, color: riskWarn ? Colors.accentDark : Colors.navy }]} numberOfLines={2}>{mainRisk}</Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
-            {computedRisks.slice(1, 3).map((r) => (
-              <View key={r} style={styles.riskChipLight}><Text style={styles.riskTxtDark} numberOfLines={1}>{r}</Text></View>
-            ))}
+          <View style={styles.kpi}>
+            <Text style={styles.kpiKLight}>Weight</Text>
+            <Text style={styles.kpiV}>{props.latestLb != null ? props.latestLb : '—'}<Text style={styles.kpiU}> lb</Text></Text>
+            {overPctLabel ? (
+              <Text style={[styles.kpiHint, { color: overPct != null && overPct > 15 ? '#F5C1B8' : overPct != null && overPct > 5 ? '#FCE9C8' : '#B9BCE0' }]}>{overPctLabel}</Text>
+            ) : (
+              <Delta d={wDelta} />
+            )}
+            {props.targetLb != null ? <Text style={styles.kpiHint}>target {props.targetLb} lb</Text> : null}
+            {props.weightPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.45, width: 90 }}><MiniSpark values={props.weightPts.map((p) => p.v)} color="#7EE0D6" height={28} /></View> : null}
           </View>
-        </InnerTile>
+          <View style={styles.kpi}>
+            <Text style={styles.kpiKLight}>BCS</Text>
+            <Text style={styles.kpiV}>{props.bcs != null ? props.bcs : '—'}<Text style={styles.kpiU}> /9</Text></Text>
+            <Delta d={bcsDelta} />
+            {props.bcsPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.45, width: 90 }}><MiniSpark values={props.bcsPts.map((p) => p.v)} color="#FCE9C8" height={28} /></View> : null}
+          </View>
+          <View style={[styles.kpi, riskTone === 'red' ? { backgroundColor: 'rgba(215,68,62,0.28)' } : riskTone === 'yellow' ? { backgroundColor: 'rgba(229,164,21,0.22)' } : null]}>
+            <Text style={styles.kpiKLight}>Main risk</Text>
+            <Text style={[styles.kpiV, { fontSize: 16, color: riskTone === 'red' ? '#F5C1B8' : riskTone === 'yellow' ? '#FCE9C8' : Colors.white }]} numberOfLines={2}>{mainRisk}</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+              {computedRisks.slice(1, 3).map((r) => (
+                <View key={r.label} style={[styles.riskChip, r.tone === 'gray' ? { backgroundColor: 'rgba(255,255,255,0.10)' } : r.tone === 'red' ? { backgroundColor: 'rgba(215,68,62,0.35)' } : r.tone === 'yellow' ? { backgroundColor: 'rgba(229,164,21,0.28)' } : null]}>
+                  <Text style={[styles.riskTxt, r.tone === 'gray' ? { color: '#C5C8D8' } : null]} numberOfLines={1}>{r.label}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        </View>
+        <View style={styles.docStripNavy}>
+          {([
+            { kind: 'labs' as const, label: 'Labs', n: props.docCounts?.labs ?? 0 },
+            { kind: 'vaccinations' as const, label: 'Vaccines', n: props.docCounts?.vaccines ?? 0 },
+            { kind: 'exam_visit' as const, label: 'Records', n: props.docCounts?.records ?? 0 },
+          ]).map((item, i) => (
+            <React.Fragment key={item.kind}>
+              {i > 0 ? <Text style={styles.stripDotNavy}>·</Text> : null}
+              <TouchableOpacity onPress={() => props.onOpenDocs?.(item.kind)} activeOpacity={0.85}>
+                <Text style={styles.stripTxtNavy}>{item.label} {item.n}</Text>
+              </TouchableOpacity>
+            </React.Fragment>
+          ))}
+        </View>
       </View>
 
       {props.weightPts.length >= 1 ? (
@@ -182,7 +228,7 @@ export default function MedicalDashboard(props: {
         <Text style={styles.kicker}>WEIGHT + BCS</Text>
         {props.weightPts.length >= 2 ? (
           <AreaChart
-            points={props.weightPts.map((p) => ({ ...p, out: props.targetLb != null && p.v > props.targetLb * 1.08 }))}
+            points={props.weightPts.map((p) => ({ ...p, out: props.targetLb != null && p.v > props.targetLb * 1.05 }))}
             secondary={props.bcsPts.length >= 2 ? props.bcsPts : undefined}
             height={160}
             target={props.targetLb}
@@ -215,11 +261,20 @@ export default function MedicalDashboard(props: {
         );
       })}
 
-      {(['Hematology', 'Chemistry', 'Endocrinology', 'Urinalysis'] as const).map((g) => (
+      {(['Hematology', 'Chemistry', 'Endocrinology', 'Urinalysis'] as const).map((g) => {
+        if (!grouped[g].length) return null;
+        const groupDates = grouped[g].flatMap((it) => it.dates).filter(Boolean).sort();
+        const groupN = grouped[g].reduce((s, it) => s + it.n, 0);
+        const groupFirst = groupDates[0] || grouped[g][0]?.first;
+        const groupLast = groupDates[groupDates.length - 1] || grouped[g][grouped[g].length - 1]?.last;
+        return (
         <Card key={g}>
-          <TouchableOpacity onPress={() => setLabOpen((s) => ({ ...s, [g]: !s[g] }))} style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-            <Text style={styles.kicker}>{g.toUpperCase()}</Text>
-            <Text style={styles.link}>{labOpen[g] === false ? 'Show' : 'Hide'} · {grouped[g].length}</Text>
+          <TouchableOpacity onPress={() => setLabOpen((s) => ({ ...s, [g]: !s[g] }))} style={{ gap: 2 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+              <Text style={styles.kicker}>{g.toUpperCase()}</Text>
+              <Text style={styles.link}>{labOpen[g] === false ? 'Show' : 'Hide'}</Text>
+            </View>
+            <Text style={styles.foot}>{groupN} result{groupN === 1 ? '' : 's'} · {formatDate(groupFirst)} → {formatDate(groupLast)}</Text>
           </TouchableOpacity>
           {labOpen[g] !== false ? grouped[g].map((it) => (
             <View key={it.key} style={styles.labRow}>
@@ -228,23 +283,31 @@ export default function MedicalDashboard(props: {
                 <SourceBadge source={it.source} />
                 <Text style={[styles.labVal, { color: it.abnormal ? Colors.coral : Colors.navy }]}>
                   {it.value ?? '—'}{it.unit ? ` ${it.unit}` : ''}
-                  {it.delta != null ? `  ${it.delta > 0 ? '▲' : it.delta < 0 ? '▼' : '•'}${Math.abs(Math.round(it.delta * 100) / 100)}` : ''}
+                  {it.n >= 2 && it.delta != null ? `  ${it.delta > 0 ? '▲' : it.delta < 0 ? '▼' : '•'}${Math.abs(Math.round(it.delta * 100) / 100)}` : ''}
+                  {it.n < 2 ? ` · ${formatDate(it.last)}` : ''}
                 </Text>
               </View>
-              <RefBand value={typeof it.value === 'number' ? it.value : parseFloat(it.value)} low={it.low} high={it.high} flag={it.flag} />
-              {it.nums.length >= 2 ? <MiniSpark values={it.nums} color={it.abnormal ? Colors.coral : '#2E9E96'} height={40} /> : null}
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                <Text style={styles.foot}>First to last · {it.n} measurements</Text>
-                <Text style={styles.link}>View all →</Text>
-              </View>
+              {it.n >= 2 ? (
+                <>
+                  <RefBand value={typeof it.value === 'number' ? it.value : parseFloat(it.value)} low={it.low} high={it.high} flag={it.flag} />
+                  {it.nums.length >= 2 ? <MiniSpark values={it.nums} color={it.abnormal ? Colors.coral : '#2E9E96'} height={40} /> : null}
+                  {it.n > 6 ? (
+                    <TouchableOpacity onPress={() => setExpand((s) => ({ ...s, [it.key]: !s[it.key] }))}>
+                      <Text style={styles.link}>{expand[it.key] ? 'Show less' : 'View all →'}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </>
+              ) : null}
             </View>
           )) : null}
         </Card>
-      ))}
+        );
+      })}
 
+      {props.meds.length > 0 ? (
       <Card>
         <Text style={styles.kicker}>MEDICATIONS</Text>
-        {props.meds.length === 0 ? <Text style={styles.foot}>No medications recorded.</Text> : props.meds.map((m) => (
+        {props.meds.map((m) => (
           <View key={m.id} style={styles.medRow}>
             <View style={{ flex: 1 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -260,10 +323,12 @@ export default function MedicalDashboard(props: {
           </View>
         ))}
       </Card>
+      ) : null}
 
+      {props.diagnostics.length > 0 ? (
       <Card>
         <Text style={styles.kicker}>DIAGNOSTICS</Text>
-        {props.diagnostics.length === 0 ? <Text style={styles.foot}>No imaging or PCR on file.</Text> : props.diagnostics.map((d) => (
+        {props.diagnostics.map((d) => (
           <View key={d.id} style={{ gap: 2, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: Colors.border }}>
             <Text style={styles.labName}>{d.name} · {d.kind}</Text>
             <Text style={styles.body}>{d.result || '—'}</Text>
@@ -271,6 +336,7 @@ export default function MedicalDashboard(props: {
           </View>
         ))}
       </Card>
+      ) : null}
 
       <Card>
         <Text style={styles.kicker}>AI NOTES</Text>
@@ -301,7 +367,7 @@ export default function MedicalDashboard(props: {
               <Text style={styles.checkTxt}>Add date of birth</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.checkRow, styles.checkPrimary]} onPress={props.onUploadRecord} activeOpacity={0.85}>
-              <Text style={styles.checkPrimaryTxt}>Upload a vet record</Text>
+              <Text style={styles.checkPrimaryTxt}>Go to Documents</Text>
             </TouchableOpacity>
           </View>
         ) : (
@@ -320,7 +386,9 @@ export default function MedicalDashboard(props: {
 }
 
 const styles = StyleSheet.create({
-  navy: { backgroundColor: Colors.navy, borderRadius: 16, padding: 16, gap: 4 },
+  navy: { backgroundColor: '#26265E', borderRadius: 16, padding: 16, gap: 12, position: 'relative' },
+  menuBtn: { position: 'absolute', top: 8, right: 8, zIndex: 2, width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
+  menuTxt: { color: Colors.white, fontSize: 22, lineHeight: 24, fontFamily: Fonts.bold },
   kpiRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   kpiTile: { width: '48%', backgroundColor: Colors.white, borderRadius: 16, padding: 14, minHeight: 118, overflow: 'hidden', gap: 4 },
   kpiVDark: { fontFamily: Fonts.extrabold, fontSize: 26, color: Colors.navy },
@@ -328,12 +396,19 @@ const styles = StyleSheet.create({
   kpiHintDark: { fontFamily: Fonts.regular, fontSize: 11, color: Colors.textTertiary },
   riskChipLight: { backgroundColor: Colors.standardBg, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
   riskTxtDark: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.accentDark },
+  docStrip: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, paddingTop: 4 },
+  stripTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.navy },
+  stripDot: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.textTertiary },
+  docStripNavy: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, paddingTop: 4 },
+  stripTxtNavy: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.white },
+  stripDotNavy: { fontFamily: Fonts.bold, fontSize: 13, color: '#B9BCE0' },
   navyKicker: { fontFamily: Fonts.extrabold, fontSize: 11, letterSpacing: 0.8, color: '#B9BCE0' },
   navySub: { fontFamily: Fonts.bold, fontSize: 16, color: Colors.white },
   riskChip: { backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, maxWidth: 160 },
   riskTxt: { fontFamily: Fonts.bold, fontSize: 11, color: '#FCE9C8' },
-  kpi: { flex: 1, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 14, padding: 12, gap: 4 },
+  kpi: { width: '48%', backgroundColor: 'rgba(255,255,255,0.10)', borderRadius: 14, padding: 12, minHeight: 118, overflow: 'hidden', gap: 4 },
   kpiK: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.textTertiary },
+  kpiKLight: { fontFamily: Fonts.bold, fontSize: 11, color: '#B9BCE0' },
   kpiV: { fontFamily: Fonts.extrabold, fontSize: 26, color: Colors.white },
   kpiU: { fontFamily: Fonts.medium, fontSize: 13, color: '#B9BCE0' },
   kpiHint: { fontFamily: Fonts.regular, fontSize: 11, color: '#B9BCE0' },

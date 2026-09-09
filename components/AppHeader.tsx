@@ -21,7 +21,7 @@ export default function AppHeader({ title, showBack = false, rightAction, maxWid
 
   const goBack = () => {
     if (router.canGoBack()) router.back();
-    else router.replace('/(tabs)/profile');
+    else router.replace('/(tabs)');
   };
 
   return (

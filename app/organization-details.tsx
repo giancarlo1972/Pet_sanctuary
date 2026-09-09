@@ -15,7 +15,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeBack } from '@/hooks/useSafeBack';
 import {
-  ArrowLeft,
   Shield,
   Heart,
   Play,
@@ -23,18 +22,25 @@ import {
   Check,
   Share as ShareIcon,
   Link as LinkIcon,
+  Phone,
+  Mail,
+  Globe,
 } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/lib/context/AuthContext';
 import SignedImage from '@/components/SignedImage';
+import AppHeader from '@/components/AppHeader';
+import { Page } from '@/components/Page';
+import { orgSection, orgTypeLabel, orgTileColor, orgListsPets, type OrgSection } from '@/lib/org-type';
 
-const BRAND_COLORS = [Colors.coral, Colors.teal, Colors.navy, Colors.accent, Colors.coralDark, Colors.tealDark];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ORG_SELECT_FULL = 'id, name, description, org_type, address, city, state, website, phone, contact_email, status, ein_verified, tax_deductible, donations_enabled, donate_url, data_source, external_id';
+const ORG_SELECT_SLIM = 'id, name, description, org_type, address, city, state, website, phone, contact_email, status';
 
-function colorForName(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
-  return BRAND_COLORS[hash % BRAND_COLORS.length];
+function isUuid(value: string) {
+  return UUID_RE.test(value);
 }
 
 interface OrgPet {
@@ -43,11 +49,19 @@ interface OrgPet {
   photo_url: string | null;
 }
 
+interface SponsoredItem {
+  id: string;
+  title: string;
+  sub: string;
+  orgId?: string | null;
+}
+
 interface OrgData {
   id: string;
   name: string;
   description: string;
   type: string;
+  kind: OrgSection;
   city: string;
   status: string;
   ein: string;
@@ -55,6 +69,7 @@ interface OrgData {
   tax_deductible: boolean;
   address: string;
   website: string;
+  phone: string;
   donation_url: string;
   contact_email: string;
   data_source: string;
@@ -69,6 +84,7 @@ const MOCK_ORG: OrgData = {
   name: 'Happy Paws Shelter',
   description: '',
   type: 'Shelter',
+  kind: 'shelter',
   city: '',
   status: 'verified',
   ein: '',
@@ -76,6 +92,7 @@ const MOCK_ORG: OrgData = {
   tax_deductible: false,
   address: '',
   website: '',
+  phone: '',
   donation_url: '',
   contact_email: '',
   data_source: 'Unknown',
@@ -92,6 +109,66 @@ const SHARE_CHIPS = [
   { label: 'Copy link', icon: LinkIcon },
 ];
 
+function mapDbOrg(dbOrg: any): OrgData {
+  const city = dbOrg.city
+    || (String(dbOrg.address || '').match(/,\s*([^,]+),\s*[A-Z]{2}/)?.[1])
+    || '';
+  const fromRg = String(dbOrg.data_source || '').toLowerCase().includes('rescue');
+  const kind = orgSection(dbOrg.org_type);
+  const description = dbOrg.description
+    || (kind === 'sponsor' ? 'Helps shelters and animals in need.' : '');
+  return {
+    id: dbOrg.id,
+    name: dbOrg.name || 'Organization',
+    description,
+    type: orgTypeLabel(dbOrg.org_type),
+    kind,
+    city,
+    status: dbOrg.status || 'pending',
+    ein: '',
+    ein_verified: Boolean(dbOrg.ein_verified),
+    tax_deductible: Boolean(dbOrg.tax_deductible),
+    address: dbOrg.address || [dbOrg.city, dbOrg.state].filter(Boolean).join(', '),
+    website: dbOrg.website || '',
+    phone: dbOrg.phone || '',
+    donation_url: dbOrg.donate_url || '',
+    contact_email: dbOrg.contact_email || '',
+    data_source: fromRg ? 'RescueGroups.org API' : 'User registered',
+    pets_listed: 0,
+    adoptions: 0,
+    followers: 0,
+    pets: [],
+  };
+}
+
+function openHref(href: string) {
+  if (!href) return;
+  Linking.openURL(href).catch(() => {
+    if (typeof window !== 'undefined') window.location.href = href;
+  });
+}
+
+function websiteHref(url: string) {
+  const t = String(url || '').trim();
+  if (!t) return '';
+  return /^https?:\/\//i.test(t) ? t : `https://${t}`;
+}
+
+function phoneHref(phone: string) {
+  const t = String(phone || '').trim();
+  if (!t) return '';
+  return `tel:${t.replace(/[^\d+]/g, '')}`;
+}
+
+async function loadOrgRow(rawId: string) {
+  const column = isUuid(rawId) ? 'id' : 'external_id';
+  let res = await supabase.from('organizations').select(ORG_SELECT_FULL).eq(column, rawId).maybeSingle();
+  if (res.error) {
+    res = await supabase.from('organizations').select(ORG_SELECT_SLIM).eq(column, rawId).maybeSingle();
+  }
+  return res;
+}
+
 function openDonate(org: OrgData) {
   const url =
     org.donation_url ||
@@ -99,108 +176,62 @@ function openDonate(org: OrgData) {
       ? `https://www.paypal.com/donate/?business=${encodeURIComponent(org.contact_email)}&currency_code=USD`
       : org.website);
   if (!url) return;
-  Linking.openURL(url.startsWith('http') ? url : `https://${url}`);
+  openHref(url.startsWith('http') ? url : `https://${url}`);
 }
 
 export default function OrganizationDetailsScreen() {
   const safeBack = useSafeBack('/(tabs)/community');
+  const { user } = useAuth();
   const { id, story } = useLocalSearchParams();
   const [org, setOrg] = useState<OrgData | null>(null);
   const [loading, setLoading] = useState(true);
   const [following, setFollowing] = useState(false);
   const [einDisplay, setEinDisplay] = useState<string | null>(null);
   const [einFullAccess, setEinFullAccess] = useState(false);
+  const [sponsored, setSponsored] = useState<SponsoredItem[]>([]);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      if (id) {
-        try {
-          const { data: dbOrg, error } = await supabase
-            .from('organizations')
-            .select('id, name, description, org_type, address, website, phone, contact_email, status, ein, ein_verified, tax_deductible, donations_enabled')
-            .eq('id', id)
-            .single();
-          if (!error && dbOrg) {
-            const orgTypeLabel: Record<string, string> = {
-              nonprofit: 'Nonprofit',
-              business: 'Business / Sponsor',
-              municipal: 'Municipal',
-              individual: 'Personal Fundraiser',
-            };
-            const cityMatch = dbOrg.address?.match(/,\s*([^,]+),\s*[A-Z]{2}\s*\d{5}/);
-            setOrg({
-              id: dbOrg.id,
-              name: dbOrg.name || 'Organization',
-              description: dbOrg.description || '',
-              type: orgTypeLabel[dbOrg.org_type] || 'Organization',
-              city: cityMatch?.[1] || '',
-              status: dbOrg.status || 'pending',
-              ein: dbOrg.ein || '',
-              ein_verified: dbOrg.ein_verified || false,
-              tax_deductible: dbOrg.tax_deductible || false,
-              address: dbOrg.address || '',
-              website: dbOrg.website || '',
-              donation_url: '',
-              contact_email: dbOrg.contact_email || '',
-              data_source: 'User registered',
-              pets_listed: 0,
-              adoptions: 0,
-              followers: 0,
-              pets: [],
-            });
-            setLoading(false);
-            return;
-          }
-        } catch { /* fall through to RescueGroups */ }
-
-        try {
-          const resp = await fetch('/api/rescuegroups?state=NY');
-          const json = await resp.json();
-          const d = (json.orgs || []).find((o: any) => o.id === id);
-          if (d) {
-            setOrg({
-              id: d.id,
-              name: d.name,
-              description: d.description || d.website || '',
-              type: d.org_type || 'Rescue',
-              city: d.location || '',
-              status: 'verified',
-              ein: '',
-              ein_verified: false,
-              tax_deductible: false,
-              address: d.location || '',
-              website: d.website || '',
-              donation_url: d.donation_url || '',
-              contact_email: d.email || '',
-              data_source: 'RescueGroups.org API',
-              pets_listed: 0,
-              adoptions: 0,
-              followers: 0,
-              pets: [],
-            });
-                        try {
-              const petRes = await fetch('/api/rescuegroups?org=' + encodeURIComponent(d.id));
-              const petJson = await petRes.json();
-              const pets = petJson.pets || [];
-              setOrg((prev) => prev && prev.id === d.id ? { ...prev, pets, pets_listed: petJson.foundRows || pets.length } : prev);
-            } catch { /* ignore */ }
-          } else {
-            setOrg(null);
-          }
-        } catch {
-            setOrg(null);
+      setLoading(true);
+      try {
+        const rawId = String(Array.isArray(id) ? id[0] : id || '').trim();
+        if (!rawId) {
+          setOrg(null);
+          return;
         }
-      } else if (story) {
-            setOrg(null);
-      } else {
-            setOrg(null);
+        const { data: dbOrg, error } = await loadOrgRow(rawId);
+        if (cancelled) return;
+        if (error || !dbOrg) {
+          setOrg(null);
+          return;
+        }
+        const mapped = mapDbOrg(dbOrg);
+        setOrg(mapped);
+        const ext = dbOrg.external_id || (!isUuid(rawId) ? rawId : null);
+        if (orgListsPets(dbOrg.org_type) && ext && String(ext).startsWith('rg-')) {
+          fetch('/api/rescuegroups?org=' + encodeURIComponent(String(ext)))
+            .then((r) => r.json())
+            .then((petJson) => {
+              if (cancelled) return;
+              const pets = petJson.pets || [];
+              setOrg((prev) => prev && prev.id === mapped.id
+                ? { ...prev, pets, pets_listed: petJson.foundRows || pets.length }
+                : prev);
+            })
+            .catch(() => { /* pets are optional */ });
+        }
+      } catch {
+        if (!cancelled) setOrg(null);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setLoading(false);
     })();
-  }, [id, story]);
+    return () => { cancelled = true; };
+  }, [id]);
 
   useEffect(() => {
-    if (!org || !org.id || org.id === 'demo' || String(org.id).startsWith('rg-')) return;
+    if (!org || !org.id || org.id === 'demo' || !isUuid(String(org.id))) return;
     (async () => {
       try {
         const { data } = await supabase.rpc('get_org_ein', { p_org_id: org.id });
@@ -210,6 +241,54 @@ export default function OrganizationDetailsScreen() {
         }
       } catch { /* ignore */ }
     })();
+  }, [org]);
+
+  useEffect(() => {
+    if (!org || org.kind !== 'sponsor' || !org.id || !isUuid(String(org.id))) {
+      setSponsored([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const [{ data: camps, error: cErr }, { data: funds, error: fErr }] = await Promise.all([
+        supabase.from('campaigns').select('id, title, kind, status, org_id').eq('sponsor_id', org.id).limit(20),
+        supabase.from('care_funds').select('id, name, org_id, active').eq('sponsor_id', org.id).limit(20),
+      ]);
+      if (cancelled) return;
+      const rows: { id: string; title: string; sub: string; orgId?: string | null }[] = [];
+      if (!cErr) {
+        for (const c of camps || []) {
+          rows.push({
+            id: 'c-' + c.id,
+            title: c.title || 'Campaign',
+            sub: [c.kind, c.status].filter(Boolean).join(' · '),
+            orgId: c.org_id,
+          });
+        }
+      }
+      if (!fErr) {
+        for (const f of funds || []) {
+          rows.push({
+            id: 'f-' + f.id,
+            title: f.name || 'Care Fund',
+            sub: f.active === false ? 'Care Fund · inactive' : 'Care Fund',
+            orgId: f.org_id,
+          });
+        }
+      }
+      const orgIds = [...new Set(rows.map((r) => r.orgId).filter(Boolean))] as string[];
+      let names: Record<string, string> = {};
+      if (orgIds.length) {
+        const { data: named } = await supabase.from('organizations').select('id, name').in('id', orgIds);
+        (named || []).forEach((o: any) => { names[o.id] = o.name; });
+      }
+      if (cancelled) return;
+      setSponsored(rows.map((r) => ({
+        ...r,
+        sub: [r.sub, r.orgId ? names[r.orgId] : null].filter(Boolean).join(' · '),
+      })));
+    })();
+    return () => { cancelled = true; };
   }, [org]);
 
   const handleShare = async (label: string) => {
@@ -227,38 +306,56 @@ export default function OrganizationDetailsScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.coral} />
-        </View>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <AppHeader title="Organization" showBack />
+        <Page>
+          <ActivityIndicator size="large" color={Colors.coral} style={{ marginTop: 40 }} />
+        </Page>
       </SafeAreaView>
     );
   }
 
   if (!org) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Organization not found</Text>
-        </View>
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <AppHeader title="Organization" showBack />
+        <Page>
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>Organization not found</Text>
+            <TouchableOpacity style={styles.errorBackBtn} onPress={safeBack} activeOpacity={0.85}>
+              <Text style={styles.errorBackText}>Back</Text>
+            </TouchableOpacity>
+          </View>
+        </Page>
       </SafeAreaView>
     );
   }
 
-  const brandColor = colorForName(org.name);
-  const canDonate = !!(org.donation_url || org.contact_email || org.website);
+  const brandColor = orgTileColor(org.kind);
+  const acceptsDonations = org.kind === 'shelter' || org.kind === 'rescue' || org.kind === 'clinic';
+  const canDonate = acceptsDonations && !!(org.donation_url || org.contact_email || org.website);
+  const listsPets = org.kind === 'shelter' || org.kind === 'rescue';
+  const websiteCta = org.kind === 'clinic' ? 'Clinic website' : 'Shelter website';
+  const isSponsor = org.kind === 'sponsor';
+  const statusLabel = isSponsor
+    ? (org.status === 'approved' ? 'Verified sponsor' : 'Pending')
+    : org.status === 'approved' && org.ein_verified
+      ? '501(c)(3) verified'
+      : org.status === 'approved'
+        ? 'Approved'
+        : org.status === 'pending' || org.status === 'pending_review'
+          ? 'Pending review'
+          : 'Approved';
+
+  const partnerMailto = org.contact_email
+    ? `mailto:${org.contact_email}?subject=${encodeURIComponent('Become a partner with ' + org.name)}`
+    : '';
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <AppHeader title={org.name} showBack />
+      <Page>
         <View style={styles.navyHeader}>
-          <View style={styles.headerTopRow}>
-            <TouchableOpacity style={styles.backButton} onPress={safeBack}>
-              <ArrowLeft color={Colors.white} size={22} />
-            </TouchableOpacity>
-            <View style={{ flex: 1 }} />
-            <View style={{ width: 40 }} />
-          </View>
           <View style={styles.headerOrgInfo}>
             <View style={[styles.orgInitialTile, { backgroundColor: brandColor }]}>
               <Text style={styles.orgInitialText}>{org.name.charAt(0).toUpperCase()}</Text>
@@ -266,44 +363,60 @@ export default function OrganizationDetailsScreen() {
             <View style={styles.headerNameWrap}>
               <View style={styles.headerNameRow}>
                 <Text style={styles.headerName} numberOfLines={1}>{org.name}</Text>
-                {org.status === 'approved' && org.ein_verified && (
+                {org.status === 'approved' && (org.ein_verified || isSponsor) && (
                   <View style={styles.verifiedBadge}>
                     <Shield color={Colors.teal} size={12} />
                     <Text style={styles.verifiedText}>Verified</Text>
                   </View>
                 )}
               </View>
-              <Text style={styles.headerMeta}>{org.type} · {org.city}</Text>
+              <Text style={styles.headerMeta}>{org.type}{org.city ? ` · ${org.city}` : ''}</Text>
             </View>
           </View>
           <View style={styles.statRow}>
-            <View style={styles.statTile}>
-              <Text style={styles.statValue}>{org.pets_listed}</Text>
-              <Text style={styles.statLabel}>Pets listed</Text>
-            </View>
-            <View style={styles.statTile}>
-              <Text style={styles.statValue}>{org.adoptions.toLocaleString()}</Text>
-              <Text style={styles.statLabel}>Adoptions</Text>
-            </View>
-            <View style={styles.statTile}>
-              <Text style={styles.statValue}>{org.followers.toLocaleString()}</Text>
-              <Text style={styles.statLabel}>Followers</Text>
-            </View>
+            {listsPets ? (
+              <>
+                <View style={styles.statTile}>
+                  <Text style={styles.statValue}>{org.pets_listed}</Text>
+                  <Text style={styles.statLabel}>Pets listed</Text>
+                </View>
+                <View style={styles.statTile}>
+                  <Text style={styles.statValue}>{org.adoptions.toLocaleString()}</Text>
+                  <Text style={styles.statLabel}>Adoptions</Text>
+                </View>
+                <View style={styles.statTile}>
+                  <Text style={styles.statValue}>{org.followers.toLocaleString()}</Text>
+                  <Text style={styles.statLabel}>Followers</Text>
+                </View>
+              </>
+            ) : (
+              <View style={styles.roleBanner}>
+                <Text style={styles.roleBannerKicker}>
+                  {org.kind === 'clinic' ? 'CLINIC' : isSponsor ? 'SPONSOR' : 'ORGANIZATION'}
+                </Text>
+                <Text style={styles.roleBannerText}>
+                  {org.kind === 'clinic'
+                    ? 'Emergency partner'
+                    : isSponsor
+                      ? 'Supports Rescue Army shelters & animals'
+                      : org.type}
+                </Text>
+              </View>
+            )}
           </View>
         </View>
 
-        <View style={styles.body}>
-          {org.description ? (
-            <Text style={styles.description}>{org.description}</Text>
-          ) : null}
+        {org.description ? (
+          <Text style={styles.description}>{org.description}</Text>
+        ) : null}
 
-          <View style={styles.infoCard}>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoKey}>Status</Text>
-              <Text style={[styles.infoVal, { color: Colors.tealDark }]}>
-                {org.status === 'approved' && org.ein_verified ? '501(c)(3) verified' : org.status === 'approved' ? 'Registered' : org.status === 'pending' ? 'Pending review' : 'Registered'}
-              </Text>
-            </View>
+        <View style={styles.infoCard}>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoKey}>Status</Text>
+            <Text style={[styles.infoVal, { color: Colors.tealDark }]}>
+              {statusLabel}
+            </Text>
+          </View>
             {(einDisplay || org.ein) ? (
               <>
                 <View style={styles.infoDivider} />
@@ -336,7 +449,30 @@ export default function OrganizationDetailsScreen() {
             </View>
           </View>
 
-          {org.pets.length > 0 && (
+          {(org.phone || org.contact_email || org.website) ? (
+            <View style={styles.contactRow}>
+              {org.phone ? (
+                <TouchableOpacity style={styles.contactBtn} onPress={() => openHref(phoneHref(org.phone))} activeOpacity={0.85}>
+                  <Phone color={Colors.coral} size={16} />
+                  <Text style={styles.contactBtnText}>Call</Text>
+                </TouchableOpacity>
+              ) : null}
+              {org.contact_email ? (
+                <TouchableOpacity style={styles.contactBtn} onPress={() => openHref(`mailto:${org.contact_email}`)} activeOpacity={0.85}>
+                  <Mail color={Colors.coral} size={16} />
+                  <Text style={styles.contactBtnText}>Email</Text>
+                </TouchableOpacity>
+              ) : null}
+              {org.website ? (
+                <TouchableOpacity style={styles.contactBtn} onPress={() => openHref(websiteHref(org.website))} activeOpacity={0.85}>
+                  <Globe color={Colors.coral} size={16} />
+                  <Text style={styles.contactBtnText}>Website</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
+
+          {listsPets && org.pets.length > 0 && (
             <View style={styles.petStripSection}>
               <Text style={styles.sectionTitle}>Available pets</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.petStrip}>
@@ -402,34 +538,72 @@ export default function OrganizationDetailsScreen() {
               </Text>
             </View>
           ) : null}
-          <Text style={styles.donateDisclaimer}>
-            Donations go directly to {org.name}. Rescue Army does not collect, hold, or process this money.
-          </Text>
-          {(org.donation_url || org.contact_email || org.website) ? (
-            <View style={styles.donateOptions}>
-              {org.donation_url ? (
-                <TouchableOpacity style={styles.donateOption} onPress={() => Linking.openURL(org.donation_url.startsWith('http') ? org.donation_url : `https://${org.donation_url}`)}>
-                  <Text style={styles.donateOptionText}>Donate on their page</Text>
+
+          {acceptsDonations ? (
+            <>
+              <Text style={styles.donateDisclaimer}>
+                Donations go directly to {org.name}. Rescue Army does not collect, hold, or process this money.
+              </Text>
+              {(org.donation_url || org.contact_email || org.website) ? (
+                <View style={styles.donateOptions}>
+                  {org.donation_url ? (
+                    <TouchableOpacity style={styles.donateOption} onPress={() => openHref(websiteHref(org.donation_url))}>
+                      <Text style={styles.donateOptionText}>Donate on their page</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  {org.contact_email ? (
+                    <TouchableOpacity style={styles.donateOption} onPress={() => openHref(`https://www.paypal.com/donate/?business=${encodeURIComponent(org.contact_email)}&currency_code=USD`)}>
+                      <Text style={styles.donateOptionText}>PayPal</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  {org.website ? (
+                    <TouchableOpacity style={styles.donateOption} onPress={() => openHref(websiteHref(org.website))}>
+                      <Text style={styles.donateOptionText}>{websiteCta}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : (
+                <Text style={styles.donateDisclaimer}>This listing has no PayPal or donate link in RescueGroups yet.</Text>
+              )}
+            </>
+          ) : isSponsor ? (
+            <View style={styles.sponsorBlock}>
+              <Text style={styles.sponsorKicker}>SPONSOR</Text>
+              <Text style={styles.sponsorLine}>Supports Rescue Army shelters & animals</Text>
+              {sponsored.length ? sponsored.map((row) => (
+                <TouchableOpacity
+                  key={row.id}
+                  style={styles.sponsorRow}
+                  onPress={() => row.orgId && router.push(`/organization-details?id=${row.orgId}`)}
+                  activeOpacity={row.orgId ? 0.85 : 1}
+                  disabled={!row.orgId}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.sponsorTitle} numberOfLines={1}>{row.title}</Text>
+                    <Text style={styles.sponsorSub} numberOfLines={1}>{row.sub}</Text>
+                  </View>
                 </TouchableOpacity>
-              ) : null}
-              {org.contact_email ? (
-                <TouchableOpacity style={styles.donateOption} onPress={() => Linking.openURL(`https://www.paypal.com/donate/?business=${encodeURIComponent(org.contact_email)}&currency_code=USD`)}>
-                  <Text style={styles.donateOptionText}>PayPal</Text>
-                </TouchableOpacity>
-              ) : null}
-              {org.website ? (
-                <TouchableOpacity style={styles.donateOption} onPress={() => Linking.openURL(org.website.startsWith('http') ? org.website : `https://${org.website}`)}>
-                  <Text style={styles.donateOptionText}>Shelter website</Text>
-                </TouchableOpacity>
-              ) : null}
+              )) : (
+                <Text style={styles.sponsorEmpty}>No sponsored campaigns yet</Text>
+              )}
+              <TouchableOpacity
+                style={[styles.partnerBtn, !partnerMailto && { opacity: 0.45 }]}
+                onPress={() => partnerMailto && openHref(partnerMailto)}
+                activeOpacity={0.85}
+                disabled={!partnerMailto}
+              >
+                <Text style={styles.partnerBtnText}>Become a partner</Text>
+              </TouchableOpacity>
             </View>
-          ) : (
-            <Text style={styles.donateDisclaimer}>This listing has no PayPal or donate link in RescueGroups yet.</Text>
-          )}
+          ) : null}
+
           <View style={styles.actionRow}>
             <TouchableOpacity
               style={[styles.followBtn, following && styles.followingBtn]}
-              onPress={() => setFollowing(!following)}
+              onPress={() => {
+                if (!user) { router.push('/auth'); return; }
+                setFollowing(!following);
+              }}
               activeOpacity={0.85}
             >
               {following ? (
@@ -441,42 +615,37 @@ export default function OrganizationDetailsScreen() {
                 <Text style={styles.followText}>Follow</Text>
               )}
             </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.donateBtn, !canDonate && { opacity: 0.5 }]}
-              onPress={() => openDonate(org)}
-              activeOpacity={0.85}
-            >
-              <Heart color={Colors.white} size={16} />
-              <Text style={styles.donateText}>Donate</Text>
-            </TouchableOpacity>
+            {acceptsDonations ? (
+              <TouchableOpacity
+                style={[styles.donateBtn, !canDonate && { opacity: 0.5 }]}
+                onPress={() => openDonate(org)}
+                activeOpacity={0.85}
+              >
+                <Heart color={Colors.white} size={16} />
+                <Text style={styles.donateText}>Donate</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
-        </View>
-      </ScrollView>
+      </Page>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
-  scrollView: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  errorContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  errorText: { fontSize: FontSizes.lg, fontFamily: Fonts.semibold, color: Colors.critical },
+  errorContainer: { padding: 24, alignItems: 'center' },
+  errorText: { fontSize: FontSizes.lg, fontFamily: Fonts.semibold, color: Colors.text, marginBottom: 16, textAlign: 'center' },
+  errorBackBtn: { backgroundColor: Colors.coral, borderRadius: 14, paddingHorizontal: 24, paddingVertical: 12 },
+  errorBackText: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.white },
   navyHeader: {
     backgroundColor: Colors.navy,
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-    paddingTop: 8,
-  },
-  headerTopRow: {
-    flexDirection: 'row', alignItems: 'center', marginBottom: 16,
-  },
-  backButton: {
-    width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.12)',
-    justifyContent: 'center', alignItems: 'center',
+    borderRadius: 16,
+    padding: 16,
+    paddingBottom: 16,
   },
   headerOrgInfo: {
-    flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 20,
+    flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 16,
   },
   orgInitialTile: {
     width: 54, height: 54, borderRadius: 14, justifyContent: 'center', alignItems: 'center',
@@ -513,13 +682,22 @@ const styles = StyleSheet.create({
   statLabel: {
     fontSize: FontSizes.xs, fontFamily: Fonts.regular, color: 'rgba(255,255,255,0.7)', marginTop: 4,
   },
-  body: { padding: 20, paddingBottom: 100 },
+  roleBanner: {
+    flex: 1, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 12,
+    paddingVertical: 14, paddingHorizontal: 16, alignItems: 'center',
+  },
+  roleBannerKicker: {
+    fontSize: 11, fontFamily: Fonts.bold, color: Colors.accent, letterSpacing: 1.2,
+  },
+  roleBannerText: {
+    fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.white, marginTop: 4, textAlign: 'center',
+  },
   description: {
-    fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.textBody, lineHeight: 22, marginBottom: 16,
+    fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.textBody, lineHeight: 22,
   },
   infoCard: {
     backgroundColor: Colors.white, borderRadius: 14, padding: 16,
-    borderWidth: 1, borderColor: Colors.border, marginBottom: 24,
+    borderWidth: 1, borderColor: Colors.border,
   },
   infoRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10,
@@ -531,6 +709,13 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.md, fontFamily: Fonts.semibold, color: Colors.text, flexShrink: 1, textAlign: 'right',
   },
   infoDivider: { height: 1, backgroundColor: Colors.border },
+  contactRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  contactBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border,
+    borderRadius: 14, paddingHorizontal: 16, paddingVertical: 12,
+  },
+  contactBtnText: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.navy },
   einRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   einValueMono: { fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.text, letterSpacing: 1 },
   einPill: { backgroundColor: Colors.surface, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
@@ -618,4 +803,25 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border,
   },
   donateOptionText: { fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.navy },
+  sponsorBlock: {
+    backgroundColor: Colors.white, borderRadius: 16, padding: 16,
+    borderWidth: 1.5, borderColor: '#D9DCE6', gap: 10,
+  },
+  sponsorKicker: {
+    fontSize: 11, fontFamily: Fonts.extrabold, letterSpacing: 0.8, color: Colors.textTertiary,
+  },
+  sponsorLine: {
+    fontSize: 14, fontFamily: Fonts.semibold, color: Colors.navy,
+  },
+  sponsorRow: {
+    backgroundColor: Colors.surface, borderRadius: 12, padding: 12,
+  },
+  sponsorTitle: { fontSize: 13.5, fontFamily: Fonts.bold, color: Colors.navy },
+  sponsorSub: { fontSize: 12, fontFamily: Fonts.regular, color: Colors.textSecondary, marginTop: 2 },
+  sponsorEmpty: { fontSize: 13, fontFamily: Fonts.regular, color: Colors.textSecondary },
+  partnerBtn: {
+    marginTop: 4, borderWidth: 1.5, borderColor: Colors.navy, borderRadius: 14,
+    paddingVertical: 14, alignItems: 'center',
+  },
+  partnerBtnText: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.navy },
 });

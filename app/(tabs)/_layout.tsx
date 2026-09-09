@@ -1,9 +1,21 @@
-import { Tabs } from 'expo-router';
-import { Home, PawPrint, Users, User, Siren } from 'lucide-react-native';
+import { useEffect } from 'react';
+import { Tabs, router } from 'expo-router';
+import { Home, PawPrint, MapPin, Users, Siren } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { CONTENT_MAX } from '@/components/Page';
+import { useAuth } from '@/lib/context/AuthContext';
+import { supabase } from '@/lib/supabase';
 
 export default function TabLayout() {
+  const { user } = useAuth();
+  useEffect(() => {
+    if (!user) return;
+    supabase.from('profiles').select('onboarding_done').eq('id', user.id).maybeSingle().then(({ data, error }) => {
+      if (error) return;
+      if (data && data.onboarding_done === false) router.replace('/onboarding');
+    });
+  }, [user]);
+
   return (
     <Tabs
       screenOptions={{
@@ -36,10 +48,10 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="community"
+        name="nearby"
         options={{
-          title: 'Community',
-          tabBarIcon: ({ size, color }) => <Users size={size} color={color} />,
+          title: 'Nearby',
+          tabBarIcon: ({ size, color }) => <MapPin size={size} color={color} />,
         }}
       />
       <Tabs.Screen
@@ -50,10 +62,17 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="community"
+        options={{
+          title: 'Community',
+          tabBarIcon: ({ size, color }) => <Users size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ size, color }) => <User size={size} color={color} />,
+          href: null,
         }}
       />
     </Tabs>

@@ -479,7 +479,7 @@ export default function HomeScreen() {
         <>
           <TouchableOpacity
             style={styles.emergencyBanner}
-            onPress={() => router.push('/lost-stray-report')}
+            onPress={() => router.push('/report')}
             activeOpacity={0.9}
           >
             <View style={styles.emergencyIcon}>

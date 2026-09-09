@@ -11,6 +11,7 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useSignedUrl } from '@/hooks/useSignedUrls';
+import { compressImage } from '@/lib/prepare-image';
 import { SearchablePicker } from '@/components/SearchablePicker';
 import { DateField } from '@/components/DateField';
 import type { CatalogRow } from '@/lib/catalog';
@@ -200,14 +201,20 @@ export function VetVaccinationModal({
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'image/*,application/pdf';
-      input.onchange = (e) => {
+      input.onchange = async (e) => {
         const file = (e.target as HTMLInputElement).files?.[0];
-        if (file) setForm((p) => ({ ...p, certificate_file: { uri: URL.createObjectURL(file), name: file.name, mimeType: file.type } as any }));
+        if (!file) return;
+        if (file.type.startsWith('image/')) {
+          const blob = await compressImage(file);
+          setForm((p) => ({ ...p, certificate_file: { uri: URL.createObjectURL(blob), name: file.name.replace(/\.[^.]+$/, '.jpg'), mimeType: 'image/jpeg' } as any }));
+          return;
+        }
+        setForm((p) => ({ ...p, certificate_file: { uri: URL.createObjectURL(file), name: file.name, mimeType: file.type } as any }));
       };
       input.click();
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 0.8 });
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 0.6, exif: false });
     if (!result.canceled && result.assets?.[0]) setForm((p) => ({ ...p, certificate_file: result.assets![0] }));
   };
 

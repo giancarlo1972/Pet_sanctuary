@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator,
   Platform as RNPlatform, Modal, ScrollView,
 } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
+import { pickImage } from '@/lib/pick-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
@@ -617,11 +617,10 @@ function MemberSheet({ row, edit, setEdit, busy, run, audit, userId, pets, repor
         await audit('member.training', 'user', row.id);
       }, 'Training passed.')} />
       <Act label="Upload ID for user" busy={busy} onPress={() => run(async () => {
-        const pick = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8 });
-        if (pick.canceled || !pick.assets?.[0]) throw new Error('Canceled.');
-        const blob = await (await fetch(pick.assets[0].uri)).blob();
+        const picked = await pickImage();
+        if (!picked) throw new Error('Canceled.');
         const path = `${row.id}/admin-${Date.now()}.jpg`;
-        const { error: up } = await supabase.storage.from('identity-docs').upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+        const { error: up } = await supabase.storage.from('identity-docs').upload(path, picked.blob, { contentType: 'image/jpeg', upsert: true });
         if (up) throw up;
         const { error } = await supabase.from('user_verifications').upsert({ user_id: row.id, id_document_path: path, id_status: 'submitted', id_verified: false });
         if (error) throw error;

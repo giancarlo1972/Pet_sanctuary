@@ -139,7 +139,7 @@ export default function ReportsTabScreen() {
         <CareFund />
       ) : (
         <>
-          <TouchableOpacity style={styles.newBtn} onPress={() => router.push('/lost-stray-report')} activeOpacity={0.85}>
+          <TouchableOpacity style={styles.newBtn} onPress={() => router.push('/report')} activeOpacity={0.85}>
             <Text style={styles.newBtnText}>+  New report</Text>
           </TouchableOpacity>
           {radiusLabel ? <Text style={styles.noteText}>Showing alerts within {radiusLabel} based on your I can help settings.</Text> : null}

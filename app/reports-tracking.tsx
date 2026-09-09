@@ -88,7 +88,7 @@ export default function ReportsTrackingScreen() {
             <AlertTriangle color={Colors.textTertiary} size={40} />
             <Text style={styles.emptyTitle}>No reports filed</Text>
             <Text style={styles.emptySubtitle}>Reports you file will be tracked here.</Text>
-            <TouchableOpacity style={styles.emptyBtn} onPress={() => router.push('/lost-stray-report')} activeOpacity={0.85}>
+            <TouchableOpacity style={styles.emptyBtn} onPress={() => router.push('/report')} activeOpacity={0.85}>
               <Text style={styles.emptyBtnText}>File a Report</Text>
             </TouchableOpacity>
           </View>

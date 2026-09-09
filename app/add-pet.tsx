@@ -9,7 +9,7 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import { InlineBanner } from '@/components/InlineBanner';
-import { prepareImageFile } from '@/lib/prepare-image';
+import { pickImage } from '@/lib/pick-image';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 
@@ -33,37 +33,29 @@ export default function AddPetScreen() {
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
 
 
-  const pickPhoto = () => {
+  const pickPhoto = async () => {
     if (!user) { setBanner({ message: 'Please sign in to add a pet.', kind: 'error' }); return; }
-    if (typeof document === 'undefined') { setBanner({ message: 'Photo AI is available on the website.', kind: 'info' }); return; }
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      setAnalyzing(true); setBanner(null);
-      try {
-        const prepared = await prepareImageFile(file);
-        const blob = prepared.blob;
-        const pendingPath = `${user.id}/pending-${Date.now()}.jpg`;
-        const { error: upErr } = await supabase.storage.from('pet-photos').upload(pendingPath, blob, { contentType: 'image/jpeg', upsert: true });
-        if (upErr) throw upErr;
-        setPhotoPath(pendingPath);
-        setPhotoFile(new File([blob], 'pet.jpg', { type: 'image/jpeg' }));
-        const res = await fetch('/api/analyze-pet-photo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: prepared.dataUrl }) });
-        const json = await res.json();
-        if (!json.analyzed) throw new Error(json.error || 'AI could not read the photo.');
-        setAi(json);
-        if (json.species) setSpecies(json.species);
-        if (json.breed_guess) setBreed(json.breed_guess);
-        if (json.life_stage) setAgeText(json.life_stage);
-      } catch (e: any) {
-        setBanner({ message: e.message || 'Photo analysis failed.', kind: 'error' });
-      }
-      setAnalyzing(false);
-    };
-    input.click();
+    setAnalyzing(true); setBanner(null);
+    try {
+      const picked = await pickImage();
+      if (!picked) { setAnalyzing(false); return; }
+      const blob = picked.blob;
+      const pendingPath = `${user.id}/pending-${Date.now()}.jpg`;
+      const { error: upErr } = await supabase.storage.from('pet-photos').upload(pendingPath, blob, { contentType: 'image/jpeg', upsert: true });
+      if (upErr) throw upErr;
+      setPhotoPath(pendingPath);
+      setPhotoFile(typeof File !== 'undefined' ? new File([blob], 'pet.jpg', { type: 'image/jpeg' }) : blob);
+      const res = await fetch('/api/analyze-pet-photo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: picked.dataUrl }) });
+      const json = await res.json();
+      if (!json.analyzed) throw new Error(json.error || 'AI could not read the photo.');
+      setAi(json);
+      if (json.species) setSpecies(json.species);
+      if (json.breed_guess) setBreed(json.breed_guess);
+      if (json.life_stage) setAgeText(json.life_stage);
+    } catch (e: any) {
+      setBanner({ message: e.message || 'Photo analysis failed.', kind: 'error' });
+    }
+    setAnalyzing(false);
   };
 
   const handleSubmit = async () => {

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import * as ImagePicker from 'expo-image-picker';
+import { pickImage } from '@/lib/pick-image';
 import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
   Switch, TextInput, ScrollView, Modal,
@@ -249,13 +249,10 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
   const uploadId = async () => {
     setIdBusy(true);
     try {
-      const pick = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.7 });
-      if (pick.canceled || !pick.assets?.[0]) { setIdBusy(false); return; }
-      const asset = pick.assets[0];
-      const resp = await fetch(asset.uri);
-      const blob = await resp.blob();
+      const picked = await pickImage();
+      if (!picked) { setIdBusy(false); return; }
       const path = `${userId}/id-${Date.now()}.jpg`;
-      const { error: up } = await supabase.storage.from('identity-docs').upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+      const { error: up } = await supabase.storage.from('identity-docs').upload(path, picked.blob, { contentType: 'image/jpeg', upsert: true });
       if (up) throw up;
       const { error: uvErr } = await supabase.from('user_verifications').upsert({
         user_id: userId, id_document_path: path, id_status: 'submitted', id_verified: false,

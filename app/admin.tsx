@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Linking, useWindowDimensions, TextInput, Modal } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
+import { pickImage } from '@/lib/pick-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import AppHeader from '@/components/AppHeader';
@@ -298,11 +298,10 @@ export default function AdminScreen() {
               if (!email) return;
               const { data: ppl } = await supabase.from('profiles').select('id').ilike('email', email).maybeSingle();
               if (!ppl) { setError('No user with that email.'); return; }
-              const pick = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', quality: 0.8 });
-              if (pick.canceled || !pick.assets?.[0]) return;
-              const blob = await (await fetch(pick.assets[0].uri)).blob();
+              const picked = await pickImage();
+              if (!picked) return;
               const path = `${ppl.id}/admin-upload-${Date.now()}.jpg`;
-              const { error: up } = await supabase.storage.from('id-docs').upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+              const { error: up } = await supabase.storage.from('id-docs').upload(path, picked.blob, { contentType: 'image/jpeg', upsert: true });
               if (up) { setError(up.message); return; }
               await supabase.from('user_verifications').upsert({ user_id: ppl.id, id_document_path: path, id_status: 'pending', id_verified: false });
               setError(null);

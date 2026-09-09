@@ -24,7 +24,7 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
-import * as ImagePicker from 'expo-image-picker';
+import { pickImage } from '@/lib/pick-image';
 import type { StoryType } from '@/types';
 
 const STORY_TYPES: { id: StoryType; label: string }[] = [
@@ -105,30 +105,16 @@ export default function StoryComposerScreen() {
 
   const pickCoverPhoto = async () => {
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: 'images',
-        allowsEditing: true,
-        aspect: [16, 10],
-        quality: 0.8,
-      });
-      if (!result.canceled && result.assets[0]) {
-        setCoverPhoto(result.assets[0].uri);
-      }
+      const picked = await pickImage();
+      if (picked) setCoverPhoto(picked.uri);
     } catch { /* ignore */ }
   };
 
   const pickPhoto = async () => {
     if (photos.length >= MAX_PHOTOS) return;
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: 'images',
-        allowsEditing: true,
-        aspect: [4, 3],
-        quality: 0.8,
-      });
-      if (!result.canceled && result.assets[0]) {
-        setPhotos((prev) => [...prev, result.assets[0].uri]);
-      }
+      const picked = await pickImage();
+      if (picked) setPhotos((prev) => [...prev, picked.uri]);
     } catch { /* ignore */ }
   };
 

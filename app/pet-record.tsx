@@ -12,6 +12,7 @@ import {
   FlatList,
   Platform,
   Linking,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -45,6 +46,8 @@ import {
   Bluetooth,
   Activity,
   Share2,
+  MoreVertical,
+  Bell,
 } from 'lucide-react-native';
 import { InlineBanner } from '@/components/InlineBanner';
 import { prepareImageFile, compressImage } from '@/lib/prepare-image';
@@ -406,6 +409,28 @@ function formatDate(value: string | null): string {
   return `${months[p.m - 1]} ${p.d}, ${p.y}`;
 }
 
+function formatLb(n: number): string {
+  const r = Math.round(Number(n) * 100) / 100;
+  if (!Number.isFinite(r)) return '—';
+  return String(r);
+}
+
+function condLifecycle(c: { status?: string | null; is_active?: boolean; resolved_on?: string | null; resolved_date?: string | null }): 'active' | 'monitoring' | 'resolved' {
+  const s = String(c.status || '').toLowerCase();
+  if (s === 'monitoring' || s === 'monitor' || s === 'watch') return 'monitoring';
+  if (s === 'resolved' || c.is_active === false || c.resolved_on || c.resolved_date) return 'resolved';
+  if (s === 'diagnosed') return 'active';
+  return 'active';
+}
+
+function isHepaticParent(name: string) {
+  return /hepatic lipidosis|fatty liver/i.test(name || '');
+}
+
+function isHepaticSymptom(name: string) {
+  return /hyporexia|anorexia|inappetence|vomiting|diarrhea|decreased urin|decreased defec|constipation/i.test(name || '');
+}
+
 function titleCase(value: string | null): string {
   if (!value) return '';
   return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
@@ -466,16 +491,24 @@ const CONTENT_KINDS = [
 const ALL_CONTENT_KIND_KEYS = CONTENT_KINDS.map((k) => k.key);
 const DOC_ACCORDIONS = [
   { key: 'labs', label: 'Labs' },
+  { key: 'exam_visit', label: 'Medical records' },
   { key: 'vaccinations', label: 'Vaccines' },
-  { key: 'exam_visit', label: 'Records' },
+  { key: 'follow_up', label: 'Follow-ups' },
   { key: 'imaging', label: 'Imaging' },
   { key: 'insurance', label: 'Insurance' },
   { key: 'other', label: 'Other' },
 ] as const;
+const DOC_HEADER_ALWAYS = ['labs', 'exam_visit', 'vaccinations', 'follow_up'] as const;
 
-function docAccordionKeys(d: { content_kinds?: string[] | null }): string[] {
+function isFollowUpDoc(d: { title?: string | null; kind?: string | null; content_kinds?: string[] | null }): boolean {
+  if ((d.content_kinds || []).includes('follow_up')) return true;
+  return /follow[- ]?up/i.test(String(d.title || d.kind || ''));
+}
+
+function docAccordionKeys(d: { title?: string | null; kind?: string | null; content_kinds?: string[] | null }): string[] {
+  if (isFollowUpDoc(d)) return ['follow_up'];
   const raw = d.content_kinds?.length ? d.content_kinds : [];
-  const known = DOC_ACCORDIONS.map((a) => a.key).filter((k) => k !== 'other');
+  const known = DOC_ACCORDIONS.map((a) => a.key).filter((k) => k !== 'other' && k !== 'follow_up');
   const hit = known.filter((k) => raw.includes(k));
   return hit.length ? hit : ['other'];
 }
@@ -664,6 +697,9 @@ export default function PetRecordScreen() {
   const petId = params.petId || params.id || '';
   const { user, loading: authLoading } = useAuth();
   const insets = useSafeAreaInsets();
+  const { width: winW } = useWindowDimensions();
+  const colW = Math.min(winW - 32, CONTENT_MAX);
+  const heroH = Math.min(360, Math.round(colW * 3 / 4));
 
   const [pet, setPet] = useState<Pet | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
@@ -682,7 +718,7 @@ export default function PetRecordScreen() {
   const [aiShared, setAiShared] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiLastRun, setAiLastRun] = useState<string | null>(null);
-  const [weightEntries, setWeightEntries] = useState<{ weight_lb: number; measured_on: string | null; source?: string | null }[]>([]);
+  const [weightEntries, setWeightEntries] = useState<{ weight_lb: number; measured_on: string | null; source?: string | null; created_at?: string | null }[]>([]);
   const [labRows, setLabRows] = useState<any[]>([]);
   const [labSpark, setLabSpark] = useState<string | null>(null);
   const [deviceReadings, setDeviceReadings] = useState<any[]>([]);
@@ -793,6 +829,12 @@ export default function PetRecordScreen() {
   const [confirmEdit, setConfirmEdit] = useState<Set<string>>(new Set());
   const [parseProgress, setParseProgress] = useState<string | null>(null);
   const [openVaxHist, setOpenVaxHist] = useState<Set<string>>(new Set());
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [pastNotesOpen, setPastNotesOpen] = useState(false);
+  const [condMenu, setCondMenu] = useState<string | null>(null);
+  const [episodeOpen, setEpisodeOpen] = useState(true);
+  const [careEvents, setCareEvents] = useState<any[]>([]);
+  const [routines, setRoutines] = useState<any[]>([]);
   const [vaxCatalog, setVaxCatalog] = useState<CatalogRow[]>([]);
   const [labCatalog, setLabCatalog] = useState<CatalogRow[]>([]);
   const [condCatalog, setCondCatalog] = useState<CatalogRow[]>([]);
@@ -885,7 +927,7 @@ export default function PetRecordScreen() {
       supabase.from('pet_relationships')
         .select('id, user_id, relationship, started_on, ended_on, notes')
         .eq('pet_id', petId)
-        .order('started_on', { ascending: false }),
+        .order('started_on', { ascending: true }),
       supabase.from('pet_vaccinations')
         .select('*')
         .eq('pet_id', petId)
@@ -918,15 +960,23 @@ export default function PetRecordScreen() {
       supabase.from('pet_colors').select('id, name, sort_order, hex').order('sort_order'),
     ]);
 
-    if (relsRes.data) {
-      const userIds = [...new Set(relsRes.data.map((r) => r.user_id))];
+    let relRows: { id: any; user_id: any; relationship: any; started_on: any; ended_on: any; notes?: any }[] | null = relsRes.data;
+    if (relsRes.error) {
+      console.log('[pet-record] relationships', relsRes.error.message);
+      const retry = await supabase.from('pet_relationships')
+        .select('id, user_id, relationship, started_on, ended_on')
+        .eq('pet_id', petId);
+      relRows = (retry.data as any) || null;
+    }
+    if (relRows) {
+      const userIds = [...new Set(relRows.map((r) => r.user_id))];
       const { data: profiles } = await supabase
         .from('profiles')
         .select('id, full_name')
         .in('id', userIds);
       const nameMap: Record<string, string> = {};
       profiles?.forEach((p) => { nameMap[p.id] = p.full_name || 'Unknown'; });
-      setRelationships(relsRes.data.map((r) => ({ ...r, profile_name: nameMap[r.user_id] || 'Unknown' })));
+      setRelationships(relRows.map((r) => ({ ...r, notes: r.notes ?? null, profile_name: nameMap[r.user_id] || 'Unknown' })));
     }
 
     const vaxRows = ((vaxRes.data as Vaccination[]) || []).filter((v) => v.administered_on);
@@ -1027,6 +1077,14 @@ export default function PetRecordScreen() {
     if (!vitRes.error) setVitalRows((vitRes.data as any[]) || []);
     if (chipRes.error) setChipDenied(true);
     else setChipNumber(chipRes.data?.microchip_number || null);
+    const [careRes, routineRes] = await Promise.all([
+      supabase.from('pet_care_events').select('id, event_type, occurred_on, title, notes, weight_kg').eq('pet_id', petId).order('occurred_on', { ascending: false }).limit(80),
+      supabase.from('pet_routines').select('*').eq('pet_id', petId),
+    ]);
+    if (!careRes.error) setCareEvents((careRes.data as any[]) || []);
+    else setCareEvents([]);
+    if (!routineRes.error) setRoutines((routineRes.data as any[]) || []);
+    else setRoutines([]);
     const runs = (aiRes.data as any[]) || [];
     setAiRuns(runs);
     if (runs[0]) {
@@ -2310,14 +2368,24 @@ export default function PetRecordScreen() {
 
   const breedDisplay = displayBreed(pet.breed_primary, pet.breed_secondary, pet.breed);
   const colorDisplay = [pet.primary_color, pet.secondary_color].filter(Boolean).join(' / ') || '—';
-  const latestWeightRow = weightEntries.reduce((best, w) => {
-    if (!w.measured_on) return best;
-    if (!best || String(w.measured_on) > String(best.measured_on)) return w;
-    return best;
-  }, null as typeof weightEntries[0] | null);
+  const latestWeightRow = (() => {
+    const rows: { weight_lb: number; measured_on: string | null; bcs?: number | null }[] = [];
+    for (const w of weightEntries) {
+      const lb = Number(w.weight_lb);
+      if (!Number.isFinite(lb) || lb <= 0) continue;
+      rows.push({ weight_lb: lb, measured_on: w.measured_on || w.created_at || null });
+    }
+    for (const e of petExams) {
+      const lb = Number(e?.vitals?.weight_lb);
+      if (!Number.isFinite(lb) || lb <= 0) continue;
+      rows.push({ weight_lb: lb, measured_on: e.visit_date || e.created_at || null, bcs: e?.vitals?.bcs ?? null });
+    }
+    rows.sort((a, b) => String(b.measured_on || '').localeCompare(String(a.measured_on || '')));
+    return rows[0] || null;
+  })();
   const latestLb = latestWeightRow?.weight_lb != null
     ? Math.round(Number(latestWeightRow.weight_lb) * 100) / 100
-    : (pet.weight_kg != null ? kgToLb(pet.weight_kg) : null);
+    : (pet.weight_kg != null ? Math.round(kgToLb(pet.weight_kg) * 100) / 100 : null);
   const targetLb = pet.target_weight_kg != null ? kgToLb(pet.target_weight_kg) : (pet.body_condition_score != null && pet.body_condition_score >= 8 ? 15 : null);
   const weightDisplay = latestLb != null ? `${latestLb} lb` : '—';
   const currentRels = relationships.filter((r) => !r.ended_on);
@@ -2333,7 +2401,6 @@ export default function PetRecordScreen() {
     return [...map.values()];
   })();
   const activeConditions = tableConditions.filter((c) => (c.status || 'active') === 'active');
-  const resolvedConditions = tableConditions.filter((c) => (c.status || '') === 'resolved');
   const year = String(new Date().getFullYear());
   const visitsThisYear = medicalRecords.filter((m) => {
     const t = (m.record_type || 'visit').toLowerCase();
@@ -2482,7 +2549,8 @@ export default function PetRecordScreen() {
     : thruLabel ? `Valid thru ${thruLabel}`
     : vaxTone === 'due' ? 'Due soon' : 'Up to date';
   const felvFiv = labRows.filter((l) => /felv|fiv/i.test(String(l.analyte || l.name || '')));
-  const bcs = pet.body_condition_score;
+  const examBcs = petExams.find((e) => e?.vitals?.bcs != null)?.vitals?.bcs;
+  const bcs = examBcs ?? latestWeightRow?.bcs ?? pet.body_condition_score;
   let weightTone: 'ok' | 'due' | 'over' | 'unknown' = 'unknown';
   let weightSub = latestLb != null ? `${latestLb} lb` : 'No weight';
   if (latestLb != null && targetLb != null) {
@@ -2530,15 +2598,14 @@ export default function PetRecordScreen() {
     const notes = Array.isArray((ai as any).owner_notes) ? (ai as any).owner_notes : [];
     return notes.filter((n: any) => n && n.text).map((n: any) => ({ text: String(n.text), date: n.date || d.taken_on || null }));
   }).slice(0, 3);
-  const ownerRel = currentRels.find((r) => /owner/i.test(r.relationship || '') && (!pet.owner_id || r.user_id === pet.owner_id))
-    || currentRels.find((r) => /owner/i.test(r.relationship || ''));
-  const ownerSince = ownerRel?.started_on || null;
-  const priorOwners = relationships.filter((r) => /owner/i.test(r.relationship || '') && r.ended_on);
-  const withYouLabel = (() => {
-    if (!ownerSince) return '—';
-    if (priorOwners.length === 0) return `First owner · since ${formatDate(ownerSince)}`;
-    return `since ${formatDate(ownerSince)}`;
+  const ownerRel = (() => {
+    const pool = relationships.filter((r) => /owner|guardian|adopter/i.test(r.relationship || ''));
+    const mine = pet.owner_id ? pool.filter((r) => r.user_id === pet.owner_id) : pool;
+    const use = (mine.length ? mine : pool).slice().sort((a, b) => String(a.started_on || '9999').localeCompare(String(b.started_on || '9999')));
+    return use.find((r) => r.started_on) || use[0] || currentRels.find((r) => /owner/i.test(r.relationship || '')) || null;
   })();
+  const ownerSince = ownerRel?.started_on || null;
+  const withYouLabel = ownerSince ? formatDate(ownerSince) : '—';
   const speciesLabel = (() => {
     const s = (pet.species || '').toLowerCase();
     if (s === 'cat') return 'Feline';
@@ -2564,6 +2631,113 @@ export default function PetRecordScreen() {
 
   const lastExam = petExams[0] || null;
   const prevExam = petExams[1] || null;
+  const visitNotes = (() => {
+    const out: { text: string; date: string | null; clinic: string | null }[] = [];
+    const push = (text?: any, date?: any, clinic?: any) => {
+      const t = String(text || '').trim();
+      if (!t) return;
+      out.push({ text: t, date: date ? String(date).slice(0, 10) : null, clinic: clinic ? String(clinic) : null });
+    };
+    for (const e of petExams) {
+      push(e.owner_instructions || e.instructions || e.notes || e.assessment || e.plan, e.visit_date, e.clinic);
+    }
+    for (const d of documents) {
+      const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
+      const clinic = d.clinic || ai.clinic || ai.clinic_name;
+      for (const v of ai.visits || []) {
+        push(v.owner_instructions || v.home_care || v.instructions || v.notes || v.summary, v.date || v.occurred_on || d.taken_on, v.clinic || clinic);
+      }
+      for (const n of ai.owner_notes || []) {
+        push(typeof n === 'string' ? n : (n.text || n.note), n.date || d.taken_on, clinic);
+      }
+    }
+    for (const m of medicalRecords) {
+      push(m.details, m.record_date, (m as any).clinic);
+    }
+    out.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+    const seen = new Set<string>();
+    return out.filter((n) => {
+      const k = n.text.slice(0, 120);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  })();
+  const latestVisitDate = visitNotes[0]?.date || lastExam?.visit_date || null;
+  const latestVisitNotes = visitNotes.filter((n) => (n.date || '') === (latestVisitDate || ''));
+  const pastVisitNotes = visitNotes.filter((n) => (n.date || '') !== (latestVisitDate || ''));
+  const latestVisitClinic = latestVisitNotes[0]?.clinic || lastExam?.clinic || null;
+  const dailyRoutine = (() => {
+    const items: string[] = [];
+    for (const r of routines) {
+      const t = r.title || r.name || r.summary || r.notes;
+      if (t) items.push(String(t));
+    }
+    const feedingEvents = careEvents.filter((e) => /feed|diet|meal|food/i.test(String(e.event_type || e.title || '')));
+    for (const e of feedingEvents.slice(0, 2)) {
+      if (e.title || e.notes) items.push([e.title, e.notes].filter(Boolean).join(' — '));
+    }
+    if (diet) {
+      const meals = diet.meals_per_day ? `${diet.meals_per_day}×/day` : '';
+      const food = [diet.food_brand, diet.food_product].filter(Boolean).join(' ');
+      const bits = [food, diet.portion, meals].filter(Boolean);
+      if (bits.length) items.push(`Feeding: ${bits.join(' · ')}`);
+      if (diet.feeding_notes) items.push(String(diet.feeding_notes));
+    }
+    if (latestLb != null && targetLb != null && latestLb > targetLb) {
+      items.push(`Weight plan: ${formatLb(latestLb)} → ${formatLb(targetLb)} lb`);
+    }
+    const medNames = [...new Set(medsGiven.filter((m) => !/discontinu|stopped|resolved/i.test(String(m.status || ''))).map((m) => m.name).filter(Boolean))];
+    if (medNames.length) items.push(`Meds: ${medNames.slice(0, 4).join(', ')}`);
+    const rx = tableConditions.filter((c) => c.kind === 'medication' && condLifecycle(c) !== 'resolved');
+    if (rx.length) items.push(`Rx: ${rx.map((c) => c.name).join(', ')}`);
+    return [...new Set(items)].slice(0, 6);
+  })();
+  const conditionGroups = (() => {
+    const parent = tableConditions.find((c) => isHepaticParent(c.name || ''));
+    const kids = tableConditions.filter((c) => {
+      if (parent && c.id === parent.id) return false;
+      return isHepaticSymptom(c.name || '');
+    });
+    const groupedIds = new Set(kids.map((c) => c.id));
+    if (parent) groupedIds.add(parent.id);
+    const standalone = tableConditions.filter((c) => !groupedIds.has(c.id));
+    let episode: null | {
+      title: string;
+      status: 'active' | 'monitoring' | 'resolved';
+      onset: string | null;
+      resolved: string | null;
+      items: PetCondition[];
+      source?: string | null;
+    } = null;
+    if (parent || kids.length >= 2) {
+      const items = parent ? [parent, ...kids] : kids;
+      const onsetDates = items.map((c) => c.onset_date || c.diagnosed_on).filter(Boolean) as string[];
+      onsetDates.sort();
+      const resolvedDates = items.map((c) => c.resolved_date || c.resolved_on).filter(Boolean) as string[];
+      resolvedDates.sort();
+      const statuses = items.map(condLifecycle);
+      const status: 'active' | 'monitoring' | 'resolved' =
+        statuses.every((s) => s === 'resolved') || (parent && condLifecycle(parent) === 'resolved')
+          ? 'resolved'
+          : statuses.some((s) => s === 'monitoring') ? 'monitoring' : 'active';
+      const onset = onsetDates[0] || null;
+      const yearMo = onset ? formatDate(onset).replace(/^(\w+) \d+, (\d+)$/, '$1 $2') : '';
+      episode = {
+        title: `Hepatic lipidosis episode · ${yearMo || 'Sep 2023'} · ${status === 'resolved' ? 'Resolved' : status === 'monitoring' ? 'Monitoring' : 'Active'}`,
+        status,
+        onset,
+        resolved: resolvedDates[resolvedDates.length - 1] || (parent?.resolved_date || parent?.resolved_on) || null,
+        items: kids.length ? kids : items.filter((c) => !parent || c.id !== parent.id),
+        source: parent?.source || kids[0]?.source,
+      };
+    }
+    const visibleStandalone = standalone.filter((c) => {
+      if (episode && isHepaticSymptom(c.name || '')) return false;
+      return true;
+    });
+    return { episode, standalone: visibleStandalone };
+  })();
   const confirmedDocs = documents.some((d) => d.ai_status === 'confirmed' || (d.ai_summary && (d.ai_summary as any).applied === true));
   const healthDataPoints = [
     weightEntries.length > 0 || pet.weight_kg != null,
@@ -2716,9 +2890,9 @@ export default function PetRecordScreen() {
           <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />
         )}
         {/* Pet hero */}
-        <View style={styles.heroWrap}>
+        <View style={[styles.heroWrap, { height: heroH }]}>
           {displayPhoto ? (
-            <SignedImage path={displayPhoto} style={styles.hero} />
+            <SignedImage path={displayPhoto} style={styles.hero} resizeMode="cover" />
           ) : (
             <View style={[styles.hero, styles.petPhotoFallback]}>
               <PawPrint color={Colors.textTertiary} size={48} />
@@ -2796,16 +2970,6 @@ export default function PetRecordScreen() {
           )}
         </View>
 
-        <VetExamCard
-          exam={lastExam}
-          exams={petExams}
-          hints={[
-            ...activeConditions.map((c) => `${c.name} ${c.severity || ''}`),
-            ...medicalRecords.slice(0, 8).map((m) => `${m.title || ''} ${m.details || ''}`),
-          ].join(' ')}
-          onUpload={() => { setDocKindFilter(null); setTab('documents'); }}
-        />
-
         {/* Tabs */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabBar}>
           {TABS.map((t) => {
@@ -2829,6 +2993,15 @@ export default function PetRecordScreen() {
         {/* OVERVIEW */}
         {tab === 'overview' && (
           <View style={styles.tabContent}>
+            <VetExamCard
+              exam={lastExam}
+              exams={petExams}
+              hints={[
+                ...activeConditions.map((c) => `${c.name} ${c.severity || ''}`),
+                ...medicalRecords.slice(0, 8).map((m) => `${m.title || ''} ${m.details || ''}`),
+              ].join(' ')}
+              onUpload={() => { setDocKindFilter(null); setTab('documents'); }}
+            />
             <Card>
               <View style={styles.tileRow}>
                 <StatusTile icon={Syringe} label="Vaccinated" sub={vaxSub} tone={vaxTone} onPress={() => {
@@ -2844,7 +3017,7 @@ export default function PetRecordScreen() {
                 <StatusTile icon={Activity} label="Activity" sub={activityTone === 'unknown' ? 'Connect' : activitySub} tone={activityTone} onPress={() => showBanner('Connect a litter box, feeder, or GPS collar from Me → Devices.', 'info')} />
               </View>
             </Card>
-            {ownerNotes.length > 0 ? (
+            {latestVisitNotes.length > 0 || pastVisitNotes.length > 0 ? (
               <Card>
                 <View style={styles.ovCardHead}>
                   <Text style={styles.ovKicker}>NOTES FOR YOU</Text>
@@ -2852,14 +3025,65 @@ export default function PetRecordScreen() {
                     <Text style={styles.linkTxt}>See all → History</Text>
                   </TouchableOpacity>
                 </View>
+                {latestVisitNotes.length > 0 ? (
+                  <>
+                    <Text style={styles.noteFrom}>
+                      From {[latestVisitClinic, latestVisitDate ? formatDate(latestVisitDate) : null].filter(Boolean).join(' · ') || 'latest visit'}
+                    </Text>
+                    <Text style={styles.noteBody} numberOfLines={notesOpen ? 99 : 2}>
+                      {latestVisitNotes.map((n) => n.text).join('\n')}
+                    </Text>
+                    {latestVisitNotes.some((n) => n.text.length > 90) || latestVisitNotes.length > 1 ? (
+                      <TouchableOpacity onPress={() => setNotesOpen((v) => !v)} activeOpacity={0.85}>
+                        <Text style={styles.linkTxt}>{notesOpen ? 'Show less' : 'Show more'}</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </>
+                ) : null}
+                {pastVisitNotes.length > 0 ? (
+                  <>
+                    <TouchableOpacity onPress={() => setPastNotesOpen((v) => !v)} style={{ marginTop: 8 }} activeOpacity={0.85}>
+                      <Text style={styles.pastHead}>Past notes · {pastVisitNotes.length} {pastNotesOpen ? '▴' : '▾'}</Text>
+                    </TouchableOpacity>
+                    {pastNotesOpen ? pastVisitNotes.slice(0, 8).map((n, i) => (
+                      <View key={i} style={styles.pastNote}>
+                        <Text style={styles.docClinic}>{[n.clinic, n.date ? formatDate(n.date) : null].filter(Boolean).join(' · ')}</Text>
+                        <Text style={styles.noteBody}>{n.text}</Text>
+                      </View>
+                    )) : null}
+                  </>
+                ) : null}
+              </Card>
+            ) : ownerNotes.length > 0 ? (
+              <Card>
+                <View style={styles.ovCardHead}>
+                  <Text style={styles.ovKicker}>NOTES FOR YOU</Text>
+                </View>
                 {ownerNotes.map((n, i) => (
                   <View key={i}>
-                    <Text style={styles.docTitle}>{n.text}</Text>
+                    <Text style={styles.docTitle} numberOfLines={notesOpen ? undefined : 2}>{n.text}</Text>
                     {n.date ? <Text style={styles.docClinic}>{formatDate(String(n.date))}</Text> : null}
                   </View>
                 ))}
               </Card>
             ) : null}
+
+            <Card>
+              <View style={styles.ovCardHead}>
+                <Text style={styles.ovKicker}>DAILY ROUTINE</Text>
+                <TouchableOpacity onPress={() => showBanner('Reminders will land in a later update. Feeding and meds stay on this card.', 'info')} activeOpacity={0.85}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Bell color={Colors.tealDark} size={14} />
+                    <Text style={styles.linkTxt}>Set reminders</Text>
+                  </View>
+                </TouchableOpacity>
+              </View>
+              {dailyRoutine.length > 0 ? dailyRoutine.map((line, i) => (
+                <Text key={i} style={styles.routineLine}>{line}</Text>
+              )) : (
+                <Text style={styles.ovFoot}>AI will suggest a feeding plan and meds schedule here once diet or medications are on file.</Text>
+              )}
+            </Card>
 
             <Card>
               <View style={styles.ovCardHead}>
@@ -2989,7 +3213,7 @@ export default function PetRecordScreen() {
                 <View style={styles.detailTile}>
                   <Text style={styles.detailK}>Weight</Text>
                   <Text style={styles.detailV}>
-                    {latestLb != null ? `${latestLb} lb` : '—'}{bcs != null ? ` · BCS ${bcs}` : ''}
+                    {latestLb != null ? `${formatLb(latestLb)} lb` : '—'}{bcs != null ? ` · BCS ${bcs}` : ''}
                   </Text>
                 </View>
               </View>
@@ -3077,24 +3301,70 @@ export default function PetRecordScreen() {
 
         {tab === 'insurance' && (
           <View style={styles.tabContent}>
-            <View style={[styles.infoCard, { backgroundColor: Colors.navy, borderColor: Colors.navy, padding: 16, paddingTop: 16 }]}>
-              <Text style={[styles.healthKicker, { marginTop: 0 }]}>PET INSURANCE</Text>
-              <Text style={{ fontFamily: Fonts.extrabold, fontSize: 17, color: Colors.white, marginTop: 8 }}>No policy on file</Text>
-              <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4, lineHeight: 18 }}>
-                Connect a carrier, upload a declarations PDF, or forward the policy email. Claims stay with the insurer — Rescue Army does not store card or login data.
-              </Text>
-              <TouchableOpacity style={{ backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 14 }} onPress={() => Linking.openURL('https://www.lemonade.com/pet')} activeOpacity={0.85}>
-                <Text style={{ color: Colors.white, fontFamily: Fonts.bold }}>Connect Lemonade</Text>
-              </TouchableOpacity>
-              {canEdit ? (
-                <TouchableOpacity style={{ borderWidth: 1.5, borderColor: Colors.white, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 10 }} onPress={() => { setDocKindFilter('insurance'); setTab('documents'); }} activeOpacity={0.85}>
-                  <Text style={{ color: Colors.white, fontFamily: Fonts.bold }}>Open Documents</Text>
-                </TouchableOpacity>
-              ) : null}
-              <TouchableOpacity style={{ paddingVertical: 12, alignItems: 'center', marginTop: 4 }} onPress={() => Linking.openURL('mailto:support.animals@rescue-army.com?subject=' + encodeURIComponent('Forward insurance policy — ' + (pet.name || 'pet')))} activeOpacity={0.85}>
-                <Text style={{ color: '#B9BCE0', fontFamily: Fonts.semibold }}>Forward email</Text>
-              </TouchableOpacity>
-            </View>
+            {(() => {
+              const policyDocs = documents.filter((d) => docAccordionKeys(d).includes('insurance') || /insur|policy|declaration/i.test(String(d.title || d.kind || '')));
+              const policy = policyDocs[0];
+              const ai = policy && policy.ai_summary && typeof policy.ai_summary === 'object' ? policy.ai_summary as any : {};
+              const claims: any[] = Array.isArray(ai.claims) ? ai.claims : [];
+              const carrier = ai.carrier || ai.insurer || ai.company || null;
+              const plan = ai.plan || ai.product || ai.coverage_type || null;
+              const policyNo = ai.policy_number || ai.policy_no || ai.policy || null;
+              return (
+                <>
+                  {policy ? (
+                    <View style={[styles.infoCard, { backgroundColor: Colors.navy, borderColor: Colors.navy, padding: 16, paddingTop: 16 }]}>
+                      <Text style={[styles.healthKicker, { marginTop: 0 }]}>PET INSURANCE</Text>
+                      <Text style={{ fontFamily: Fonts.extrabold, fontSize: 17, color: Colors.white, marginTop: 8 }}>
+                        {carrier || plan || policy.title || 'Policy on file'}
+                      </Text>
+                      {plan && carrier ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>{plan}</Text> : null}
+                      {policyNo ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>Policy {policyNo}</Text> : null}
+                      {ai.deductible ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>Deductible {ai.deductible}</Text> : null}
+                      {policy.taken_on ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>Uploaded {formatDate(policy.taken_on)}</Text> : null}
+                    </View>
+                  ) : (
+                    <View style={[styles.infoCard, { backgroundColor: Colors.navy, borderColor: Colors.navy, padding: 16, paddingTop: 16 }]}>
+                      <Text style={[styles.healthKicker, { marginTop: 0 }]}>PET INSURANCE</Text>
+                      <Text style={{ fontFamily: Fonts.extrabold, fontSize: 17, color: Colors.white, marginTop: 8 }}>No policy on file</Text>
+                      <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4, lineHeight: 18 }}>
+                        Upload a declarations PDF. Claims stay with the insurer — Rescue Army does not store card or login data.
+                      </Text>
+                    </View>
+                  )}
+                  {canEdit ? (
+                    <TouchableOpacity
+                      style={styles.insPrimary}
+                      onPress={() => {
+                        setDocForm({
+                          kind: 'other_document', title: '', taken_on: '', clinic: '', notes: '',
+                          content_kinds: ['insurance'],
+                        });
+                        setDocFile(null);
+                        setDocError(null);
+                        setDocModalVisible(true);
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.insPrimaryTxt}>Upload policy PDF</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  <View style={styles.insSoon}>
+                    <Text style={styles.insSoonTxt}>Forward by email · coming soon</Text>
+                  </View>
+                  <Text style={styles.ovKicker}>CLAIMS</Text>
+                  {claims.length === 0 ? (
+                    <Text style={styles.emptyText}>No claims on file. Claims are paid by the insurer, not Rescue Army.</Text>
+                  ) : claims.map((c: any, i: number) => (
+                    <Card key={i}>
+                      <Text style={styles.docTitle}>{c.title || c.reason || 'Claim'}</Text>
+                      <Text style={styles.docClinic}>
+                        {[c.status, c.amount, c.date ? formatDate(String(c.date)) : null].filter(Boolean).join(' · ')}
+                      </Text>
+                    </Card>
+                  ))}
+                </>
+              );
+            })()}
           </View>
         )}
 
@@ -3183,62 +3453,89 @@ export default function PetRecordScreen() {
               <Text style={styles.emptyText}>No conditions, allergies, or medications recorded.</Text>
             ) : (
               <>
-                {activeConditions.length > 0 && (
-                  <>
-                    {activeConditions.map((c) => (
-                  <View key={c.id} style={styles.condCard}>
+                {conditionGroups.episode ? (
+                  <View style={styles.condCard}>
                     <View style={styles.condTopRow}>
-                      <View style={[styles.condBadge, { backgroundColor: getCondBg(c.kind) }]}>
-                        <Text style={[styles.condBadgeText, { color: getCondText(c.kind) }]}>{titleCase(c.kind)}</Text>
-                      </View>
-                      <SourceBadge source={c.source} />
-                      {c.severity && c.severity !== 'none' && (
-                        <View style={[styles.sevPill, { backgroundColor: getSevBg(c.severity) }]}>
-                          <Text style={[styles.sevText, { color: getSevText(c.severity) }]}>{titleCase(c.severity)}</Text>
-                        </View>
-                      )}
-                    </View>
-                    <Text style={styles.condName}>{c.name}</Text>
-                    {c.diagnosed_on ? <Text style={styles.condDate}>Diagnosed: {formatDate(c.diagnosed_on)}</Text> : null}
-                    {c.notes ? <Text style={styles.condNotes}>{c.notes}</Text> : null}
-                    {canEdit && (
-                      <View style={styles.condActions}>
-                        <TouchableOpacity style={styles.condEditBtn} onPress={() => openEditCondition(c)} activeOpacity={0.85}>
-                          <Text style={styles.condEditText}>Edit</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.condDeleteBtn} onPress={() => deleteCondition(c.id)} activeOpacity={0.85}>
-                          <Trash2 color={Colors.critical} size={14} />
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                  </View>
-                    ))}
-                  </>
-                )}
-                {resolvedConditions.length > 0 && (
-                  <>
-                    <Text style={[styles.sectionLabel, { marginTop: 12 }]}>Resolved</Text>
-                    {resolvedConditions.map((c) => (
-                      <View style={[styles.condCard, { opacity: 0.65 }]}>
-                        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-                          <Text style={styles.condName}>{c.name}</Text>
-                          <SourceBadge source={c.source} />
-                        </View>
-                        <Text style={styles.condDate}>Resolved: {formatDate(c.resolved_on)}</Text>
-                        {canEdit && (
-                          <View style={styles.condActions}>
-                            <TouchableOpacity style={styles.condEditBtn} onPress={() => openEditCondition(c)} activeOpacity={0.85}>
-                              <Text style={styles.condEditText}>Edit</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.condDeleteBtn} onPress={() => deleteCondition(c.id)} activeOpacity={0.85}>
-                              <Trash2 color={Colors.critical} size={14} />
-                            </TouchableOpacity>
+                      {(() => {
+                        const s = conditionGroups.episode.status;
+                        const pill = s === 'active'
+                          ? { bg: Colors.tealBg, fg: Colors.tealDark, label: 'Active' }
+                          : s === 'monitoring'
+                            ? { bg: Colors.standardBg, fg: Colors.accentDark, label: 'Monitoring' }
+                            : { bg: Colors.surface, fg: Colors.textSecondary, label: 'Resolved' };
+                        return (
+                          <View style={[styles.lifePill, { backgroundColor: pill.bg }]}>
+                            <Text style={[styles.lifePillTxt, { color: pill.fg }]}>{pill.label}</Text>
                           </View>
-                        )}
+                        );
+                      })()}
+                      <SourceBadge source={conditionGroups.episode.source} />
+                      <TouchableOpacity onPress={() => setEpisodeOpen((v) => !v)} activeOpacity={0.85}>
+                        <Text style={styles.linkTxt}>{episodeOpen ? 'Hide' : 'Show'}</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <Text style={styles.condName}>{conditionGroups.episode.title}</Text>
+                    <Text style={styles.condDate}>
+                      {[
+                        conditionGroups.episode.onset ? `Onset ${formatDate(conditionGroups.episode.onset)}` : null,
+                        conditionGroups.episode.resolved ? `Resolved ${formatDate(conditionGroups.episode.resolved)}` : null,
+                      ].filter(Boolean).join(' → ')}
+                    </Text>
+                    {episodeOpen ? conditionGroups.episode.items.map((c) => (
+                      <View key={c.id} style={styles.condSub}>
+                        <Text style={styles.condSubName}>{c.name}</Text>
+                        <Text style={styles.condDate}>
+                          {[
+                            (c.onset_date || c.diagnosed_on) ? formatDate(c.onset_date || c.diagnosed_on) : null,
+                            (c.resolved_date || c.resolved_on) ? formatDate(c.resolved_date || c.resolved_on) : null,
+                          ].filter(Boolean).join(' → ')}
+                        </Text>
                       </View>
-                    ))}
-                  </>
-                )}
+                    )) : null}
+                  </View>
+                ) : null}
+                {conditionGroups.standalone.map((c) => {
+                  const life = condLifecycle(c);
+                  const pill = life === 'active'
+                    ? { bg: Colors.tealBg, fg: Colors.tealDark, label: 'Active' }
+                    : life === 'monitoring'
+                      ? { bg: Colors.standardBg, fg: Colors.accentDark, label: 'Monitoring' }
+                      : { bg: Colors.surface, fg: Colors.textSecondary, label: 'Resolved' };
+                  const onset = c.onset_date || c.diagnosed_on;
+                  const resolved = c.resolved_date || c.resolved_on;
+                  return (
+                    <View key={c.id} style={[styles.condCard, life === 'resolved' && { opacity: 0.8 }]}>
+                      <View style={styles.condTopRow}>
+                        <View style={[styles.lifePill, { backgroundColor: pill.bg }]}>
+                          <Text style={[styles.lifePillTxt, { color: pill.fg }]}>{pill.label}</Text>
+                        </View>
+                        <SourceBadge source={c.source} />
+                        {canEdit ? (
+                          <TouchableOpacity onPress={() => setCondMenu(condMenu === c.id ? null : c.id)} style={styles.condMenuBtn} activeOpacity={0.85}>
+                            <MoreVertical color={Colors.navy} size={16} />
+                          </TouchableOpacity>
+                        ) : null}
+                      </View>
+                      <Text style={styles.condName}>{c.name}</Text>
+                      {onset || resolved ? (
+                        <Text style={styles.condDate}>
+                          {[onset ? `Onset ${formatDate(onset)}` : null, resolved ? `Resolved ${formatDate(resolved)}` : null].filter(Boolean).join(' → ')}
+                        </Text>
+                      ) : null}
+                      {c.notes ? <Text style={styles.condNotes}>{c.notes}</Text> : null}
+                      {condMenu === c.id ? (
+                        <View style={styles.condMenu}>
+                          <TouchableOpacity onPress={() => { setCondMenu(null); openEditCondition(c); }} style={styles.condMenuRow} activeOpacity={0.85}>
+                            <Text style={styles.condMenuTxt}>Edit</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity onPress={() => { setCondMenu(null); deleteCondition(c.id); }} style={styles.condMenuRow} activeOpacity={0.85}>
+                            <Text style={[styles.condMenuTxt, { color: Colors.critical }]}>Delete</Text>
+                          </TouchableOpacity>
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                })}
               </>
             )}
 
@@ -3551,17 +3848,25 @@ export default function PetRecordScreen() {
               </TouchableOpacity>
             ) : null}
             <View style={styles.docDash}>
-              <View style={styles.docDashCounts}>
-                {DOC_ACCORDIONS.filter((s) => s.key !== 'other').map((s, i) => {
+              <View style={styles.docTileRow}>
+                {DOC_ACCORDIONS.filter((s) => {
+                  if ((DOC_HEADER_ALWAYS as readonly string[]).includes(s.key)) return true;
+                  if (s.key === 'other') return false;
+                  const n = documents.filter((d) => docAccordionKeys(d).includes(s.key)).length;
+                  return n > 0;
+                }).map((s) => {
                   const n = documents.filter((d) => docAccordionKeys(d).includes(s.key)).length;
                   const on = docOpen[s.key] || docKindFilter === s.key;
                   return (
-                    <React.Fragment key={s.key}>
-                      {i > 0 ? <Text style={styles.docDashDot}>·</Text> : null}
-                      <TouchableOpacity onPress={() => setDocOpen((prev) => ({ ...prev, [s.key]: !on }))} activeOpacity={0.85}>
-                        <Text style={[styles.docDashTxt, on && styles.docDashTxtOn]}>{s.label} {n}</Text>
-                      </TouchableOpacity>
-                    </React.Fragment>
+                    <TouchableOpacity
+                      key={s.key}
+                      style={[styles.docTile, on && styles.docTileOn]}
+                      onPress={() => setDocOpen((prev) => ({ ...prev, [s.key]: !on }))}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[styles.docTileN, on && styles.docTileNOn]}>{n}</Text>
+                      <Text style={[styles.docTileL, on && styles.docTileLOn]} numberOfLines={1}>{s.label}</Text>
+                    </TouchableOpacity>
                   );
                 })}
               </View>
@@ -3582,7 +3887,7 @@ export default function PetRecordScreen() {
               </View>
             ) : DOC_ACCORDIONS.map((section) => {
               const items = documents.filter((d) => docAccordionKeys(d).includes(section.key));
-              if (section.key === 'other' && items.length === 0) return null;
+              if ((section.key === 'other' || section.key === 'imaging' || section.key === 'insurance') && items.length === 0) return null;
               const open = Boolean(docOpen[section.key] || docKindFilter === section.key);
               return (
                 <View key={section.key} style={styles.docAccord}>
@@ -3613,32 +3918,38 @@ export default function PetRecordScreen() {
               canEdit={canEdit}
               onChanged={load}
               entries={(() => {
-                const map = new Map<string, { name: string; phone: string | null; address: string | null; docCount: number; dates: string[] }>();
-                const add = (name?: string | null, date?: string | null, extra?: { phone?: string | null; address?: string | null; isDoc?: boolean }) => {
+                const map = new Map<string, { name: string; phone: string | null; address: string | null; docCount: number; dates: string[]; vets: { name: string; lastVisit?: string | null }[] }>();
+                const add = (name?: string | null, date?: string | null, extra?: { phone?: string | null; address?: string | null; isDoc?: boolean; vet?: string | null }) => {
                   const n = String(name || '').trim();
                   if (!n) return;
                   const key = n;
-                  const cur = map.get(key) || { name: n, phone: null as string | null, address: null as string | null, docCount: 0, dates: [] as string[] };
+                  const cur = map.get(key) || { name: n, phone: null as string | null, address: null as string | null, docCount: 0, dates: [] as string[], vets: [] as { name: string; lastVisit?: string | null }[] };
                   if (extra?.phone && !cur.phone) cur.phone = extra.phone;
                   if (extra?.address && !cur.address) cur.address = extra.address;
                   if (date) cur.dates.push(String(date));
                   if (extra?.isDoc) cur.docCount += 1;
+                  const vet = String(extra?.vet || '').trim();
+                  if (vet && !cur.vets.some((v) => v.name === vet)) cur.vets.push({ name: vet, lastVisit: date || null });
+                  else if (vet) {
+                    const row = cur.vets.find((v) => v.name === vet);
+                    if (row && date && (!row.lastVisit || String(date) > String(row.lastVisit))) row.lastVisit = date;
+                  }
                   map.set(key, cur);
                 };
                 for (const d of documents) {
                   const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary : {};
-                  add(d.clinic || ai.clinic || ai.clinic_name, d.taken_on || ai.date || ai.taken_on, { isDoc: true });
-                  for (const v of ai.visits || []) add(v.clinic, v.date);
-                  for (const e of ai.exams || []) add(e.clinic, e.visit_date || e.date);
+                  add(d.clinic || ai.clinic || ai.clinic_name, d.taken_on || ai.date || ai.taken_on, { isDoc: true, vet: ai.vet_name || ai.veterinarian });
+                  for (const v of ai.visits || []) add(v.clinic, v.date, { vet: v.vet_name || v.veterinarian || v.vet });
+                  for (const e of ai.exams || []) add(e.clinic, e.visit_date || e.date, { vet: e.vet_name || e.veterinarian || e.vet });
                 }
-                for (const e of petExams) add(e.clinic, e.visit_date);
-                for (const v of vaccinations) add(v.vet_clinic, v.administered_on);
-                for (const r of medicalRecords) add((r as any).clinic || (r as any).clinic_name, r.record_date);
+                for (const e of petExams) add(e.clinic, e.visit_date, { vet: e.vet_name || e.veterinarian || e.vet });
+                for (const v of vaccinations) add(v.vet_clinic, v.administered_on, { vet: v.vet_name });
+                for (const r of medicalRecords) add((r as any).clinic || (r as any).clinic_name, r.record_date, { vet: (r as any).vet_name });
                 for (const c of clinics) add(c.name, null, { phone: c.phone, address: c.address });
                 return [...map.values()]
                   .map((c) => {
                     const dates = c.dates.filter(Boolean).sort();
-                    return { name: c.name, phone: c.phone, address: c.address, lastVisit: dates[dates.length - 1] || null, docCount: c.docCount };
+                    return { name: c.name, phone: c.phone, address: c.address, lastVisit: dates[dates.length - 1] || null, docCount: c.docCount, vets: c.vets };
                   })
                   .sort((a, b) => (b.lastVisit || '').localeCompare(a.lastVisit || '') || a.name.localeCompare(b.name));
               })()}
@@ -4458,7 +4769,7 @@ function getSevText(sev: string): string {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
   col: { width: '100%', maxWidth: 720, alignSelf: 'center', flex: 1 },
-  heroWrap: { width: '100%', maxWidth: 320, height: 240, aspectRatio: 4 / 3, borderRadius: 16, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 8, alignSelf: 'center' },
+  heroWrap: { width: '100%', borderRadius: 16, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 8, alignSelf: 'stretch' },
   hero: { width: '100%', height: '100%' },
   changePhoto: { position: 'absolute', right: 12, bottom: 12, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(38,38,94,0.85)', alignItems: 'center', justifyContent: 'center' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
@@ -4730,6 +5041,30 @@ const styles = StyleSheet.create({
   condEditBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: Colors.surface },
   condEditText: { fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.navy },
   condDeleteBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: Colors.critical },
+  lifePill: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
+  lifePillTxt: { fontFamily: Fonts.bold, fontSize: 11 },
+  condMenuBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginLeft: 'auto' },
+  condMenu: { marginTop: 8, backgroundColor: Colors.surface, borderRadius: 12, overflow: 'hidden' },
+  condMenuRow: { paddingHorizontal: 14, paddingVertical: 10 },
+  condMenuTxt: { fontFamily: Fonts.bold, fontSize: 14, color: Colors.navy },
+  condSub: { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: Colors.border },
+  condSubName: { fontFamily: Fonts.semibold, fontSize: 13, color: Colors.navy },
+  noteFrom: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy, marginTop: 4 },
+  noteBody: { fontFamily: Fonts.regular, fontSize: 13, color: Colors.textBody, lineHeight: 19, marginTop: 4 },
+  pastHead: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.textSecondary },
+  pastNote: { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: Colors.border },
+  routineLine: { fontFamily: Fonts.medium, fontSize: 13, color: Colors.navy, lineHeight: 19 },
+  insPrimary: { backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+  insPrimaryTxt: { color: Colors.white, fontFamily: Fonts.bold, fontSize: FontSizes.md },
+  insSoon: { borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 14, paddingVertical: 14, alignItems: 'center', backgroundColor: Colors.surface },
+  insSoonTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.textTertiary },
+  docTileRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  docTile: { minWidth: '22%', flexGrow: 1, flexBasis: '22%', backgroundColor: Colors.surface, borderRadius: 12, paddingVertical: 12, paddingHorizontal: 8, alignItems: 'center' },
+  docTileOn: { backgroundColor: Colors.navy },
+  docTileN: { fontFamily: Fonts.extrabold, fontSize: 18, color: Colors.navy },
+  docTileNOn: { color: Colors.white },
+  docTileL: { fontFamily: Fonts.bold, fontSize: 10, color: Colors.textSecondary, marginTop: 2, textAlign: 'center' },
+  docTileLOn: { color: Colors.white },
 
   docDash: { backgroundColor: Colors.white, borderRadius: 16, borderWidth: 1.5, borderColor: Colors.navy, padding: 14, gap: 12, marginBottom: 12 },
   docDashCounts: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },

@@ -180,16 +180,23 @@ export default function ReportsTabScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); loadReports(); }} colors={[Colors.coral]} />
         ) : undefined}
       >
+          <View style={styles.segment}>
+            {([
+              ['reports', 'Reports'],
+              ['fund', 'Care Fund'],
+            ] as const).map(([k, label]) => (
+              <TouchableOpacity
+                key={k}
+                style={[styles.segBtn, tab === k && styles.segOn]}
+                onPress={() => setTab(k)}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.segText, tab === k && styles.segTextOn]}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
       {tab === 'fund' ? (
         <>
-          <View style={styles.segment}>
-            <TouchableOpacity style={styles.segBtn} onPress={() => setTab('reports')}>
-              <Text style={styles.segText}>Reports</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.segBtn, styles.segOn]} onPress={() => setTab('fund')}>
-              <Text style={[styles.segText, styles.segTextOn]}>Care Fund</Text>
-            </TouchableOpacity>
-          </View>
           <CareFund />
         </>
       ) : (
@@ -204,6 +211,7 @@ export default function ReportsTabScreen() {
                 key={k}
                 style={[styles.segBtn, filter === k && styles.segOn]}
                 onPress={() => setFilter(k)}
+                activeOpacity={0.85}
               >
                 <Text style={[styles.segText, filter === k && styles.segTextOn]}>{label}</Text>
               </TouchableOpacity>
@@ -331,11 +339,11 @@ function CampaignCard({ c }: { c: (typeof CAMPAIGNS)[number] }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
-  segment: { flexDirection: 'row', backgroundColor: Colors.surfaceAlt, borderRadius: 999, padding: 4 },
-  segBtn: { flex: 1, paddingVertical: 10, borderRadius: 999, alignItems: 'center' },
-  segOn: { backgroundColor: Colors.navy },
-  segText: { fontFamily: Fonts.bold, color: Colors.textSecondary, fontSize: FontSizes.sm },
-  segTextOn: { color: Colors.white },
+  segment: { flexDirection: 'row', backgroundColor: '#EFF1F5', borderRadius: 999, padding: 4 },
+  segBtn: { flex: 1, paddingVertical: 10, borderRadius: 999, alignItems: 'center', backgroundColor: 'transparent' },
+  segOn: { backgroundColor: '#26265E' },
+  segText: { fontFamily: Fonts.bold, color: '#6B7280', fontSize: FontSizes.sm },
+  segTextOn: { color: '#FFFFFF' },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',

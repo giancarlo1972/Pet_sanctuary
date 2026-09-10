@@ -98,14 +98,14 @@ export default function VetExamCard({
       return { date: e.visit_date, status: hit.status, note: hit.note, clinic: e.clinic };
     }).filter(Boolean) as any[];
 
-  const headerBits = ['VET EXAM'];
-  if (exam?.visit_date) headerBits.push(fmt(exam.visit_date));
-  if (exam?.clinic) headerBits.push(exam.clinic);
+  const title = exam
+    ? `Latest vet visit — ${[exam.clinic, exam.visit_date ? fmt(exam.visit_date) : null].filter(Boolean).join(', ') || 'no date'}`
+    : 'Latest vet visit';
   const vitals = vitalsLine(exam?.vitals);
 
   return (
     <Card identity>
-      <Text style={styles.kicker}>{headerBits.join(' · ')}</Text>
+      <Text style={styles.kicker}>{title}</Text>
       {!exam ? (
         <TouchableOpacity onPress={onUpload} activeOpacity={0.85}>
           <Text style={styles.empty}>No exam yet — upload a visit record</Text>
@@ -150,7 +150,7 @@ export default function VetExamCard({
 }
 
 const styles = StyleSheet.create({
-  kicker: { fontFamily: Fonts.extrabold, fontSize: 11, letterSpacing: 0.8, color: '#9AA1AC' },
+  kicker: { fontFamily: Fonts.extrabold, fontSize: 13, letterSpacing: 0.2, color: Colors.navy, textTransform: 'none' },
   empty: { fontFamily: Fonts.medium, fontSize: 13, color: Colors.navy, lineHeight: 18 },
   pillGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   sysPill: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7 },

@@ -36,6 +36,7 @@ type ChipProps<T extends string> = {
   onChange: (key: T) => void;
   accent?: 'navy' | 'coral';
   floating?: boolean;
+  size?: 'md' | 'sm';
 };
 
 export function FilterChips<T extends string>({
@@ -44,9 +45,11 @@ export function FilterChips<T extends string>({
   onChange,
   accent = 'navy',
   floating,
+  size = 'md',
 }: ChipProps<T>) {
   const selected = Array.isArray(value) ? value : [value];
   const activeBg = accent === 'coral' ? '#E85A50' : '#26265E';
+  const compact = size === 'sm';
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={chip.row}>
       {items.map((item) => {
@@ -58,13 +61,14 @@ export function FilterChips<T extends string>({
             activeOpacity={0.85}
             style={[
               chip.btn,
+              compact && chip.btnSm,
               floating && chip.float,
               on
                 ? { backgroundColor: activeBg, borderColor: activeBg }
                 : { backgroundColor: '#fff', borderColor: '#E8EAF0' },
             ]}
           >
-            <Text style={[chip.txt, { color: on ? '#fff' : '#26265E' }]}>{item.label}</Text>
+            <Text style={[chip.txt, compact && chip.txtSm, { color: on ? '#fff' : '#26265E' }]}>{item.label}</Text>
           </TouchableOpacity>
         );
       })}
@@ -101,6 +105,10 @@ const chip = StyleSheet.create({
     borderWidth: 1,
     flexShrink: 0,
   },
+  btnSm: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
   float: {
     shadowColor: '#000',
     shadowOpacity: 0.12,
@@ -109,4 +117,5 @@ const chip = StyleSheet.create({
     elevation: 2,
   },
   txt: { fontFamily: Fonts.semibold, fontSize: 13 },
+  txtSm: { fontSize: 12 },
 });

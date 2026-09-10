@@ -460,7 +460,6 @@ export default function NearbyScreen() {
         <View style={styles.chips} pointerEvents="box-none">
           <FilterChips
             floating
-            accent="coral"
             items={[
               { key: 'reports', label: 'Reports' },
               { key: 'pets', label: 'Adoptable pets' },
@@ -473,6 +472,7 @@ export default function NearbyScreen() {
           <View style={{ marginTop: 8 }}>
             <FilterChips
               floating
+              size="sm"
               items={RADII.map((mi) => ({ key: String(mi), label: `${mi} mi` }))}
               value={String(radiusMi)}
               onChange={(k) => { setRadiusMi(Number(k)); setRangeNote(null); }}

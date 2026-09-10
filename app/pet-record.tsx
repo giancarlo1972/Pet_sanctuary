@@ -109,7 +109,7 @@ async function fileToDataUrl(uri: string): Promise<string> {
   });
 }
 
-type Tab = 'overview' | 'medical' | 'insurance' | 'documents' | 'clinics';
+type Tab = 'overview' | 'characteristics' | 'lifestyle' | 'medical' | 'insurance' | 'documents' | 'clinics';
 
 const EXAM_SYSTEMS = [
   'Subjective', 'Oral-Nasal-Throat', 'Ears', 'Eyes', 'Cardiovascular', 'Respiratory',
@@ -263,6 +263,7 @@ interface PetPhoto {
   photo_url: string;
   sort_order: number;
   is_profile: boolean;
+  tag?: string | null;
 }
 
 interface PetDocument {
@@ -724,6 +725,7 @@ export default function PetRecordScreen() {
   const [deviceReadings, setDeviceReadings] = useState<any[]>([]);
   const [petDevices, setPetDevices] = useState<any[]>([]);
   const [chipNumber, setChipNumber] = useState<string | null>(null);
+  const [chipIssuer, setChipIssuer] = useState<string | null>(null);
   const [chipDenied, setChipDenied] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -949,7 +951,7 @@ export default function PetRecordScreen() {
         .eq('pet_id', petId)
         .maybeSingle(),
       supabase.from('pet_photos')
-        .select('id, pet_id, photo_url, sort_order, is_profile')
+        .select('id, pet_id, photo_url, sort_order, is_profile, tag')
         .eq('pet_id', petId)
         .order('sort_order', { ascending: true }),
       supabase.from('pet_documents')
@@ -1001,7 +1003,14 @@ export default function PetRecordScreen() {
     setHistoryEvents((histRes.data as HistoryEvent[]) || []);
     setConditions((condRes.data as PetCondition[]) || []);
     setDiet((dietRes.data as PetDiet) || null);
-    const gallery = (photosRes.data as PetPhoto[]) || [];
+    let gallery = (photosRes.data as PetPhoto[]) || [];
+    if (photosRes.error && /tag/i.test(photosRes.error.message || '')) {
+      const retry = await supabase.from('pet_photos')
+        .select('id, pet_id, photo_url, sort_order, is_profile')
+        .eq('pet_id', petId)
+        .order('sort_order', { ascending: true });
+      gallery = (retry.data as PetPhoto[]) || [];
+    }
     setPhotos(gallery);
     const petPhoto = petData?.main_photo_url;
     if (!isUsablePhoto(petPhoto)) {
@@ -1044,7 +1053,7 @@ export default function PetRecordScreen() {
       supabase.from('device_readings').select('*').eq('pet_id', petId).order('recorded_at', { ascending: false }).limit(80),
       supabase.from('ai_health_analyses').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(20),
       supabase.from('pet_devices').select('*').eq('pet_id', petId),
-      supabase.from('pet_identifiers').select('microchip_number').eq('pet_id', petId).maybeSingle(),
+      supabase.from('pet_identifiers').select('microchip_number, issuer, registry, brand').eq('pet_id', petId).maybeSingle(),
       supabase.from('pet_exams').select('*').eq('pet_id', petId).order('visit_date', { ascending: false }).limit(20),
       supabase.from('medications_given').select('*').eq('pet_id', petId).order('administered_on', { ascending: false }).limit(40),
       supabase.from('pet_diagnostics').select('*').eq('pet_id', petId).order('taken_on', { ascending: false }).limit(40),
@@ -1075,8 +1084,17 @@ export default function PetRecordScreen() {
     if (!medsRes.error) setMedsGiven((medsRes.data as any[]) || []);
     if (!diagRes.error) setDiagnostics((diagRes.data as any[]) || []);
     if (!vitRes.error) setVitalRows((vitRes.data as any[]) || []);
-    if (chipRes.error) setChipDenied(true);
-    else setChipNumber(chipRes.data?.microchip_number || null);
+    if (chipRes.error) {
+      const retry = await supabase.from('pet_identifiers').select('microchip_number').eq('pet_id', petId).maybeSingle();
+      if (retry.error) setChipDenied(true);
+      else {
+        setChipNumber(retry.data?.microchip_number || null);
+        setChipIssuer(null);
+      }
+    } else {
+      setChipNumber(chipRes.data?.microchip_number || null);
+      setChipIssuer((chipRes.data as any)?.issuer || (chipRes.data as any)?.registry || (chipRes.data as any)?.brand || null);
+    }
     const [careRes, routineRes] = await Promise.all([
       supabase.from('pet_care_events').select('id, event_type, occurred_on, title, notes, weight_kg').eq('pet_id', petId).order('occurred_on', { ascending: false }).limit(80),
       supabase.from('pet_routines').select('*').eq('pet_id', petId),
@@ -1421,6 +1439,33 @@ export default function PetRecordScreen() {
     if (error) { showBanner(error.message || 'Could not save details.'); return; }
     setDetailsSheetVisible(false);
     load();
+  };
+
+  const saveLifestyle = async (nextTraits: string[], notes?: string) => {
+    if (!petId || !pet) return;
+    const good = (label: string) => nextTraits.some((x) => x.toLowerCase() === label.toLowerCase());
+    const personality = nextTraits.filter((x) => !/^good with (kids|dogs|cats)$/i.test(x));
+    const patch: Record<string, any> = {
+      personality,
+      good_with_kids: good('Good with kids'),
+      good_with_dogs: good('Good with dogs'),
+      good_with_cats: good('Good with cats'),
+    };
+    if (notes != null) patch.description = notes;
+    const { error } = await supabase.from('pets').update(patch).eq('id', petId);
+    if (error) {
+      const slim = { personality };
+      const retry = await supabase.from('pets').update(slim).eq('id', petId);
+      if (retry.error) { showBanner(retry.error.message || 'Could not save lifestyle.'); return; }
+    }
+    setPet((cur) => cur ? { ...cur, ...patch } : cur);
+  };
+
+  const toggleLifestyle = (label: string) => {
+    const current = pet ? petTraitChips(pet) : [];
+    const on = current.some((x) => x.toLowerCase() === label.toLowerCase());
+    const next = on ? current.filter((x) => x.toLowerCase() !== label.toLowerCase()) : [...current, label];
+    void saveLifestyle(next);
   };
 
   const saveVisibility = async (makePublic: boolean) => {
@@ -2620,6 +2665,8 @@ export default function PetRecordScreen() {
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'overview', label: 'Overview' },
+    { key: 'characteristics', label: 'Characteristics' },
+    { key: 'lifestyle', label: 'Lifestyle' },
     { key: 'medical', label: 'Medical' },
     { key: 'insurance', label: 'Insurance' },
     { key: 'documents', label: 'Documents' },
@@ -2923,7 +2970,7 @@ export default function PetRecordScreen() {
                 ) : null}
               </View>
               <Text style={styles.petBreedLocation} numberOfLines={1}>
-                {[breedDisplay !== '—' ? breedDisplay : null, pet.location].filter(Boolean).join(' · ')}
+                {breedDisplay !== '—' ? breedDisplay : (pet.species || '')}
               </Text>
             </View>
             {isPetOwner ? (
@@ -2937,37 +2984,24 @@ export default function PetRecordScreen() {
                 <Text style={styles.editBtnTxt}>Edit</Text>
               </TouchableOpacity>
             ) : null}
+            {canEdit ? (
+              <TouchableOpacity
+                style={[styles.visPill, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visPillOn : styles.visPillOff]}
+                onPress={() => setVisOpen(true)}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.visTxt, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visTxtOn : styles.visTxtOff]}>
+                  {(pet.is_public && pet.listing_type === 'adoptable') ? 'PUBLIC · adoptable' : 'NOT PUBLIC'}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={[styles.visPill, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visPillOn : styles.visPillOff]}>
+                <Text style={[styles.visTxt, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visTxtOn : styles.visTxtOff]}>
+                  {(pet.is_public && pet.listing_type === 'adoptable') ? 'PUBLIC · adoptable' : 'NOT PUBLIC'}
+                </Text>
+              </View>
+            )}
           </View>
-          {petTraitChips(pet).length > 0 ? (
-            <View style={styles.traitChips}>
-              {petTraitChips(pet).map((t) => (
-                <View key={t} style={styles.traitChip}>
-                  <Text style={styles.traitText}>{t}</Text>
-                </View>
-              ))}
-            </View>
-          ) : canEdit ? (
-            <TouchableOpacity style={styles.traitChip} onPress={openDetailsSheet} activeOpacity={0.85}>
-              <Text style={styles.traitText}>Add traits</Text>
-            </TouchableOpacity>
-          ) : null}
-          {canEdit ? (
-            <TouchableOpacity
-              style={[styles.visPill, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visPillOn : styles.visPillOff]}
-              onPress={() => setVisOpen(true)}
-              activeOpacity={0.85}
-            >
-              <Text style={[styles.visTxt, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visTxtOn : styles.visTxtOff]}>
-                {(pet.is_public && pet.listing_type === 'adoptable') ? 'PUBLIC · adoptable' : 'NOT PUBLIC'}
-              </Text>
-            </TouchableOpacity>
-          ) : (
-            <View style={[styles.visPill, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visPillOn : styles.visPillOff]}>
-              <Text style={[styles.visTxt, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visTxtOn : styles.visTxtOff]}>
-                {(pet.is_public && pet.listing_type === 'adoptable') ? 'PUBLIC · adoptable' : 'NOT PUBLIC'}
-              </Text>
-            </View>
-          )}
         </View>
 
         {/* Tabs */}
@@ -2993,6 +3027,50 @@ export default function PetRecordScreen() {
         {/* OVERVIEW */}
         {tab === 'overview' && (
           <View style={styles.tabContent}>
+            <Card>
+              <View style={styles.tileRow}>
+                <StatusTile icon={Syringe} label="Vaccinated" sub={vaxSub} tone={vaxTone} onPress={() => {
+                  if (pendingDocs[0]) { setDocKindFilter(null); setTab('documents'); openConfirmFromParse(pendingDocs[0].id, pendingDocs[0].ai_summary || {}); }
+                  else { setTab('medical'); }
+                }} />
+                <StatusTile icon={Heart} label="Spayed" sub={pet.spayed_neutered ? 'Yes' : 'Not recorded'} tone={pet.spayed_neutered ? 'ok' : 'unknown'} />
+                <StatusTile icon={Shield} label="Microchipped" sub={chipNumber ? `••${String(chipNumber).slice(-4)}` : (pet.microchipped ? 'On file' : 'Not on file')} tone={(chipNumber || pet.microchipped) ? 'ok' : 'unknown'} />
+              </View>
+              <View style={styles.tileRow}>
+                <StatusTile icon={Scale} label="Weight" sub={weightSub} tone={weightTone} extraLink={canCare ? 'Record' : undefined} extraOnPress={openWeight} />
+                <StatusTile icon={FlaskConical} label="FELV-FIV" sub={felvTone === 'unknown' ? 'Add' : felvSub} tone={felvTone} onPress={() => { setTab('medical'); }} />
+                <StatusTile icon={Activity} label="Activity" sub={activityTone === 'unknown' ? 'Connect' : activitySub} tone={activityTone} onPress={() => showBanner('Connect a litter box, feeder, or GPS collar from Me → Devices.', 'info')} />
+              </View>
+            </Card>
+            <View style={styles.chipFrame}>
+              {displayPhoto ? (
+                <SignedImage path={displayPhoto} style={styles.chipThumb} />
+              ) : (
+                <View style={[styles.chipThumb, styles.petPhotoFallback]}>
+                  <PawPrint color={Colors.textTertiary} size={20} />
+                </View>
+              )}
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.ovKicker}>MICROCHIP</Text>
+                <Text style={styles.chipMono}>{chipNumber || (pet.microchipped ? '•••• request access' : 'No microchip on file')}</Text>
+                {chipIssuer ? <Text style={styles.docTitle}>{chipIssuer}</Text> : null}
+                <TouchableOpacity
+                  onPress={() => Linking.openURL('https://www.petmicrochiplookup.org/')}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.linkTxt}>Look up at AAHA / {chipIssuer || 'registry'} →</Text>
+                </TouchableOpacity>
+                <Text style={styles.ovFoot}>Visible to the owner, verified org staff, and an active foster. Others must request access. Storing it here doesn’t register the chip.</Text>
+                {!chipNumber && !canEdit ? (
+                  <TouchableOpacity style={styles.requestBtn} onPress={async () => {
+                    await supabase.from('identifier_access_requests').insert({ pet_id: petId, user_id: user?.id, status: 'pending' });
+                    showBanner('Access requested.', 'success');
+                  }} activeOpacity={0.85}>
+                    <Text style={styles.requestBtnTxt}>Request access</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </View>
             <VetExamCard
               exam={lastExam}
               exams={petExams}
@@ -3002,25 +3080,10 @@ export default function PetRecordScreen() {
               ].join(' ')}
               onUpload={() => { setDocKindFilter(null); setTab('documents'); }}
             />
-            <Card>
-              <View style={styles.tileRow}>
-                <StatusTile icon={Syringe} label="Vaccinated" sub={vaxSub} tone={vaxTone} onPress={() => {
-                  if (pendingDocs[0]) { setDocKindFilter(null); setTab('documents'); openConfirmFromParse(pendingDocs[0].id, pendingDocs[0].ai_summary || {}); }
-                  else { setTab('medical'); }
-                }} />
-                <StatusTile icon={Heart} label="Spayed/Neutered" sub={pet.spayed_neutered ? 'Yes' : 'Not recorded'} tone={pet.spayed_neutered ? 'ok' : 'unknown'} />
-                <StatusTile icon={Shield} label="Microchipped" sub={chipNumber ? `••${String(chipNumber).slice(-4)}` : (pet.microchipped ? 'On file' : 'Not on file')} tone={(chipNumber || pet.microchipped) ? 'ok' : 'unknown'} />
-              </View>
-              <View style={styles.tileRow}>
-                <StatusTile icon={Scale} label="Weight" sub={weightSub} tone={weightTone} extraLink={canCare ? 'Record' : undefined} extraOnPress={openWeight} />
-                <StatusTile icon={FlaskConical} label="FELV/FIV" sub={felvTone === 'unknown' ? 'Add' : felvSub} tone={felvTone} onPress={() => { setTab('medical'); }} />
-                <StatusTile icon={Activity} label="Activity" sub={activityTone === 'unknown' ? 'Connect' : activitySub} tone={activityTone} onPress={() => showBanner('Connect a litter box, feeder, or GPS collar from Me → Devices.', 'info')} />
-              </View>
-            </Card>
             {latestVisitNotes.length > 0 || pastVisitNotes.length > 0 ? (
               <Card>
                 <View style={styles.ovCardHead}>
-                  <Text style={styles.ovKicker}>NOTES FOR YOU</Text>
+                  <Text style={styles.ovKicker}>LATEST VET INSTRUCTIONS</Text>
                   <TouchableOpacity onPress={() => { setTab('medical'); }}>
                     <Text style={styles.linkTxt}>See all → History</Text>
                   </TouchableOpacity>
@@ -3057,7 +3120,7 @@ export default function PetRecordScreen() {
             ) : ownerNotes.length > 0 ? (
               <Card>
                 <View style={styles.ovCardHead}>
-                  <Text style={styles.ovKicker}>NOTES FOR YOU</Text>
+                  <Text style={styles.ovKicker}>LATEST VET INSTRUCTIONS</Text>
                 </View>
                 {ownerNotes.map((n, i) => (
                   <View key={i}>
@@ -3126,20 +3189,6 @@ export default function PetRecordScreen() {
               <Text style={styles.ovFoot}>Device readings feed AI Health so patterns (weight, litter-box visits) show up in the analysis.</Text>
             </Card>
 
-            <Card>
-              <Text style={styles.ovKicker}>MICROCHIP</Text>
-              <Text style={styles.chipMono}>{chipNumber || (pet.microchipped ? '•••• request access' : 'No microchip on file')}</Text>
-              <Text style={styles.ovFoot}>Visible to the owner, verified org staff, and an active foster. Others must request access. Storing it here doesn’t register the chip — verify at the AAHA universal lookup after a move.</Text>
-              {!chipNumber && !canEdit ? (
-                <TouchableOpacity style={styles.requestBtn} onPress={async () => {
-                  await supabase.from('identifier_access_requests').insert({ pet_id: petId, user_id: user?.id, status: 'pending' });
-                  showBanner('Access requested.', 'success');
-                }} activeOpacity={0.85}>
-                  <Text style={styles.requestBtnTxt}>Request access</Text>
-                </TouchableOpacity>
-              ) : null}
-            </Card>
-
             {activeConditions.length > 0 ? (
               <Card>
                 <View style={styles.ovCardHead}>
@@ -3153,71 +3202,6 @@ export default function PetRecordScreen() {
                 ))}
               </Card>
             ) : null}
-
-            <Card identity>
-              <View style={styles.ovCardHead}>
-                <Text style={styles.ovKicker}>CHARACTERISTICS</Text>
-                {canEdit ? (
-                  <TouchableOpacity onPress={openDetailsSheet}>
-                    <Text style={styles.linkTxt}>Edit</Text>
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-              <View style={styles.detailGrid}>
-                <View style={styles.detailTile}>
-                  <Text style={styles.detailK}>Species</Text>
-                  <Text style={styles.detailV}>{speciesLabel}</Text>
-                </View>
-                <View style={styles.detailTile}>
-                  <Text style={styles.detailK}>Breed</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                    <Text style={styles.detailV}>{breedDisplay}</Text>
-                    {pet.ai_traits ? (
-                      <View style={[styles.ovChip, styles.ovChipTeal, { paddingVertical: 2, paddingHorizontal: 8 }]}>
-                        <Text style={styles.ovChipTealTxt}>AI</Text>
-                      </View>
-                    ) : null}
-                  </View>
-                </View>
-                <View style={styles.detailTile}>
-                  <Text style={styles.detailK}>Coat</Text>
-                  <Text style={styles.detailV}>{titleCase(pet.coat || pet.ai_traits?.coat || inferCoat(pet.breed_primary || pet.breed, pet.breed_notes) || '') || '—'}</Text>
-                </View>
-                <View style={styles.detailTile}>
-                  <Text style={styles.detailK}>Color</Text>
-                  <ColorSwatches names={[pet.primary_color || '', pet.secondary_color || ''].filter(Boolean)} catalog={colors} />
-                </View>
-                <View style={styles.detailTile}>
-                  <Text style={styles.detailK}>Sex</Text>
-                  {sexSymbol ? (
-                    <Text style={styles.detailV} numberOfLines={1}>
-                      <Text style={[styles.sexGlyph, { color: sexSymbol === '♀' ? Colors.coral : Colors.navy }]}>{sexSymbol}</Text>
-                      {sexAlter ? ` ${sexAlter}` : ''}
-                    </Text>
-                  ) : <Text style={styles.detailV}>—</Text>}
-                </View>
-                <View style={styles.detailTile}>
-                  <Text style={styles.detailK}>Date of birth</Text>
-                  {pet.date_of_birth ? (
-                    <Text style={styles.detailV}>{dobLine}</Text>
-                  ) : canEdit ? (
-                    <TouchableOpacity onPress={openDetailsSheet}><Text style={{ fontFamily: Fonts.bold, fontSize: 13, color: Colors.coral }}>Add date of birth</Text></TouchableOpacity>
-                  ) : (
-                    <Text style={styles.detailV}>—</Text>
-                  )}
-                </View>
-                <View style={styles.detailTile}>
-                  <Text style={styles.detailK}>With you since</Text>
-                  <Text style={styles.detailV}>{withYouLabel}</Text>
-                </View>
-                <View style={styles.detailTile}>
-                  <Text style={styles.detailK}>Weight</Text>
-                  <Text style={styles.detailV}>
-                    {latestLb != null ? `${formatLb(latestLb)} lb` : '—'}{bcs != null ? ` · BCS ${bcs}` : ''}
-                  </Text>
-                </View>
-              </View>
-            </Card>
 
             <Card>
               <View style={styles.ovCardHead}>
@@ -3296,6 +3280,144 @@ export default function PetRecordScreen() {
             ) : (
               <Text style={styles.emptyText}>No diet information yet.</Text>
             )}
+          </View>
+        )}
+
+        {tab === 'characteristics' && (
+          <View style={styles.tabContent}>
+            <Card identity>
+              <View style={styles.ovCardHead}>
+                <Text style={styles.ovKicker}>CHARACTERISTICS</Text>
+                {canEdit ? (
+                  <TouchableOpacity onPress={openDetailsSheet}>
+                    <Text style={styles.linkTxt}>Edit</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              <View style={styles.detailGrid}>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>Species</Text>
+                  <Text style={styles.detailV}>{speciesLabel}</Text>
+                </View>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>Breed</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <Text style={styles.detailV}>{breedDisplay}</Text>
+                    {pet.ai_traits ? (
+                      <View style={[styles.ovChip, styles.ovChipTeal, { paddingVertical: 2, paddingHorizontal: 8 }]}>
+                        <Text style={styles.ovChipTealTxt}>AI</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>Coat</Text>
+                  <Text style={styles.detailV}>{titleCase(pet.coat || pet.ai_traits?.coat || inferCoat(pet.breed_primary || pet.breed, pet.breed_notes) || '') || '—'}</Text>
+                </View>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>Color</Text>
+                  <ColorSwatches names={[pet.primary_color || '', pet.secondary_color || ''].filter(Boolean)} catalog={colors} />
+                </View>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>Sex</Text>
+                  {sexSymbol ? (
+                    <Text style={styles.detailV} numberOfLines={1}>
+                      <Text style={[styles.sexGlyph, { color: sexSymbol === '♀' ? Colors.coral : Colors.navy }]}>{sexSymbol}</Text>
+                      {sexAlter ? ` ${sexAlter}` : ''}
+                    </Text>
+                  ) : <Text style={styles.detailV}>—</Text>}
+                </View>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>Date of birth</Text>
+                  {pet.date_of_birth ? (
+                    <Text style={styles.detailV}>{dobLine}</Text>
+                  ) : canEdit ? (
+                    <TouchableOpacity onPress={openDetailsSheet}><Text style={{ fontFamily: Fonts.bold, fontSize: 13, color: Colors.coral }}>Add date of birth</Text></TouchableOpacity>
+                  ) : (
+                    <Text style={styles.detailV}>—</Text>
+                  )}
+                </View>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>With you since</Text>
+                  <Text style={styles.detailV}>{withYouLabel}</Text>
+                </View>
+                <View style={styles.detailTile}>
+                  <Text style={styles.detailK}>Weight</Text>
+                  <Text style={styles.detailV}>
+                    {latestLb != null ? `${formatLb(latestLb)} lb` : '—'}{bcs != null ? ` · BCS ${bcs}` : ''}
+                  </Text>
+                </View>
+              </View>
+            </Card>
+            <Card>
+              <Text style={styles.ovKicker}>PHOTOS SHOWING HER TRAITS</Text>
+              {(() => {
+                const tagged = photos.filter((p) => /trait/i.test(String(p.tag || '')));
+                const strip = tagged.length ? tagged : photos.filter((p) => !p.is_profile).slice(0, 6);
+                const use = strip.length ? strip : photos;
+                if (!use.length) return <Text style={styles.emptyText}>Tag photos as “trait” to show them here.</Text>;
+                return (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingTop: 8 }}>
+                    {use.map((p) => (
+                      <SignedImage key={p.id} path={p.photo_url} style={styles.traitStripImg} />
+                    ))}
+                  </ScrollView>
+                );
+              })()}
+            </Card>
+          </View>
+        )}
+
+        {tab === 'lifestyle' && (
+          <View style={styles.tabContent}>
+            <Card>
+              <Text style={styles.ovKicker}>LIFESTYLE</Text>
+              <Text style={styles.ovFoot}>Shown publicly only if you make {pet.name || 'this pet'} adoptable</Text>
+              <View style={[styles.traitChips, { marginTop: 12 }]}>
+                {(() => {
+                  const selected = petTraitChips(pet);
+                  const extras = [
+                    ...selected,
+                    ...(diet?.treats ? String(diet.treats).split(/[,/]/).map((s) => s.trim()).filter(Boolean) : []),
+                  ];
+                  const seen = new Set(traitCatalog.map((t) => t.label.toLowerCase()));
+                  const catalog = [...traitCatalog];
+                  for (const x of extras) {
+                    if (!seen.has(x.toLowerCase())) {
+                      seen.add(x.toLowerCase());
+                      catalog.push({ key: x.toLowerCase().replace(/\s+/g, '_'), label: x });
+                    }
+                  }
+                  return catalog.map((t) => {
+                    const on = selected.some((x) => x.toLowerCase() === t.label.toLowerCase());
+                    return (
+                      <TouchableOpacity
+                        key={t.key}
+                        onPress={() => canEdit && toggleLifestyle(t.label)}
+                        activeOpacity={canEdit ? 0.85 : 1}
+                        style={[styles.lifeChip, on && styles.lifeChipOn]}
+                      >
+                        <Text style={[styles.lifeChipTxt, on && styles.lifeChipTxtOn]}>{t.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  });
+                })()}
+              </View>
+              <Text style={[styles.ovKicker, { marginTop: 16 }]}>NOTES</Text>
+              {canEdit ? (
+                <TextInput
+                  style={styles.lifeNotes}
+                  multiline
+                  value={pet.description || ''}
+                  onChangeText={(t) => setPet((cur) => cur ? { ...cur, description: t } : cur)}
+                  onEndEditing={() => void saveLifestyle(petTraitChips(pet), pet.description || '')}
+                  placeholder="Notes about routine, treats, and how they live…"
+                  placeholderTextColor={Colors.textTertiary}
+                />
+              ) : (
+                <Text style={styles.noteBody}>{pet.description || 'No lifestyle notes yet.'}</Text>
+              )}
+            </Card>
           </View>
         )}
 
@@ -4807,6 +4929,21 @@ const styles = StyleSheet.create({
   visTxtOn: { color: Colors.tealDark },
   visSheet: { backgroundColor: Colors.white, borderRadius: 16, padding: 18, gap: 12, marginHorizontal: 24, marginTop: 'auto', marginBottom: 'auto' },
   visRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 6 },
+  chipFrame: {
+    flexDirection: 'row', gap: 12, alignItems: 'flex-start',
+    backgroundColor: Colors.white, borderWidth: 2, borderColor: Colors.navy,
+    borderRadius: 14, padding: 14,
+  },
+  chipThumb: { width: 48, height: 48, borderRadius: 10, backgroundColor: Colors.surface },
+  traitStripImg: { width: 112, height: 112, borderRadius: 12, backgroundColor: Colors.surface },
+  lifeChip: { backgroundColor: Colors.surface, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
+  lifeChipOn: { backgroundColor: Colors.navy },
+  lifeChipTxt: { fontFamily: Fonts.semibold, fontSize: 13, color: Colors.navy },
+  lifeChipTxtOn: { color: Colors.white },
+  lifeNotes: {
+    marginTop: 8, minHeight: 88, borderWidth: 1, borderColor: Colors.border, borderRadius: 12,
+    padding: 12, fontFamily: Fonts.medium, fontSize: 13, color: Colors.navy, textAlignVertical: 'top',
+  },
 
   tabBar: { flexDirection: 'row', flexWrap: 'nowrap', gap: 8, paddingHorizontal: 0, marginTop: 12, marginBottom: 0, position: 'relative' },
   hubRow: { flexDirection: 'row', gap: 8, paddingBottom: 12 },

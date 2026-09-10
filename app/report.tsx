@@ -389,6 +389,7 @@ export default function NewReportScreen() {
     }
     setLoading(true);
     setBanner(null);
+    let lastPayload: { status?: string; severity?: string; user_id?: string | null } = {};
     try {
       let photoUrl: string | null = null;
       if (photoBlob) {
@@ -401,9 +402,11 @@ export default function NewReportScreen() {
         photoUrl = path;
       }
       const address = location.replace(/^Detected:\s*/i, '').trim();
-      const { data, error } = await supabase.from('reports').insert({
+      const { data: sess } = await supabase.auth.getSession();
+      const authUid = sess?.session?.user?.id ?? user?.id ?? null;
+      const payload = {
         report_type: kind,
-        severity: selected?.severity || 'standard',
+        severity: String(selected?.severity || 'standard').toLowerCase(),
         urgency: URGENCY[selected?.severity || 'standard'],
         incident_category: INCIDENT[kind],
         pet_name: petName.trim() || null,
@@ -422,7 +425,7 @@ export default function NewReportScreen() {
         status: 'pending_moderation',
         approximate_public: approxPublic,
         allow_direct_contact: false,
-        user_id: user?.id ?? null,
+        user_id: authUid,
         ai_species: ai?.species || null,
         ai_breed: ai?.breed_guess || null,
         ai_colors: ai?.colors?.length ? ai.colors : null,
@@ -431,8 +434,26 @@ export default function NewReportScreen() {
         ai_confidence: ai?.confidence || null,
         ai_summary: ai?.short_description || null,
         ai_analyzed_at: ai?.analyzed ? new Date().toISOString() : null,
-      }).select('id').single();
-      if (error) throw error;
+      };
+      console.log('[reports.insert] anon fields', {
+        status: payload.status,
+        severity: payload.severity,
+        user_id: payload.user_id,
+        authUid,
+        session: Boolean(sess?.session),
+        contextUser: user?.id ?? null,
+      });
+      console.log('[reports.insert] payload', JSON.stringify(payload));
+      lastPayload = { status: payload.status, severity: payload.severity, user_id: payload.user_id };
+      const { data, error } = await supabase.from('reports').insert(payload).select('id').single();
+      if (error) {
+        console.log('[reports.insert] error', error.message, error.code, error.details, {
+          status: payload.status,
+          severity: payload.severity,
+          user_id: payload.user_id,
+        });
+        throw error;
+      }
       setSubmittedId(data.id);
       if (lat != null && lng != null) {
         try {
@@ -454,7 +475,8 @@ export default function NewReportScreen() {
       }
       setSent(true);
     } catch (err: any) {
-      setBanner({ message: supabaseMessage(err), kind: 'error' });
+      const extra = `status=${lastPayload.status ?? 'unset'} severity=${lastPayload.severity ?? 'unset'} user_id=${lastPayload.user_id ?? 'null'}`;
+      setBanner({ message: `${supabaseMessage(err)} · ${extra}`, kind: 'error' });
     }
     setLoading(false);
   };

@@ -1,13 +1,12 @@
-/** CartoDB Positron — light grey basemap used by the 14.08 prototype. */
+/** OpenFreeMap Positron (vector) + OSM raster fallback.
+ *  CartoDB Positron now watermarks every tile with "API KEY REQUIRED". */
 
-export const CARTO_POSITRON_URL =
-  'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+export const OPENFREEMAP_STYLE = 'https://tiles.openfreemap.org/styles/positron';
 
-export const CARTO_POSITRON_NATIVE =
-  'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png';
+export const OSM_RASTER_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
-export const CARTO_POSITRON_ATTR =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
+export const BASEMAP_ATTR =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors · <a href="https://openfreemap.org">OpenFreeMap</a>';
 
 export const PIN_CORAL = '#E85A50';
 export const PIN_HALO_FILL = 'rgba(232,90,80,0.18)';

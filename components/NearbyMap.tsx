@@ -3,7 +3,7 @@ import { Platform, StyleSheet, View, Text } from 'react-native';
 import MapView, { Circle, Marker, UrlTile } from 'react-native-maps';
 import type { NearbyMapProps } from './NearbyMapProps';
 import {
-  CARTO_POSITRON_NATIVE,
+  OSM_RASTER_URL,
   PIN_CORAL,
   PIN_HALO_FILL,
   PIN_HALO_METERS,
@@ -27,7 +27,7 @@ export default function NearbyMap(props: NearbyMapProps) {
       rotateEnabled={false}
       toolbarEnabled={false}
     >
-      <UrlTile urlTemplate={CARTO_POSITRON_NATIVE} maximumZ={19} zIndex={-1} />
+      <UrlTile urlTemplate={OSM_RASTER_URL} maximumZ={19} zIndex={-1} />
       {mode === 'nearby' ? (
         <Circle
           center={{ latitude: lat, longitude: lng }}

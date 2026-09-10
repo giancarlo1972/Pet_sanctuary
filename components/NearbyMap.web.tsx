@@ -2,8 +2,9 @@ import React, { createElement, useEffect, useRef } from 'react';
 import { View, StyleSheet } from 'react-native';
 import type { NearbyMapProps, NearbyPin } from './NearbyMapProps';
 import {
-  CARTO_POSITRON_ATTR,
-  CARTO_POSITRON_URL,
+  BASEMAP_ATTR,
+  OPENFREEMAP_STYLE,
+  OSM_RASTER_URL,
   PIN_CORAL,
   PIN_HALO_FILL,
   PIN_HALO_METERS,
@@ -37,6 +38,69 @@ function coralPin(L: any, group: any, lat: number, lng: number) {
     fillColor: PIN_CORAL,
     fillOpacity: 1,
   }).addTo(group);
+}
+
+function loadCss(id: string, href: string) {
+  if (document.getElementById(id)) return;
+  const link = document.createElement('link');
+  link.id = id;
+  link.rel = 'stylesheet';
+  link.href = href;
+  document.head.appendChild(link);
+}
+
+function loadScript(id: string, src: string): Promise<void> {
+  const existing = document.getElementById(id) as HTMLScriptElement | null;
+  if (existing) {
+    if ((existing as any)._loaded || (window as any).maplibregl) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', () => reject(new Error(src)));
+    });
+  }
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.id = id;
+    s.src = src;
+    s.async = true;
+    s.onload = () => {
+      (s as any)._loaded = true;
+      resolve();
+    };
+    s.onerror = () => reject(new Error(src));
+    document.head.appendChild(s);
+  });
+}
+
+function addOsmRaster(L: any, map: any) {
+  L.tileLayer(OSM_RASTER_URL, {
+    attribution: BASEMAP_ATTR,
+    maxZoom: 19,
+  }).addTo(map);
+}
+
+async function addBasemap(L: any, map: any) {
+  try {
+    (window as any).L = L;
+    loadCss('maplibre-css', 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css');
+    await Promise.race([
+      (async () => {
+        await loadScript('maplibre-js', 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js');
+        await loadScript('maplibre-leaflet-js', 'https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js');
+      })(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('basemap timeout')), 2800)),
+    ]);
+    if (typeof L.maplibreGL === 'function' && (window as any).maplibregl) {
+      L.maplibreGL({
+        style: OPENFREEMAP_STYLE,
+        attributionControl: false,
+      }).addTo(map);
+      return;
+    }
+  } catch {
+    /* OSM raster fallback — no API key, no watermark */
+  }
+  addOsmRaster(L, map);
 }
 
 export default function NearbyMap(props: NearbyMapProps) {
@@ -76,11 +140,8 @@ export default function NearbyMap(props: NearbyMapProps) {
           dragging: mode === 'nearby',
           scrollWheelZoom: mode === 'nearby',
         });
-        L.tileLayer(CARTO_POSITRON_URL, {
-          attribution: CARTO_POSITRON_ATTR,
-          subdomains: 'abcd',
-          maxZoom: 19,
-        }).addTo(mapRef.current);
+        await addBasemap(L, mapRef.current);
+        if (cancelled) return;
       }
 
       const map = mapRef.current;

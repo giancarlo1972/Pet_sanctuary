@@ -12,12 +12,14 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
-import { loadHelpFlags } from '@/lib/help-alerts';
 import { geocodeMany, geocodePlace, reverseGeocode } from '@/lib/geocode';
 import { decodeGeohash } from '@/lib/geohash';
 
 const FALLBACK = { lat: 40.758, lng: -73.985 };
 const RADII = [5, 10, 25];
+const DEFAULT_MI = 10;
+const EXPAND_MI = 25;
+const LOAD_MS = 8000;
 
 const TYPE_LABEL: Record<string, string> = {
   lost: 'Lost pet', stray: 'Found stray', injured: 'Injured animal',
@@ -38,6 +40,25 @@ function kmBetween(a: { lat: number; lng: number }, b: { lat: number; lng: numbe
     Math.sin(dLat / 2) ** 2 +
     Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
+function timed<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(fallback), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      () => { clearTimeout(t); resolve(fallback); },
+    );
+  });
+}
+
+function fetchJson(url: string, ms = 7000): Promise<any> {
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const t = setTimeout(() => ctrl?.abort(), ms);
+  return fetch(url, ctrl ? { signal: ctrl.signal } : undefined)
+    .then((r) => (r.ok ? r.json() : {}))
+    .catch(() => ({}))
+    .finally(() => clearTimeout(t));
 }
 
 function reportTitle(r: { pet_name?: string | null; location_address?: string; report_type?: string }) {
@@ -124,7 +145,8 @@ export default function NearbyScreen() {
   const { user } = useAuth();
   const [center, setCenter] = useState(FALLBACK);
   const [located, setLocated] = useState(false);
-  const [radiusMi, setRadiusMi] = useState(5);
+  const [radiusMi, setRadiusMi] = useState(DEFAULT_MI);
+  const [rangeNote, setRangeNote] = useState<string | null>(null);
   const [layers, setLayers] = useState<Record<NearbyLayer, boolean>>({ reports: true, pets: true, clinics: true, providers: true });
   const [pins, setPins] = useState<NearbyPin[]>([]);
   const [loading, setLoading] = useState(true);
@@ -134,22 +156,21 @@ export default function NearbyScreen() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    const watchdog = setTimeout(() => setLoading(false), LOAD_MS);
     try {
-      const flags = user?.id ? await loadHelpFlags(user.id) : null;
-      if (flags?.alert_radius_mi) setRadiusMi(flags.alert_radius_mi);
-      const device = await deviceLocation();
+      const device = await timed(deviceLocation(), 6000, null);
       let loc = device;
       let didLocate = Boolean(device);
       let state = '';
       if (didLocate && loc) {
-        const rev = await reverseGeocode(loc.lat, loc.lng);
+        const rev = await timed(reverseGeocode(loc.lat, loc.lng), 4000, null);
         state = (rev?.stateCode || '').slice(0, 2).toUpperCase();
       }
       if (!state && user?.id) {
         const { data: prof } = await supabase.from('profiles').select('address_city, address_state').eq('id', user.id).maybeSingle();
         state = String(prof?.address_state || '').slice(0, 2).toUpperCase();
         if (!loc && (prof?.address_city || prof?.address_state)) {
-          loc = await geocodePlace([prof.address_city, prof.address_state].filter(Boolean).join(', '));
+          loc = await timed(geocodePlace([prof.address_city, prof.address_state].filter(Boolean).join(', ')), 4000, null);
         }
       }
       if (!loc) loc = FALLBACK;
@@ -180,9 +201,9 @@ export default function NearbyScreen() {
           .eq('is_public', true)
           .order('created_at', { ascending: false })
           .limit(80),
-        fetch(`/api/rescuegroups?pets=1&state=${encodeURIComponent(state)}`).then((r) => r.ok ? r.json() : { pets: [] }).catch(() => ({ pets: [] })),
-        fetch(`/api/rescuegroups?state=${encodeURIComponent(state)}`).then((r) => r.ok ? r.json() : { orgs: [] }).catch(() => ({ orgs: [] })),
-        fetch(`/api/nearby-clinics?kind=clinic&lat=${here.lat}&lng=${here.lng}`).then((r) => r.json()).catch(() => ({ clinics: [] })),
+        fetchJson(`/api/rescuegroups?pets=1&state=${encodeURIComponent(state)}`),
+        fetchJson(`/api/rescuegroups?state=${encodeURIComponent(state)}`),
+        fetchJson(`/api/nearby-clinics?kind=clinic&lat=${here.lat}&lng=${here.lng}`),
         user
           ? supabase.from('service_provider_profiles').select('user_id, services, radius_mi, rating, show_on_map').eq('show_on_map', true).limit(80)
           : Promise.resolve({ data: [] as any[], error: null }),
@@ -243,13 +264,25 @@ export default function NearbyScreen() {
         const q = [p?.address_city, p?.address_state].filter(Boolean).join(', ');
         if (q) needGeo.push(q);
       }
-      const geo = await geocodeMany(needGeo);
+      const geo = await timed(geocodeMany(needGeo), 5000, new Map());
 
       const next: NearbyPin[] = [];
-      const preferredMi = flags?.alert_radius_mi || 5;
       const paint = () => {
-        const view = viewForPins(here, didLocate, next, preferredMi);
-        setRadiusMi(view.mi);
+        const view = viewForPins(here, didLocate, next, DEFAULT_MI);
+        const km10 = DEFAULT_MI * 1.609 + 0.05;
+        const km25 = EXPAND_MI * 1.609 + 0.05;
+        const n10 = next.filter((p) => kmBetween(view.center, p) <= km10).length;
+        const n25 = next.filter((p) => kmBetween(view.center, p) <= km25).length;
+        let mi = Math.max(view.mi, DEFAULT_MI);
+        let note: string | null = null;
+        if (n10 === 0 && n25 > 0) {
+          mi = EXPAND_MI;
+          note = 'Nothing within 10 mi — showing 25 mi';
+        } else if (n10 === 0) {
+          mi = DEFAULT_MI;
+        }
+        setRadiusMi(mi);
+        setRangeNote(note);
         setCenter(view.center);
         setPins([...next]);
         setLoading(false);
@@ -365,7 +398,9 @@ export default function NearbyScreen() {
       paint();
     } catch {
       setPins([]);
+      setRangeNote(null);
     } finally {
+      clearTimeout(watchdog);
       setLoading(false);
     }
   }, [user?.id]);
@@ -429,7 +464,12 @@ export default function NearbyScreen() {
           </View>
           <View style={styles.chipRow}>
             {RADII.map((mi) => (
-              <TouchableOpacity key={mi} style={[styles.rChip, radiusMi === mi && styles.rChipOn]} onPress={() => setRadiusMi(mi)} activeOpacity={0.85}>
+              <TouchableOpacity
+                key={mi}
+                style={[styles.rChip, radiusMi === mi && styles.rChipOn]}
+                onPress={() => { setRadiusMi(mi); setRangeNote(null); }}
+                activeOpacity={0.85}
+              >
                 <Text style={[styles.rTxt, radiusMi === mi && styles.rTxtOn]}>{mi} mi</Text>
               </TouchableOpacity>
             ))}
@@ -442,14 +482,22 @@ export default function NearbyScreen() {
         <View style={styles.sheet}>
           <View style={styles.handle} />
           <Text style={styles.sheetTitle}>
-            {loading ? 'Finding what’s around you' : `${visible.length} within ${radiusMi} mi`}
+            {loading
+              ? 'Finding what’s around you'
+              : rangeNote
+                ? rangeNote
+                : `${visible.length} within ${radiusMi} mi`}
           </Text>
           {loading ? (
             <ActivityIndicator color={Colors.coral} style={{ marginTop: 12 }} />
           ) : (
             <ScrollView style={styles.sheetList} showsVerticalScrollIndicator={false}>
               {visible.length === 0 ? (
-                <Text style={styles.empty}>Nothing in this radius yet. Widen the range or turn on another layer.</Text>
+                <Text style={styles.empty}>
+                  {rangeNote
+                    ? 'Nothing in this radius yet. Widen the range or turn on another layer.'
+                    : `Nothing within ${radiusMi} mi yet. Widen the range or turn on another layer.`}
+                </Text>
               ) : visible.map((p) => (
                 <TouchableOpacity
                   key={p.id}

@@ -56,6 +56,10 @@ export default function MedicalDashboard(props: {
   docCounts?: { labs: number; vaccines: number; records: number };
   onOpenDocs?: (kind: 'labs' | 'vaccinations' | 'exam_visit') => void;
   onMenu?: () => void;
+  mode?: 'panel' | 'body' | 'all';
+  skipWeight?: boolean;
+  hideUploads?: boolean;
+  pastConditions?: string[];
 }) {
   const [labOpen, setLabOpen] = useState<Record<string, boolean>>({ Hematology: true, Chemistry: true, Endocrinology: true, Urinalysis: true });
 
@@ -139,6 +143,7 @@ export default function MedicalDashboard(props: {
   const overPctLabel = overPct == null ? null : `${overPct > 0 ? '+' : ''}${overPct.toFixed(1)}%`;
 
   const [expand, setExpand] = useState<Record<string, boolean>>({});
+  const mode = props.mode || 'all';
 
   const wDelta = props.weightDelta;
   const bcsDelta = props.bcsDelta;
@@ -164,6 +169,7 @@ export default function MedicalDashboard(props: {
 
   return (
     <View style={{ gap: 16 }}>
+      {mode !== 'body' ? (
       <View style={styles.navy}>
         {props.onMenu ? (
           <TouchableOpacity style={styles.menuBtn} onPress={props.onMenu} activeOpacity={0.85} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -207,23 +213,15 @@ export default function MedicalDashboard(props: {
             </View>
           </View>
         </View>
-        <View style={styles.docStripNavy}>
-          {([
-            { kind: 'labs' as const, label: 'Labs', n: props.docCounts?.labs ?? 0 },
-            { kind: 'vaccinations' as const, label: 'Vaccines', n: props.docCounts?.vaccines ?? 0 },
-            { kind: 'exam_visit' as const, label: 'Records', n: props.docCounts?.records ?? 0 },
-          ]).map((item, i) => (
-            <React.Fragment key={item.kind}>
-              {i > 0 ? <Text style={styles.stripDotNavy}>·</Text> : null}
-              <TouchableOpacity onPress={() => props.onOpenDocs?.(item.kind)} activeOpacity={0.85}>
-                <Text style={styles.stripTxtNavy}>{item.label} {item.n}</Text>
-              </TouchableOpacity>
-            </React.Fragment>
-          ))}
-        </View>
+        {props.pastConditions && props.pastConditions.length > 0 ? (
+          <Text style={styles.pastLine}>Past conditions · {props.pastConditions.join(' · ')}</Text>
+        ) : null}
       </View>
+      ) : null}
 
-      {props.weightPts.length >= 1 ? (
+      {mode === 'panel' ? null : (
+      <>
+      {!props.skipWeight && props.weightPts.length >= 1 ? (
       <Card>
         <Text style={styles.kicker}>WEIGHT + BCS</Text>
         {props.weightPts.length >= 2 ? (
@@ -356,7 +354,7 @@ export default function MedicalDashboard(props: {
             <Text style={styles.link}>Run {r.run_number || r.run_no} · {formatDate(r.created_at)} ▾</Text>
           </TouchableOpacity>
         ))}
-        {props.aiReady === false ? (
+        {props.aiReady === false && !props.hideUploads ? (
           <View style={styles.started}>
             <Text style={styles.kicker}>GET STARTED</Text>
             <Text style={styles.body}>Add a few basics so AI Health has something to read.</Text>
@@ -381,6 +379,8 @@ export default function MedicalDashboard(props: {
           </TouchableOpacity>
         ) : null}
       </Card>
+      </>
+      )}
     </View>
   );
 }
@@ -412,6 +412,7 @@ const styles = StyleSheet.create({
   kpiV: { fontFamily: Fonts.extrabold, fontSize: 26, color: Colors.white },
   kpiU: { fontFamily: Fonts.medium, fontSize: 13, color: '#B9BCE0' },
   kpiHint: { fontFamily: Fonts.regular, fontSize: 11, color: '#B9BCE0' },
+  pastLine: { fontFamily: Fonts.medium, fontSize: 11, color: '#9AA1AC', marginTop: 2 },
   delta: { alignSelf: 'flex-start', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
   card: { backgroundColor: Colors.white, borderRadius: 16, padding: 16, borderWidth: 1, borderColor: Colors.border, gap: 8 },
   kicker: { fontFamily: Fonts.extrabold, fontSize: 11, letterSpacing: 0.8, color: Colors.textTertiary },

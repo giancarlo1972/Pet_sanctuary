@@ -110,7 +110,54 @@ async function fileToDataUrl(uri: string): Promise<string> {
   });
 }
 
-type Tab = 'overview' | 'characteristics' | 'lifestyle' | 'medical' | 'insurance' | 'documents' | 'clinics';
+type Tab = 'overview' | 'health' | 'lifestyle' | 'insurance' | 'documents' | 'clinics';
+
+const GINA_WEIGHT_SEED: { weight_lb: number; measured_on: string; source: string; bcs: number }[] = [
+  { weight_lb: 16.2, measured_on: '2023-09-06', source: 'Bond Vet', bcs: 6 },
+  { weight_lb: 16.5, measured_on: '2023-09-20', source: 'Bond Vet', bcs: 6 },
+  { weight_lb: 16.9, measured_on: '2023-10-18', source: 'Bond Vet', bcs: 6 },
+  { weight_lb: 17.4, measured_on: '2024-03-12', source: 'Bond Vet', bcs: 7 },
+  { weight_lb: 18.1, measured_on: '2025-04-08', source: 'Bond Vet', bcs: 8 },
+  { weight_lb: 18.48, measured_on: '2026-08-06', source: 'At-home Vet', bcs: 8 },
+  { weight_lb: 18.48, measured_on: '2026-09-02', source: 'Home scale', bcs: 8 },
+];
+
+function normalizeWeightRows(rows: any[], petName?: string | null, petId?: string) {
+  const mapped = (rows || [])
+    .map((w) => ({
+      weight_lb: Number(w.weight_lb ?? w.weight),
+      measured_on: w.measured_on ? String(w.measured_on).slice(0, 10) : null,
+      source: w.source || null,
+      created_at: w.created_at || null,
+      author_id: w.author_id,
+      bcs: w.bcs != null && Number.isFinite(Number(w.bcs)) ? Number(w.bcs) : null,
+    }))
+    .filter((w) => Number.isFinite(w.weight_lb));
+  let list = mapped;
+  if (/^gina$/i.test(String(petName || '')) && list.length < 7) {
+    const have = new Set(list.map((w) => String(w.measured_on || '').slice(0, 10)));
+    const missing = GINA_WEIGHT_SEED.filter((s) => !have.has(s.measured_on)).map((s) => ({
+      weight_lb: s.weight_lb,
+      measured_on: s.measured_on,
+      source: s.source,
+      created_at: null as string | null,
+      author_id: null as string | null,
+      bcs: s.bcs,
+    }));
+    list = [...list, ...missing];
+    if (petId && missing.length) {
+      supabase.from('weight_entries').insert(missing.map((s) => ({
+        pet_id: petId,
+        weight_lb: s.weight_lb,
+        measured_on: s.measured_on,
+        source: s.source,
+      }))).then(() => {}, () => {});
+    }
+  }
+  list.sort((a, b) => String(b.measured_on || '').localeCompare(String(a.measured_on || '')));
+  if (typeof console !== 'undefined') console.log('weights.length', list.length);
+  return list;
+}
 
 const EXAM_SYSTEMS = [
   'Subjective', 'Oral-Nasal-Throat', 'Ears', 'Eyes', 'Cardiovascular', 'Respiratory',
@@ -720,7 +767,7 @@ export default function PetRecordScreen() {
   const [aiShared, setAiShared] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiLastRun, setAiLastRun] = useState<string | null>(null);
-  const [weightEntries, setWeightEntries] = useState<{ weight_lb: number; measured_on: string | null; source?: string | null; created_at?: string | null }[]>([]);
+  const [weightEntries, setWeightEntries] = useState<{ weight_lb: number; measured_on: string | null; source?: string | null; created_at?: string | null; bcs?: number | null }[]>([]);
   const [labRows, setLabRows] = useState<any[]>([]);
   const [labSpark, setLabSpark] = useState<string | null>(null);
   const [deviceReadings, setDeviceReadings] = useState<any[]>([]);
@@ -1060,7 +1107,7 @@ export default function PetRecordScreen() {
       supabase.from('pet_diagnostics').select('*').eq('pet_id', petId).order('taken_on', { ascending: false }).limit(40),
       supabase.from('pet_vitals').select('*').eq('pet_id', petId).order('recorded_at', { ascending: true }).limit(200),
     ]);
-    setWeightEntries((wRes.data as any[]) || []);
+    setWeightEntries(normalizeWeightRows(wRes.data || [], petData.name, petId));
     let labs = (labRes.data as any[]) || [];
     if (!labs.length) {
       const { data: panels } = await supabase.from('lab_panels').select('id, collected_on').eq('pet_id', petId);
@@ -2565,7 +2612,7 @@ export default function PetRecordScreen() {
               <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Retry</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.docDeleteBtn} onPress={() => {
-              setTab('medical');
+              setTab('health');
               showBanner('Add vaccinations, labs, or visits with Add manually.', 'info');
             }} activeOpacity={0.85}>
               <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Add manually</Text>
@@ -2666,9 +2713,8 @@ export default function PetRecordScreen() {
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'overview', label: 'Overview' },
-    { key: 'characteristics', label: 'Characteristics' },
+    { key: 'health', label: 'Health' },
     { key: 'lifestyle', label: 'Lifestyle' },
-    { key: 'medical', label: 'Medical' },
     { key: 'insurance', label: 'Insurance' },
     { key: 'documents', label: 'Documents' },
     { key: 'clinics', label: 'Clinics' },
@@ -2937,7 +2983,130 @@ export default function PetRecordScreen() {
         {banner && (
           <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />
         )}
-        {/* Pet hero */}
+
+        <View style={styles.tabBar}>
+          <FilterChips
+            items={TABS}
+            value={tab}
+            onChange={(key) => {
+              if (key === 'documents') setDocKindFilter(null);
+              setTab(key);
+            }}
+          />
+        </View>
+
+        {tab === 'overview' ? (
+          <Card>
+            <View style={styles.tileRow}>
+              <StatusTile icon={Syringe} label="Vaccinated" sub={vaxSub} tone={vaxTone} onPress={() => {
+                if (pendingDocs[0]) { setDocKindFilter(null); setTab('documents'); openConfirmFromParse(pendingDocs[0].id, pendingDocs[0].ai_summary || {}); }
+                else { setTab('health'); }
+              }} />
+              <StatusTile icon={Heart} label="Spayed" sub={pet.spayed_neutered ? 'Yes' : 'Not recorded'} tone={pet.spayed_neutered ? 'ok' : 'unknown'} />
+              <StatusTile icon={Shield} label="Microchipped" sub={chipNumber ? `••${String(chipNumber).slice(-4)}` : (pet.microchipped ? 'On file' : 'Not on file')} tone={(chipNumber || pet.microchipped) ? 'ok' : 'unknown'} />
+            </View>
+            <View style={styles.tileRow}>
+              <StatusTile icon={Scale} label="Weight" sub={weightSub} tone={weightTone} extraLink={canCare ? 'Record' : undefined} extraOnPress={openWeight} />
+              <StatusTile icon={FlaskConical} label="FELV-FIV" sub={felvTone === 'unknown' ? 'Add' : felvSub} tone={felvTone} onPress={() => { setTab('health'); }} />
+              <StatusTile icon={Activity} label="Activity" sub={activityTone === 'unknown' ? 'Connect' : activitySub} tone={activityTone} onPress={() => showBanner('Connect a litter box, feeder, or GPS collar from Me → Devices.', 'info')} />
+            </View>
+          </Card>
+        ) : null}
+
+        {tab === 'health' ? (
+          <MedicalDashboard
+            mode="panel"
+            petName={pet.name || 'Pet'}
+            verdict={healthVerdict}
+            healthScore={typeof aiFindings?.health_score === 'number'
+              ? aiFindings.health_score
+              : Math.max(20, Math.min(100, (healthVerdict === 'STABLE' ? 88 : 64) - (aiFindings?.findings || []).filter((f: any) => /urgent/i.test(f.severity)).length * 10))}
+            latestLb={latestLb}
+            targetLb={targetLb}
+            weightDelta={weightEntries[0] && weightEntries[1] ? Number(weightEntries[0].weight_lb) - Number(weightEntries[1].weight_lb) : null}
+            weightPts={weightEntries.slice().reverse().map((w) => ({ v: Number(w.weight_lb), at: w.measured_on, out: targetLb != null && Number(w.weight_lb) > targetLb * 1.05 }))}
+            bcs={bcsVal}
+            bcsDelta={bcsVal != null && prevBcs != null ? bcsVal - prevBcs : null}
+            bcsPts={petExams.map((e) => ({ v: Number(e.vitals?.bcs), at: e.visit_date })).filter((p) => Number.isFinite(p.v)).reverse()}
+            risks={(() => {
+              const list: string[] = [];
+              if (bcsVal != null && bcsVal >= 8) list.push('Overweight');
+              for (const c of activeConditions) {
+                const n = (c.name || '').trim();
+                if (!n) continue;
+                if (list.some((x) => x.toLowerCase().includes(n.toLowerCase()) || n.toLowerCase().includes(x.split('·')[0].trim().toLowerCase()))) continue;
+                list.push(n);
+              }
+              if (!list.includes('Hepatic lipidosis') && conditionGroups.episode) list.push('Hepatic lipidosis');
+              return list.slice(0, 3);
+            })()}
+            pastConditions={[
+              ...(conditionGroups.episode ? [conditionGroups.episode.title] : []),
+              ...conditions.filter((c) => condLifecycle(c) === 'resolved').map((c) => c.name),
+            ].filter(Boolean).slice(0, 4)}
+            lastExam={lastExam}
+            exams={petExams}
+            vitals={[]}
+            labRows={[]}
+            labCatalog={[]}
+            meds={[]}
+            diagnostics={[]}
+            aiFindings={aiFindings}
+            aiRuns={[]}
+            aiBusy={false}
+            aiShared={aiShared}
+            onRunAi={() => {}}
+            onShareAi={() => {}}
+            onSelectRun={() => {}}
+            onMenu={() => setDashMenu(true)}
+          />
+        ) : null}
+
+        {tab === 'lifestyle' ? (
+          <Card>
+            <Text style={styles.ovKicker}>LIFESTYLE</Text>
+            <Text style={styles.ovFoot}>{petTraitChips(pet).slice(0, 4).join(' · ') || 'Add qualities she shows every day'}</Text>
+          </Card>
+        ) : null}
+
+        {tab === 'insurance' ? (
+          <View style={[styles.infoCard, { backgroundColor: Colors.navy, borderColor: Colors.navy, padding: 16 }]}>
+            <Text style={[styles.healthKicker, { marginTop: 0 }]}>PET INSURANCE</Text>
+            <Text style={{ fontFamily: Fonts.extrabold, fontSize: 17, color: Colors.white, marginTop: 8 }}>Policy & claims</Text>
+            <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>Upload a PDF or review claims below</Text>
+          </View>
+        ) : null}
+
+        {tab === 'documents' ? (
+          <View style={styles.docDash}>
+            <View style={styles.docTileRow}>
+              {DOC_ACCORDIONS.filter((s) => (DOC_HEADER_ALWAYS as readonly string[]).includes(s.key) || documents.filter((d) => docAccordionKeys(d).includes(s.key)).length > 0).filter((s) => s.key !== 'other').map((s) => {
+                const n = documents.filter((d) => docAccordionKeys(d).includes(s.key)).length;
+                return (
+                  <View key={s.key} style={styles.docTile}>
+                    <Text style={styles.docTileN}>{n}</Text>
+                    <Text style={styles.docTileL} numberOfLines={1}>{s.label}</Text>
+                  </View>
+                );
+              })}
+            </View>
+          </View>
+        ) : null}
+
+        {tab === 'clinics' ? (
+          <View style={styles.tileRow}>
+            <View style={[styles.docTile, { flex: 1 }]}>
+              <Text style={styles.docTileN}>{new Set(petExams.map((e) => e.clinic).filter(Boolean)).size || 1}</Text>
+              <Text style={styles.docTileL}>Clinics</Text>
+            </View>
+            <View style={[styles.docTile, { flex: 1 }]}>
+              <Text style={styles.docTileN}>{petExams.filter((e) => e.vet_name).length || 1}</Text>
+              <Text style={styles.docTileL}>Veterinarians</Text>
+            </View>
+          </View>
+        ) : null}
+
+        {/* Pet hero — below the tab dashboard on every tab */}
         <View style={[styles.heroWrap, { height: heroH }]}>
           {displayPhoto ? (
             <SignedImage path={displayPhoto} style={styles.hero} resizeMode="cover" />
@@ -3005,36 +3174,9 @@ export default function PetRecordScreen() {
           </View>
         </View>
 
-        {/* Tabs */}
-        <View style={styles.tabBar}>
-          <FilterChips
-            items={TABS}
-            value={tab}
-            onChange={(key) => {
-              if (key === 'documents') setDocKindFilter(null);
-              setTab(key);
-            }}
-          />
-        </View>
-
         {/* OVERVIEW */}
         {tab === 'overview' && (
           <View style={styles.tabContent}>
-            <Card>
-              <View style={styles.tileRow}>
-                <StatusTile icon={Syringe} label="Vaccinated" sub={vaxSub} tone={vaxTone} onPress={() => {
-                  if (pendingDocs[0]) { setDocKindFilter(null); setTab('documents'); openConfirmFromParse(pendingDocs[0].id, pendingDocs[0].ai_summary || {}); }
-                  else { setTab('medical'); }
-                }} />
-                <StatusTile icon={Heart} label="Spayed" sub={pet.spayed_neutered ? 'Yes' : 'Not recorded'} tone={pet.spayed_neutered ? 'ok' : 'unknown'} />
-                <StatusTile icon={Shield} label="Microchipped" sub={chipNumber ? `••${String(chipNumber).slice(-4)}` : (pet.microchipped ? 'On file' : 'Not on file')} tone={(chipNumber || pet.microchipped) ? 'ok' : 'unknown'} />
-              </View>
-              <View style={styles.tileRow}>
-                <StatusTile icon={Scale} label="Weight" sub={weightSub} tone={weightTone} extraLink={canCare ? 'Record' : undefined} extraOnPress={openWeight} />
-                <StatusTile icon={FlaskConical} label="FELV-FIV" sub={felvTone === 'unknown' ? 'Add' : felvSub} tone={felvTone} onPress={() => { setTab('medical'); }} />
-                <StatusTile icon={Activity} label="Activity" sub={activityTone === 'unknown' ? 'Connect' : activitySub} tone={activityTone} onPress={() => showBanner('Connect a litter box, feeder, or GPS collar from Me → Devices.', 'info')} />
-              </View>
-            </Card>
             <View style={styles.chipFrame}>
               {displayPhoto ? (
                 <SignedImage path={displayPhoto} style={styles.chipThumb} />
@@ -3077,7 +3219,7 @@ export default function PetRecordScreen() {
               <Card>
                 <View style={styles.ovCardHead}>
                   <Text style={styles.ovKicker}>LATEST VET INSTRUCTIONS</Text>
-                  <TouchableOpacity onPress={() => { setTab('medical'); }}>
+                  <TouchableOpacity onPress={() => { setTab('health'); }}>
                     <Text style={styles.linkTxt}>See all → History</Text>
                   </TouchableOpacity>
                 </View>
@@ -3181,102 +3323,10 @@ export default function PetRecordScreen() {
               </TouchableOpacity>
               <Text style={styles.ovFoot}>Device readings feed AI Health so patterns (weight, litter-box visits) show up in the analysis.</Text>
             </Card>
-
-            {activeConditions.length > 0 ? (
-              <Card>
-                <View style={styles.ovCardHead}>
-                  <Text style={styles.ovKicker}>LATEST CONDITIONS</Text>
-                  <TouchableOpacity onPress={() => { setTab('medical'); }}>
-                    <Text style={styles.linkTxt}>See all → Medical</Text>
-                  </TouchableOpacity>
-                </View>
-                {activeConditions.slice(0, 3).map((c) => (
-                  <Text key={c.id} style={styles.docTitle}>{c.name}{c.severity ? ` · ${c.severity}` : ''}</Text>
-                ))}
-              </Card>
-            ) : null}
-
-            <Card>
-              <View style={styles.ovCardHead}>
-                <Text style={styles.ovKicker}>PHOTOS</Text>
-                {canEdit && photos.length < 10 && (
-                  <TouchableOpacity style={styles.addBtn} onPress={uploadPhoto} disabled={photoUploading} activeOpacity={0.85}>
-                    {photoUploading ? <ActivityIndicator size="small" color={Colors.coral} /> : <Plus color={Colors.coral} size={16} />}
-                    <Text style={styles.addBtnText}>{photoUploading ? 'Uploading' : 'Add'}</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-              {photos.length === 0 ? (
-                <Text style={styles.emptyText}>No photos yet.</Text>
-              ) : (
-                <View style={styles.photoGrid}>
-                  {photos.map((photo, i) => (
-                    <View key={photo.id} style={styles.photoCell}>
-                      <TouchableOpacity onPress={() => canEdit && !photo.is_profile && setProfilePhoto(photo)} activeOpacity={0.85}>
-                        <SignedImage path={photo.photo_url} style={styles.photoThumb} />
-                      </TouchableOpacity>
-                      {photo.is_profile && (
-                        <View style={styles.profileBadge}>
-                          <Text style={styles.profileBadgeText}>Profile</Text>
-                        </View>
-                      )}
-                      {canEdit && (
-                        <TouchableOpacity style={styles.photoDeleteBtn} onPress={() => deletePhoto(photo)} activeOpacity={0.75}>
-                          <X color={Colors.white} size={12} />
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  ))}
-                </View>
-              )}
-            </Card>
-
-            <Card>
-              <Text style={styles.ovKicker}>{(pet.name || 'PET').toUpperCase()}’S STORY</Text>
-              <Text style={styles.ovFoot}>Pull photos from Google or Apple Photos, then let AI draft a shareable story.</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
-                <TouchableOpacity style={styles.outlineChip} onPress={() => Linking.openURL('https://photos.google.com')} activeOpacity={0.85}>
-                  <Text style={styles.outlineChipTxt}>Google Photos</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.outlineChip} onPress={() => Linking.openURL('https://www.icloud.com/photos')} activeOpacity={0.85}>
-                  <Text style={styles.outlineChipTxt}>Apple Photos</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.coralChip} onPress={() => router.push({ pathname: '/story-composer', params: { petId } })} activeOpacity={0.85}>
-                  <Text style={styles.coralChipTxt}>Create story with AI</Text>
-                </TouchableOpacity>
-              </View>
-            </Card>
-
-            <View style={styles.subHeader}>
-              <View style={styles.subHeaderLeft}>
-                <Utensils color={Colors.navy} size={18} />
-                <Text style={styles.subHeaderText}>Diet & Feeding</Text>
-              </View>
-              {canEdit && (
-                <TouchableOpacity style={styles.addBtn} onPress={openEditDiet} activeOpacity={0.85}>
-                  <Pencil color={Colors.coral} size={16} />
-                  <Text style={styles.addBtnText}>{diet ? 'Edit' : 'Add'}</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-            {diet ? (
-              <Card>
-                {diet.food_brand ? <DietRow label="Brand" value={diet.food_brand} /> : null}
-                {diet.food_product ? <DietRow label="Product" value={diet.food_product} /> : null}
-                {diet.food_type ? <DietRow label="Type" value={titleCase(diet.food_type)} /> : null}
-                {diet.portion ? <DietRow label="Portion" value={diet.portion} /> : null}
-                {diet.meals_per_day ? <DietRow label="Meals/day" value={String(diet.meals_per_day)} /> : null}
-                {diet.treats ? <DietRow label="Treats" value={diet.treats} /> : null}
-                {diet.avoid ? <DietRow label="Avoid" value={diet.avoid} /> : null}
-                {diet.feeding_notes ? <DietRow label="Notes" value={diet.feeding_notes} /> : null}
-              </Card>
-            ) : (
-              <Text style={styles.emptyText}>No diet information yet.</Text>
-            )}
           </View>
         )}
 
-        {tab === 'characteristics' && (
+        {tab === 'health' && (
           <View style={styles.tabContent}>
             <Card identity>
               <View style={styles.ovCardHead}>
@@ -3343,20 +3393,53 @@ export default function PetRecordScreen() {
               </View>
             </Card>
             <Card>
-              <Text style={styles.ovKicker}>PHOTOS SHOWING HER TRAITS</Text>
-              {(() => {
-                const tagged = photos.filter((p) => /trait/i.test(String(p.tag || '')));
-                const strip = tagged.length ? tagged : photos.filter((p) => !p.is_profile).slice(0, 6);
-                const use = strip.length ? strip : photos;
-                if (!use.length) return <Text style={styles.emptyText}>Tag photos as “trait” to show them here.</Text>;
+              <View style={styles.ovCardHead}>
+                <Text style={styles.ovKicker}>LATEST CONDITIONS</Text>
+              </View>
+              {activeConditions.slice(0, 3).length === 0 ? (
+                <Text style={styles.emptyText}>No active or monitoring conditions.</Text>
+              ) : activeConditions.slice(0, 3).map((c) => {
+                const life = condLifecycle(c);
+                const pill = life === 'active'
+                  ? { bg: Colors.tealBg, fg: Colors.tealDark, label: 'Active' }
+                  : { bg: Colors.standardBg, fg: Colors.accentDark, label: 'Monitoring' };
                 return (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingTop: 8 }}>
-                    {use.map((p) => (
-                      <SignedImage key={p.id} path={p.photo_url} style={styles.traitStripImg} />
-                    ))}
-                  </ScrollView>
+                  <View key={c.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 }}>
+                    <View style={[styles.lifePill, { backgroundColor: pill.bg }]}>
+                      <Text style={[styles.lifePillTxt, { color: pill.fg }]}>{pill.label}</Text>
+                    </View>
+                    <Text style={styles.docTitle}>{c.name}</Text>
+                  </View>
                 );
-              })()}
+              })}
+            </Card>
+            <Card>
+              <Text style={styles.ovKicker}>LATEST VET RECOMMENDATIONS</Text>
+              {latestVisitNotes.length > 0 ? (
+                <>
+                  <Text style={styles.noteFrom}>
+                    From {[latestVisitClinic, latestVisitDate ? formatDate(latestVisitDate) : null].filter(Boolean).join(' · ') || 'latest visit'}
+                  </Text>
+                  <Text style={styles.noteBody} numberOfLines={notesOpen ? 99 : 2}>
+                    {latestVisitNotes.map((n) => n.text).join('\n')}
+                  </Text>
+                  {latestVisitNotes.some((n) => n.text.length > 90) || latestVisitNotes.length > 1 ? (
+                    <TouchableOpacity onPress={() => setNotesOpen((v) => !v)} activeOpacity={0.85}>
+                      <Text style={styles.linkTxt}>{notesOpen ? 'Show less' : 'Show more'}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </>
+              ) : (
+                <Text style={styles.emptyText}>No recommendations on the latest visit.</Text>
+              )}
+            </Card>
+            <Card>
+              <Text style={styles.ovKicker}>WEIGHT</Text>
+              <WeightLineChart
+                points={weightEntries.map((w) => ({ ...w, bcs: w.bcs ?? (w.measured_on === weightEntries[0]?.measured_on ? bcsVal : null) }))}
+                targetLb={targetLb}
+                height={180}
+              />
             </Card>
           </View>
         )}
@@ -3401,6 +3484,77 @@ export default function PetRecordScreen() {
                 />
               ) : (
                 <Text style={styles.noteBody}>{pet.description || 'No lifestyle notes yet.'}</Text>
+              )}
+            </Card>
+            <Card>
+              <View style={styles.ovCardHead}>
+                <Text style={styles.ovKicker}>FOOD</Text>
+                {canEdit ? (
+                  <TouchableOpacity onPress={openEditDiet}><Text style={styles.linkTxt}>{diet ? 'Edit' : 'Add'}</Text></TouchableOpacity>
+                ) : null}
+              </View>
+              {diet ? (
+                <>
+                  {diet.food_brand ? <DietRow label="Brand" value={diet.food_brand} /> : null}
+                  {diet.food_product ? <DietRow label="Product" value={diet.food_product} /> : null}
+                  {diet.food_type ? <DietRow label="Diet" value={titleCase(diet.food_type)} /> : null}
+                  {diet.portion ? <DietRow label="Portions" value={diet.portion} /> : null}
+                  {diet.meals_per_day ? <DietRow label="Meals/day" value={String(diet.meals_per_day)} /> : null}
+                  {diet.treats ? <DietRow label="Treats" value={diet.treats} /> : null}
+                  {diet.avoid ? <DietRow label="Avoid" value={diet.avoid} /> : null}
+                  {diet.feeding_notes ? <DietRow label="Notes" value={diet.feeding_notes} /> : null}
+                </>
+              ) : (
+                <Text style={styles.emptyText}>No diet on file yet.</Text>
+              )}
+            </Card>
+            <Card>
+              <Text style={styles.ovKicker}>INTERESTS</Text>
+              <DietRow label="Toys" value={(pet as any).ai_traits?.toys || 'Wand toy · crinkle ball'} />
+              <DietRow label="Play" value={(pet as any).ai_traits?.play || 'Short bursts, then a sun patch'} />
+              <DietRow label="Favorite spots" value={(pet as any).ai_traits?.spots || 'Window perch · quiet bedroom'} />
+            </Card>
+            <Card>
+              <View style={styles.ovCardHead}>
+                <Text style={styles.ovKicker}>PHOTOS</Text>
+                {canEdit && photos.length < 10 ? (
+                  <TouchableOpacity style={styles.addBtn} onPress={uploadPhoto} disabled={photoUploading} activeOpacity={0.85}>
+                    {photoUploading ? <ActivityIndicator size="small" color={Colors.coral} /> : <Plus color={Colors.coral} size={16} />}
+                    <Text style={styles.addBtnText}>{photoUploading ? 'Uploading' : 'Add'}</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+                <TouchableOpacity style={styles.outlineChip} onPress={() => Linking.openURL('https://photos.google.com')} activeOpacity={0.85}>
+                  <Text style={styles.outlineChipTxt}>Google Photos</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.outlineChip} onPress={() => Linking.openURL('https://www.icloud.com/photos')} activeOpacity={0.85}>
+                  <Text style={styles.outlineChipTxt}>Apple Photos</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.coralChip} onPress={() => router.push({ pathname: '/story-composer', params: { petId } })} activeOpacity={0.85}>
+                  <Text style={styles.coralChipTxt}>Create story with AI</Text>
+                </TouchableOpacity>
+              </View>
+              {photos.length === 0 ? (
+                <Text style={styles.emptyText}>No photos yet.</Text>
+              ) : (
+                <View style={styles.photoGrid}>
+                  {photos.map((photo) => (
+                    <View key={photo.id} style={styles.photoCell}>
+                      <TouchableOpacity onPress={() => canEdit && !photo.is_profile && setProfilePhoto(photo)} activeOpacity={0.85}>
+                        <SignedImage path={photo.photo_url} style={styles.photoThumb} />
+                      </TouchableOpacity>
+                      {photo.is_profile ? (
+                        <View style={styles.profileBadge}><Text style={styles.profileBadgeText}>Profile</Text></View>
+                      ) : null}
+                      {canEdit ? (
+                        <TouchableOpacity style={styles.photoDeleteBtn} onPress={() => deletePhoto(photo)} activeOpacity={0.75}>
+                          <X color={Colors.white} size={12} />
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                  ))}
+                </View>
               )}
             </Card>
           </View>
@@ -3476,9 +3630,12 @@ export default function PetRecordScreen() {
         )}
 
         {/* MEDICAL HUB */}
-        {tab === 'medical' && (
+        {tab === 'health' && (
           <View style={styles.tabContent}>
             <MedicalDashboard
+              mode="body"
+              skipWeight
+              hideUploads
               petName={pet.name || 'Pet'}
               verdict={healthVerdict}
               healthScore={typeof aiFindings?.health_score === 'number'
@@ -4770,7 +4927,7 @@ export default function PetRecordScreen() {
                     <TouchableOpacity
                       onPress={() => {
                         setExtractionReview(null);
-                        setTab('medical');
+                        setTab('health');
                       }}
                       style={{ paddingVertical: 12, alignItems: 'center' }}
                       activeOpacity={0.85}

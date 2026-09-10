@@ -126,7 +126,7 @@ export default function NearbyMap(props: NearbyMapProps) {
       if (!document.getElementById('ra-pin-css')) {
         const s = document.createElement('style');
         s.id = 'ra-pin-css';
-        s.textContent = '.ra-pin{background:none!important;border:none!important} .leaflet-marker-icon.leaflet-div-icon{background:none!important;border:none!important} .leaflet-default-icon-path,.leaflet-marker-icon:not(.ra-pin){display:none!important}';
+        s.textContent = '.ra-pin{background:none!important;border:none!important} .leaflet-marker-icon.leaflet-div-icon{background:none!important;border:none!important} .leaflet-default-icon-path,.leaflet-marker-icon:not(.ra-pin),.leaflet-marker-shadow{display:none!important} .leaflet-overlay-pane,.leaflet-marker-pane,.leaflet-tooltip-pane{z-index:650!important}';
         document.head.appendChild(s);
       }
       const mod = await import('leaflet');

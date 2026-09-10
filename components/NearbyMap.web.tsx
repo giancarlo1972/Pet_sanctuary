@@ -1,6 +1,14 @@
 import React, { createElement, useEffect, useRef } from 'react';
 import { View, StyleSheet } from 'react-native';
 import type { NearbyMapProps, NearbyPin } from './NearbyMapProps';
+import {
+  CARTO_POSITRON_ATTR,
+  CARTO_POSITRON_URL,
+  PIN_CORAL,
+  PIN_HALO_FILL,
+  PIN_HALO_METERS,
+  PIN_HALO_STROKE,
+} from '@/lib/map-style';
 
 function esc(s: string) {
   return String(s).replace(/&/g, '&').replace(/</g, '<').replace(/"/g, '"');
@@ -20,6 +28,8 @@ export default function NearbyMap(props: NearbyMapProps) {
   const overlayRef = useRef<any>(null);
   const onSelectRef = useRef(props.onSelect);
   onSelectRef.current = props.onSelect;
+  const mode = props.mode || 'nearby';
+  const compact = mode === 'pin';
 
   useEffect(() => {
     let cancelled = false;
@@ -43,64 +53,82 @@ export default function NearbyMap(props: NearbyMapProps) {
       if (cancelled || !host.current) return;
 
       if (!mapRef.current) {
-        mapRef.current = L.map(host.current, { zoomControl: true, attributionControl: true });
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-          attribution: '&copy; OpenStreetMap',
+        mapRef.current = L.map(host.current, {
+          zoomControl: mode === 'nearby',
+          attributionControl: true,
+          dragging: mode === 'nearby',
+          scrollWheelZoom: mode === 'nearby',
+        });
+        L.tileLayer(CARTO_POSITRON_URL, {
+          attribution: CARTO_POSITRON_ATTR,
+          subdomains: 'abcd',
           maxZoom: 19,
         }).addTo(mapRef.current);
       }
 
       const map = mapRef.current;
-      map.setView([props.center.lat, props.center.lng], props.zoom ?? 12);
+      map.setView([props.center.lat, props.center.lng], props.zoom ?? (compact ? 16 : 12));
       setTimeout(() => map.invalidateSize(), 80);
 
       if (overlayRef.current) overlayRef.current.remove();
       const group = L.layerGroup();
 
-      L.circle([props.center.lat, props.center.lng], {
-        radius: Math.max(200, props.radiusKm * 1000),
-        color: '#26265E',
-        weight: 1,
-        fillColor: '#26265E',
-        fillOpacity: 0.07,
-      }).addTo(group);
+      if (mode === 'nearby') {
+        L.circle([props.center.lat, props.center.lng], {
+          radius: Math.max(200, props.radiusKm * 1000),
+          color: '#26265E',
+          weight: 1,
+          fillColor: '#26265E',
+          fillOpacity: 0.07,
+        }).addTo(group);
 
-      L.circleMarker([props.center.lat, props.center.lng], {
-        radius: 7,
-        color: '#ffffff',
-        weight: 2,
-        fillColor: '#2E9E96',
-        fillOpacity: 1,
-      }).bindTooltip('You').addTo(group);
+        L.circle([props.center.lat, props.center.lng], {
+          radius: PIN_HALO_METERS,
+          color: PIN_HALO_STROKE,
+          weight: 2,
+          fillColor: PIN_HALO_FILL,
+          fillOpacity: 1,
+        }).addTo(group);
 
-      for (const pin of props.pins) {
-        const selected = pin.id === props.selectedId;
-        const html = pinHtml(pin, selected);
-        const marker = html
-          ? L.marker([pin.lat, pin.lng], {
-              icon: L.divIcon({
-                className: 'ra-pin',
-                html,
-                iconSize: selected ? [32, 32] : [28, 28],
-                iconAnchor: selected ? [16, 16] : [14, 14],
-              }),
-            })
-          : L.circleMarker([pin.lat, pin.lng], {
-              radius: selected ? 12 : 9,
-              color: '#ffffff',
-              weight: selected ? 3 : 2,
-              fillColor: pin.color,
-              fillOpacity: 1,
-            });
-        marker.bindTooltip(pin.title);
-        marker.on('click', () => onSelectRef.current(pin));
-        marker.addTo(group);
+        L.circleMarker([props.center.lat, props.center.lng], {
+          radius: 8,
+          color: '#ffffff',
+          weight: 2.5,
+          fillColor: PIN_CORAL,
+          fillOpacity: 1,
+        }).addTo(group);
+      }
+
+      if (mode === 'nearby') {
+        for (const pin of props.pins) {
+          const selected = pin.id === props.selectedId;
+          const html = pinHtml(pin, selected);
+          const marker = html
+            ? L.marker([pin.lat, pin.lng], {
+                icon: L.divIcon({
+                  className: 'ra-pin',
+                  html,
+                  iconSize: selected ? [32, 32] : [28, 28],
+                  iconAnchor: selected ? [16, 16] : [14, 14],
+                }),
+              })
+            : L.circleMarker([pin.lat, pin.lng], {
+                radius: selected ? 12 : 9,
+                color: '#ffffff',
+                weight: selected ? 3 : 2,
+                fillColor: pin.color,
+                fillOpacity: 1,
+              });
+          marker.bindTooltip(pin.title);
+          marker.on('click', () => onSelectRef.current(pin));
+          marker.addTo(group);
+        }
       }
       group.addTo(map);
       overlayRef.current = group;
     })();
     return () => { cancelled = true; };
-  }, [props.center.lat, props.center.lng, props.radiusKm, props.pins, props.selectedId, props.zoom]);
+  }, [props.center.lat, props.center.lng, props.radiusKm, props.pins, props.selectedId, props.zoom, mode, compact]);
 
   useEffect(() => () => {
     if (mapRef.current) {
@@ -110,10 +138,10 @@ export default function NearbyMap(props: NearbyMapProps) {
   }, []);
 
   return (
-    <View style={styles.fill}>
+    <View style={[styles.fill, compact && styles.compact]}>
       {createElement('div', {
         ref: host,
-        style: { width: '100%', height: '100%', minHeight: 280, background: '#d9e2ec' },
+        style: { width: '100%', height: '100%', minHeight: compact ? 200 : 280, background: '#e6e9ee' },
       })}
     </View>
   );
@@ -121,4 +149,5 @@ export default function NearbyMap(props: NearbyMapProps) {
 
 const styles = StyleSheet.create({
   fill: { flex: 1, width: '100%', minHeight: 280 },
+  compact: { minHeight: 200, flex: 0, height: 200 },
 });

@@ -1,28 +1,55 @@
 import React from 'react';
-import { StyleSheet, View, Text } from 'react-native';
-import MapView, { Circle, Marker } from 'react-native-maps';
+import { Platform, StyleSheet, View, Text } from 'react-native';
+import MapView, { Circle, Marker, UrlTile } from 'react-native-maps';
 import type { NearbyMapProps } from './NearbyMapProps';
+import {
+  CARTO_POSITRON_NATIVE,
+  PIN_CORAL,
+  PIN_HALO_FILL,
+  PIN_HALO_METERS,
+  PIN_HALO_STROKE,
+} from '@/lib/map-style';
 
 export default function NearbyMap(props: NearbyMapProps) {
   const lat = props.center.lat;
   const lng = props.center.lng;
-  const latDelta = Math.max(0.04, (props.radiusKm / 111) * 2.4);
+  const mode = props.mode || 'nearby';
+  const compact = mode === 'pin';
+  const latDelta = compact ? 0.008 : Math.max(0.04, (props.radiusKm / 111) * 2.4);
   const lonDelta = latDelta;
   return (
     <MapView
-      style={styles.fill}
+      style={[styles.fill, compact && styles.compact]}
+      mapType={Platform.OS === 'android' ? 'none' : 'standard'}
       region={{ latitude: lat, longitude: lng, latitudeDelta: latDelta, longitudeDelta: lonDelta }}
       onPress={() => {}}
+      pitchEnabled={false}
+      rotateEnabled={false}
+      toolbarEnabled={false}
     >
-      <Circle
-        center={{ latitude: lat, longitude: lng }}
-        radius={Math.max(200, props.radiusKm * 1000)}
-        strokeColor="rgba(38,38,94,0.45)"
-        fillColor="rgba(38,38,94,0.07)"
-        strokeWidth={1}
-      />
-      <Marker coordinate={{ latitude: lat, longitude: lng }} title="You" pinColor="#2E9E96" />
-      {props.pins.map((pin) => {
+      <UrlTile urlTemplate={CARTO_POSITRON_NATIVE} maximumZ={19} zIndex={-1} />
+      {mode === 'nearby' ? (
+        <>
+          <Circle
+            center={{ latitude: lat, longitude: lng }}
+            radius={Math.max(200, props.radiusKm * 1000)}
+            strokeColor="rgba(38,38,94,0.45)"
+            fillColor="rgba(38,38,94,0.07)"
+            strokeWidth={1}
+          />
+          <Circle
+            center={{ latitude: lat, longitude: lng }}
+            radius={PIN_HALO_METERS}
+            strokeColor={PIN_HALO_STROKE}
+            fillColor={PIN_HALO_FILL}
+            strokeWidth={2}
+          />
+          <Marker coordinate={{ latitude: lat, longitude: lng }} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
+            <View style={styles.youDot} />
+          </Marker>
+        </>
+      ) : null}
+      {mode === 'nearby' ? props.pins.map((pin) => {
         const label = pin.count != null ? String(pin.count) : pin.initial;
         if (!label) {
           return (
@@ -50,13 +77,22 @@ export default function NearbyMap(props: NearbyMapProps) {
             </View>
           </Marker>
         );
-      })}
+      }) : null}
     </MapView>
   );
 }
 
 const styles = StyleSheet.create({
   fill: { flex: 1, width: '100%' },
+  compact: { height: 200, minHeight: 200, flex: 0 },
+  youDot: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: PIN_CORAL,
+    borderWidth: 2.5,
+    borderColor: '#fff',
+  },
   bubble: {
     minWidth: 28, height: 28, paddingHorizontal: 6, borderRadius: 14,
     alignItems: 'center', justifyContent: 'center', borderColor: '#fff',

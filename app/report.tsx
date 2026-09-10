@@ -5,12 +5,13 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ChevronLeft, Search, PawPrint, Heart, AlertTriangle, Camera, MapPin, EyeOff, Sparkles, Check } from 'lucide-react-native';
+import { ChevronLeft, Search, PawPrint, Heart, AlertTriangle, Camera, Image as ImageIcon, MapPin, EyeOff, Sparkles, Check } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import { InlineBanner } from '@/components/InlineBanner';
+import NearbyMap from '@/components/NearbyMap';
 import { CONTENT_MAX } from '@/components/Page';
 import { pickImage, releasePicked } from '@/lib/pick-image';
 import { reverseGeocode, geocodePlace } from '@/lib/geocode';
@@ -80,6 +81,16 @@ function kmBetween(aLat: number, aLng: number, bLat: number, bLng: number) {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
 }
 
+function supabaseMessage(err: any, fallback = 'Could not submit report.') {
+  const parts = [err?.message, err?.details, err?.hint].filter((p) => typeof p === 'string' && p.trim());
+  const text = parts.join(' — ').trim();
+  return text || fallback;
+}
+
+function phoneOk(raw: string) {
+  return raw.replace(/\D/g, '').length >= 7;
+}
+
 export default function NewReportScreen() {
   const { prefillPetId } = useLocalSearchParams<{ prefillPetId?: string }>();
   const { user } = useAuth();
@@ -87,12 +98,15 @@ export default function NewReportScreen() {
   const [kind, setKind] = useState<ReportKind | null>(null);
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [photoBlob, setPhotoBlob] = useState<Blob | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeMs, setAnalyzeMs] = useState<number | null>(null);
   const [ai, setAi] = useState<AiDraft | null>(null);
   const [matchCount, setMatchCount] = useState<number | null>(null);
   const [petName, setPetName] = useState('');
   const [description, setDescription] = useState('');
+  const [phone, setPhone] = useState('');
+  const [contactName, setContactName] = useState('');
   const [location, setLocation] = useState('');
   const [lat, setLat] = useState<number | null>(null);
   const [lng, setLng] = useState<number | null>(null);
@@ -114,6 +128,20 @@ export default function NewReportScreen() {
       useMyLocation({ silent: true });
     }
   }, [step]);
+
+  useEffect(() => {
+    if (!user) {
+      if (!contactName) setContactName('Anonymous');
+      return;
+    }
+    setContactName((n) => n && n !== 'Anonymous' ? n : (user.email?.split('@')[0] || 'Anonymous'));
+    Promise.resolve(supabase.from('profiles').select('phone, full_name').eq('id', user.id).maybeSingle())
+      .then(({ data }) => {
+        if (data?.full_name) setContactName(data.full_name);
+        if (data?.phone) setPhone((p) => p || data.phone);
+      })
+      .catch(() => {});
+  }, [user]);
 
   const selected = TYPES.find((t) => t.value === kind) || null;
 
@@ -159,6 +187,7 @@ export default function NewReportScreen() {
 
   const applyPhoto = async (camera: boolean) => {
     setBanner(null);
+    setPhotoError(null);
     try {
       const picked = await pickImage({ camera });
       if (!picked) return;
@@ -170,11 +199,14 @@ export default function NewReportScreen() {
       setAnalyzeMs(null);
       runAnalyze(picked.dataUrl);
     } catch (e: any) {
+      const msg = e?.message || 'Could not read that picture.';
       if (e?.code === 'camera-denied') {
         setCameraDenied(true);
+        setPhotoError(msg);
         return;
       }
-      setBanner({ message: e?.message || 'Could not read that photo.', kind: 'error' });
+      setPhotoError(msg);
+      setBanner({ message: msg, kind: 'error' });
     }
   };
 
@@ -182,6 +214,7 @@ export default function NewReportScreen() {
     releasePicked(photoUri);
     setPhotoUri(null);
     setPhotoBlob(null);
+    setPhotoError(null);
     setAi(null);
     setAnalyzeMs(null);
     setMatchCount(null);
@@ -229,9 +262,15 @@ export default function NewReportScreen() {
   const goNext = async () => {
     setBanner(null);
     if (step === 1 && !kind) return;
-    if (step === 2 && !description.trim()) {
-      setBanner({ message: 'Please describe the animal and situation.', kind: 'error' });
-      return;
+    if (step === 2) {
+      if (!description.trim()) {
+        setBanner({ message: 'Please describe the animal and situation.', kind: 'error' });
+        return;
+      }
+      if (!phoneOk(phone)) {
+        setBanner({ message: 'Add a phone number for follow-up. It is never public.', kind: 'error' });
+        return;
+      }
     }
     if (step === 3) {
       if (!location.trim()) {
@@ -254,6 +293,10 @@ export default function NewReportScreen() {
       setBanner({ message: 'Type, description, and location are required.', kind: 'error' });
       return;
     }
+    if (!phoneOk(phone)) {
+      setBanner({ message: 'Add a phone number for follow-up. It is never public.', kind: 'error' });
+      return;
+    }
     setLoading(true);
     setBanner(null);
     try {
@@ -261,7 +304,8 @@ export default function NewReportScreen() {
       if (photoBlob) {
         const path = `reports/${Date.now()}.jpg`;
         const up = await supabase.storage.from('pet-photos').upload(path, photoBlob, { contentType: 'image/jpeg', upsert: true });
-        if (!up.error) photoUrl = supabase.storage.from('pet-photos').getPublicUrl(path).data.publicUrl;
+        if (up.error) throw up.error;
+        photoUrl = supabase.storage.from('pet-photos').getPublicUrl(path).data.publicUrl;
       }
       const address = location.replace(/^Detected:\s*/i, '').trim();
       const { data, error } = await supabase.from('reports').insert({
@@ -276,7 +320,8 @@ export default function NewReportScreen() {
         location_address: address,
         latitude: lat ?? 0,
         longitude: lng ?? 0,
-        contact_name: user?.email?.split('@')[0] || 'Anonymous',
+        contact_name: contactName.trim() || user?.email?.split('@')[0] || 'Anonymous',
+        contact_phone: phone.trim(),
         contact_email: user?.email || null,
         pet_id: prefillPetId || null,
         photo_url: photoUrl,
@@ -284,7 +329,7 @@ export default function NewReportScreen() {
         status: 'pending_moderation',
         approximate_public: approxPublic,
         allow_direct_contact: false,
-        user_id: user?.id || null,
+        user_id: user?.id ?? null,
         ai_species: ai?.species || null,
         ai_breed: ai?.breed_guess || null,
         ai_colors: ai?.colors?.length ? ai.colors : null,
@@ -316,14 +361,14 @@ export default function NewReportScreen() {
       }
       setSent(true);
     } catch (err: any) {
-      setBanner({ message: err.message || 'Could not submit report.', kind: 'error' });
+      setBanner({ message: supabaseMessage(err), kind: 'error' });
     }
     setLoading(false);
   };
 
   const continueDisabled =
     (step === 1 && !kind) ||
-    (step === 2 && !description.trim()) ||
+    (step === 2 && (!description.trim() || !phoneOk(phone))) ||
     (step === 3 && !location.trim()) ||
     loading;
 
@@ -385,6 +430,9 @@ export default function NewReportScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.col}>
+            {banner && step !== 4 ? (
+              <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />
+            ) : null}
             {step === 1 && (
               <>
                 <Text style={styles.heroTitle}>What happened?</Text>
@@ -436,12 +484,27 @@ export default function NewReportScreen() {
                     </View>
                   </View>
                 ) : (
-                  <TouchableOpacity style={styles.dashBox} onPress={() => applyPhoto(Platform.OS !== 'web')} activeOpacity={0.85}>
+                  <View style={styles.dashBox}>
                     <Camera color={Colors.textTertiary} size={26} />
-                    <Text style={styles.dashTitle}>Tap to add photo or video</Text>
+                    <Text style={styles.dashTitle}>Add photo</Text>
                     <Text style={styles.dashSub}>AI identifies the animal automatically</Text>
-                  </TouchableOpacity>
+                  </View>
                 )}
+                <View style={styles.photoActions}>
+                  <TouchableOpacity style={styles.photoBtn} onPress={() => applyPhoto(true)} activeOpacity={0.85}>
+                    <Camera color={Colors.navy} size={16} />
+                    <Text style={styles.photoBtnText}>Take photo</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.photoBtn} onPress={() => applyPhoto(false)} activeOpacity={0.85}>
+                    <ImageIcon color={Colors.navy} size={16} />
+                    <Text style={styles.photoBtnText}>Choose from library</Text>
+                  </TouchableOpacity>
+                </View>
+                {photoError ? (
+                  <View style={styles.photoErr}>
+                    <Text style={styles.photoErrText}>{photoError}</Text>
+                  </View>
+                ) : null}
                 {cameraDenied ? (
                   <View style={styles.permNote}>
                     <Text style={styles.permText}>Camera access is off. You can still choose a photo from your library.</Text>
@@ -490,6 +553,17 @@ export default function NewReportScreen() {
                     </Text>
                   </View>
                 ) : null}
+                <Text style={styles.fieldLabel}>Your phone (for follow-up, never public)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={phone}
+                  onChangeText={setPhone}
+                  placeholder="(555) 123-4567"
+                  placeholderTextColor={Colors.textTertiary}
+                  keyboardType="phone-pad"
+                  autoComplete="tel"
+                  textContentType="telephoneNumber"
+                />
                 <TextInput
                   style={[styles.input, styles.textArea]}
                   value={description}
@@ -524,10 +598,7 @@ export default function NewReportScreen() {
                   <TextInput
                     style={styles.detectedInput}
                     value={location}
-                    onChangeText={(t) => {
-                      setLocation(t);
-                      if (lat != null) { /* keep pin; user is editing label */ }
-                    }}
+                    onChangeText={setLocation}
                     placeholder="Address or area"
                     placeholderTextColor={Colors.textTertiary}
                   />
@@ -552,6 +623,7 @@ export default function NewReportScreen() {
 
             {step === 4 && (
               <>
+                {banner ? <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} /> : null}
                 <Text style={styles.heroTitle}>Review & send</Text>
                 <View style={styles.reviewCard}>
                   <ReviewRow label="Type" value={selected?.label || ''} />
@@ -586,24 +658,21 @@ export default function NewReportScreen() {
           </View>
         </View>
       </KeyboardAvoidingView>
-      {banner && <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />}
     </SafeAreaView>
   );
 }
 
 function LocationPreview({ lat, lng }: { lat: number; lng: number }) {
-  const delta = 0.006;
-  const src = `https://www.openstreetmap.org/export/embed.html?bbox=${lng - delta}%2C${lat - delta * 0.7}%2C${lng + delta}%2C${lat + delta * 0.7}&layer=mapnik&marker=${lat}%2C${lng}`;
   return (
     <View style={styles.mapWrap}>
-      {Platform.OS === 'web' ? (
-        // @ts-ignore web-only map preview
-        <iframe title="map" src={src} width="100%" height="200" style={{ border: 0 }} />
-      ) : (
-        <View style={styles.mapFallback}>
-          <MapPin color={Colors.coral} size={28} />
-        </View>
-      )}
+      <NearbyMap
+        center={{ lat, lng }}
+        zoom={14}
+        radiusKm={0.3}
+        pins={[]}
+        onSelect={() => {}}
+        mode="pin"
+      />
       <View pointerEvents="none" style={styles.mapRadius} />
       <View pointerEvents="none" style={styles.mapPinDot} />
     </View>
@@ -658,7 +727,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.borderInput,
     borderRadius: 16,
     backgroundColor: Colors.white,
-    paddingVertical: 28,
+    paddingVertical: 22,
     paddingHorizontal: 18,
     alignItems: 'center',
     gap: 6,
@@ -666,6 +735,23 @@ const styles = StyleSheet.create({
   },
   dashTitle: { fontSize: FontSizes.md, fontFamily: INTERB, fontWeight: '700', color: Colors.text, marginTop: 4 },
   dashSub: { fontSize: FontSizes.sm, fontFamily: INTER, color: Colors.textTertiary },
+  photoActions: { flexDirection: 'row', gap: 10 },
+  photoBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.borderInput,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+  },
+  photoBtnText: { fontSize: FontSizes.sm, fontFamily: INTERB, fontWeight: '700', color: Colors.navy },
+  photoErr: { backgroundColor: Colors.criticalBg, borderRadius: 12, padding: 12 },
+  photoErrText: { fontSize: FontSizes.sm, fontFamily: INTERB, fontWeight: '600', color: Colors.critical, lineHeight: 18 },
   photoRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: Colors.white, borderRadius: 14, padding: 10, borderWidth: 1, borderColor: Colors.border },
   thumb: { width: 76, height: 76, borderRadius: 12, backgroundColor: Colors.surface },
   photoAdded: { fontSize: FontSizes.sm, fontFamily: INTERB, fontWeight: '700', color: Colors.text, marginBottom: 4 },
@@ -686,10 +772,10 @@ const styles = StyleSheet.create({
   matchNote: { backgroundColor: Colors.tealBg, borderRadius: 12, padding: 12 },
   matchText: { fontSize: FontSizes.sm, fontFamily: INTER, color: Colors.tealDark, lineHeight: 18 },
   matchEm: { fontFamily: INTERB, fontWeight: '700' },
+  fieldLabel: { fontSize: FontSizes.sm, fontFamily: INTERB, fontWeight: '700', color: Colors.text, marginTop: 2 },
   input: { borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 14, fontSize: FontSizes.md, fontFamily: INTER, color: Colors.text, backgroundColor: Colors.white },
   textArea: { minHeight: 100, textAlignVertical: 'top' },
-  mapWrap: { height: 200, borderRadius: 16, overflow: 'hidden', backgroundColor: '#D7E4D4', position: 'relative' },
-  mapFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#D7E4D4' },
+  mapWrap: { height: 200, borderRadius: 16, overflow: 'hidden', backgroundColor: '#e6e9ee', position: 'relative' },
   mapRadius: {
     position: 'absolute',
     width: 140,
@@ -697,9 +783,8 @@ const styles = StyleSheet.create({
     borderRadius: 70,
     backgroundColor: 'rgba(232,90,80,0.18)',
     borderWidth: 2,
-    borderColor: 'rgba(232,90,80,0.45)',
+    borderColor: 'rgba(232,90,80,0.5)',
     top: 30,
-    alignSelf: 'center',
     left: '50%',
     marginLeft: -70,
   },

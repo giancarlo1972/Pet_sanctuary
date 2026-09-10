@@ -397,10 +397,8 @@ export default function NewReportScreen() {
         if (up.error) {
           const fallback = await supabase.storage.from('pet-photos').upload(path, photoBlob, { contentType: 'image/jpeg', upsert: true });
           if (fallback.error) throw fallback.error;
-          photoUrl = supabase.storage.from('pet-photos').getPublicUrl(path).data.publicUrl;
-        } else {
-          photoUrl = supabase.storage.from('report-photos').getPublicUrl(path).data.publicUrl;
         }
+        photoUrl = path;
       }
       const address = location.replace(/^Detected:\s*/i, '').trim();
       const { data, error } = await supabase.from('reports').insert({

@@ -35,6 +35,7 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import SignedImage from '@/components/SignedImage';
 import { InlineBanner } from '@/components/InlineBanner';
+import { useAuth } from '@/lib/context/AuthContext';
 
 interface ReportDetail {
   id: string;
@@ -64,6 +65,7 @@ interface ReportDetail {
   animal_kind: string | null;
   allow_direct_contact: boolean;
   approximate_public: boolean;
+  user_id: string | null;
   ai_summary: string | null;
   ai_species: string | null;
   ai_breed: string | null;
@@ -111,9 +113,21 @@ const SEVERITY_STYLE: Record<string, { bg: string; color: string; label: string 
 
 const STATUS_STYLE: Record<string, { bg: string; color: string; label: string }> = {
   active: { bg: Colors.coralBg, color: Colors.coral, label: 'Active' },
+  open: { bg: Colors.coralBg, color: Colors.coral, label: 'Active' },
+  pending_moderation: { bg: Colors.standardBg, color: Colors.accentDark, label: 'Pending moderation' },
+  pending: { bg: Colors.standardBg, color: Colors.accentDark, label: 'Pending moderation' },
   resolved: { bg: Colors.tealBg, color: Colors.teal, label: 'Resolved' },
   closed: { bg: Colors.surface, color: Colors.textSecondary, label: 'Closed' },
 };
+
+const DETAIL_SELECT =
+  'id, report_type, urgency, incident_category, pet_name, pet_type, breed, description, location_address, latitude, longitude, photo_urls, photo_url, status, severity, created_at, last_seen_at, colors, life_stage, size, gender, animal_kind, approximate_public, allow_direct_contact, user_id, pet_id, ai_summary, ai_species, ai_breed, ai_colors, ai_coat, ai_confidence, ai_priority, ai_risk_tags, ai_age_range, ai_analyzed_at';
+
+const DETAIL_SELECT_SAFE =
+  'id, report_type, urgency, incident_category, pet_name, pet_type, breed, description, location_address, latitude, longitude, photo_urls, photo_url, status, severity, created_at, user_id, animal_kind';
+
+const DETAIL_SELECT_MIN =
+  'id, report_type, urgency, incident_category, pet_name, pet_type, breed, description, location_address, latitude, longitude, photo_urls, status, created_at';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -145,6 +159,7 @@ function timeAgo(dateString: string | null): string {
 export default function ReportDetailsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
   const [report, setReport] = useState<ReportDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -160,32 +175,37 @@ export default function ReportDetailsScreen() {
     setLoading(true);
     setError(null);
     try {
-      const { data, error: fetchError } = await supabase
-        .from('reports')
-        .select(`
-          id, report_type, urgency, incident_category, pet_name, pet_type, breed,
-          description, location_address, latitude, longitude,
-          contact_name, contact_phone, contact_email,
-          photo_urls, photo_url, status, severity, created_at, last_seen_at,
-          colors, life_stage, size, gender, animal_kind,
-          allow_direct_contact, approximate_public,
-          ai_summary, ai_species, ai_breed, ai_colors, ai_coat, ai_confidence,
-          ai_priority, ai_risk_tags, ai_age_range, ai_analyzed_at
-        `)
-        .eq('id', id)
-        .maybeSingle();
+      let data: ReportDetail | null = null;
+      const first = await supabase.from('reports').select(DETAIL_SELECT).eq('id', id).maybeSingle();
+      if (first.error) {
+        console.error('[report-details] query failed:', first.error.message, first.error.details, first.error.hint, first.error.code);
+        const retry = await supabase.from('reports').select(DETAIL_SELECT_SAFE).eq('id', id).maybeSingle();
+        if (!retry.error) {
+          data = retry.data as ReportDetail | null;
+        } else {
+          console.error('[report-details] retry failed:', retry.error.message, retry.error.details, retry.error.hint, retry.error.code);
+          const min = await supabase.from('reports').select(DETAIL_SELECT_MIN).eq('id', id).maybeSingle();
+          if (min.error) {
+            console.error('[report-details] min failed:', min.error.message, min.error.details, min.error.hint, min.error.code);
+            setError(min.error.message || retry.error.message || first.error.message || 'We could not load this report.');
+            setLoading(false);
+            return;
+          }
+          data = min.data as ReportDetail | null;
+        }
+      } else {
+        data = first.data as ReportDetail | null;
+      }
 
-      if (fetchError) {
-        console.error('[report-details] query failed:', fetchError.message);
-        setError('We could not load this report.');
-      } else if (!data) {
+      if (!data) {
         setError('This report could not be found. It may have been removed.');
       } else {
         setReport(data);
       }
-    } catch (err) {
-      console.error('[report-details] load failed:', err);
-      setError('We could not load this report.');
+    } catch (err: any) {
+      const text = err?.message || String(err);
+      console.error('[report-details] load failed:', text);
+      setError(text || 'We could not load this report.');
     }
     setLoading(false);
   };
@@ -211,20 +231,6 @@ export default function ReportDetailsScreen() {
     }
   };
 
-  const callPhone = () => {
-    if (!report?.contact_phone) return;
-    Linking.openURL(`tel:${report.contact_phone}`).catch(() => {
-      setBanner({ message: 'Could not open phone app.', kind: 'error' });
-    });
-  };
-
-  const sendEmail = () => {
-    if (!report?.contact_email) return;
-    Linking.openURL(`mailto:${report.contact_email}`).catch(() => {
-      setBanner({ message: 'Could not open email app.', kind: 'error' });
-    });
-  };
-
   if (loading) {
     return (
       <SafeAreaView style={[styles.container, styles.centered]}>
@@ -236,7 +242,14 @@ export default function ReportDetailsScreen() {
   if (error || !report) {
     return (
       <SafeAreaView style={[styles.container, styles.centered]}>
-        <Text style={styles.errorTitle}>{error || 'Report not found'}</Text>
+        <Text style={styles.errorTitle}>
+          {error === 'This report could not be found. It may have been removed.'
+            ? error
+            : 'We could not load this report.'}
+        </Text>
+        {error && error !== 'This report could not be found. It may have been removed.' ? (
+          <Text style={styles.errorHint}>{error}</Text>
+        ) : null}
         <TouchableOpacity style={styles.errorBackBtn} onPress={() => router.back()} activeOpacity={0.85}>
           <Text style={styles.errorBackText}>Go back</Text>
         </TouchableOpacity>
@@ -276,7 +289,8 @@ export default function ReportDetailsScreen() {
 
   const riskTags = report.ai_risk_tags || [];
   const aiDone = report.ai_analyzed_at != null;
-  const canContact = report.allow_direct_contact && (report.contact_phone || report.contact_email);
+  const mine = !!(user?.id && report.user_id && user.id === report.user_id);
+  const pending = report.status === 'pending_moderation' || report.status === 'pending';
 
   return (
     <SafeAreaView style={styles.container}>
@@ -330,9 +344,15 @@ export default function ReportDetailsScreen() {
           <View style={[styles.sevBadge, { backgroundColor: sevStyle.bg }]}>
             <Text style={[styles.sevBadgeText, { color: sevStyle.color }]}>{sevStyle.label}</Text>
           </View>
-          <View style={[styles.statusBadge, { backgroundColor: statusStyle.bg }]}>
-            <Text style={[styles.statusBadgeText, { color: statusStyle.color }]}>{statusStyle.label}</Text>
-          </View>
+          {pending ? (
+            <View style={[styles.statusBadge, { backgroundColor: statusStyle.bg }]}>
+              <Text style={[styles.statusBadgeText, { color: statusStyle.color }]}>Pending moderation</Text>
+            </View>
+          ) : (
+            <View style={[styles.statusBadge, { backgroundColor: statusStyle.bg }]}>
+              <Text style={[styles.statusBadgeText, { color: statusStyle.color }]}>{statusStyle.label}</Text>
+            </View>
+          )}
         </View>
 
         {/* Title */}
@@ -353,6 +373,7 @@ export default function ReportDetailsScreen() {
           <MapPin color={Colors.textTertiary} size={14} />
           <Text style={styles.metaText} numberOfLines={2}>{report.location_address}</Text>
         </View>
+        <Text style={styles.reporterLine}>Reported by {mine ? 'You' : 'a community member'}</Text>
         {report.last_seen_at && (
           <View style={styles.metaRow}>
             <Clock color={Colors.textTertiary} size={14} />
@@ -422,33 +443,14 @@ export default function ReportDetailsScreen() {
           </View>
         )}
 
-        {/* Contact */}
-        {canContact ? (
+        {/* Reporter — never join profiles; contact_* is not selectable for anon */}
+        {mine ? (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Contact</Text>
-            <Text style={styles.contactName}>Reported by {report.contact_name || 'Anonymous'}</Text>
-            <View style={styles.contactButtons}>
-              {report.contact_phone && (
-                <TouchableOpacity style={styles.contactBtn} onPress={callPhone} activeOpacity={0.85}>
-                  <Phone color={Colors.coral} size={18} />
-                  <Text style={styles.contactBtnText}>Call</Text>
-                </TouchableOpacity>
-              )}
-              {report.contact_email && (
-                <TouchableOpacity style={styles.contactBtn} onPress={sendEmail} activeOpacity={0.85}>
-                  <Mail color={Colors.coral} size={18} />
-                  <Text style={styles.contactBtnText}>Email</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-        ) : report.contact_name ? (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Contact</Text>
-            <Text style={styles.contactName}>Reported by {report.contact_name}</Text>
-            {!report.allow_direct_contact && (
-              <Text style={styles.contactNote}>Direct contact is not enabled for this report.</Text>
-            )}
+            <Text style={styles.contactName}>Reported by You</Text>
+            {pending ? (
+              <Text style={styles.contactNote}>This report is pending moderation. Nearby responders will see it once it is approved.</Text>
+            ) : null}
           </View>
         ) : null}
 
@@ -473,7 +475,8 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
 
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  errorTitle: { fontSize: FontSizes.lg, fontFamily: Fonts.bold, color: Colors.text, marginTop: 12, textAlign: 'center' },
+  errorTitle: { fontSize: FontSizes.lg, fontFamily: Fonts.bold, color: Colors.text, marginTop: 12, textAlign: 'center', paddingHorizontal: 24 },
+  errorHint: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.critical, marginTop: 8, textAlign: 'center', paddingHorizontal: 24 },
   errorBackBtn: { marginTop: 20, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12, backgroundColor: Colors.coral },
   errorBackText: { fontSize: FontSizes.md, fontFamily: Fonts.semibold, color: Colors.white },
 
@@ -503,6 +506,7 @@ const styles = StyleSheet.create({
 
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
   metaText: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary, flex: 1 },
+  reporterLine: { fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.text, marginTop: 8, marginBottom: 4 },
 
   navigateBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, justifyContent: 'center', paddingVertical: 12, borderRadius: 12, backgroundColor: Colors.coralBg, borderWidth: 1.5, borderColor: Colors.coral, marginTop: 8, marginBottom: 20 },
   navigateBtnText: { fontSize: FontSizes.md, fontFamily: Fonts.semibold, color: Colors.coral },

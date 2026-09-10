@@ -3,7 +3,7 @@ import { View, StyleSheet } from 'react-native';
 import type { NearbyMapProps, NearbyPin } from './NearbyMapProps';
 import {
   BASEMAP_ATTR,
-  OPENFREEMAP_STYLE,
+  ESRI_LIGHT_URL,
   OSM_RASTER_URL,
   PIN_CORAL,
   PIN_HALO_FILL,
@@ -12,7 +12,10 @@ import {
 } from '@/lib/map-style';
 
 function esc(s: string) {
-  return String(s).replace(/&/g, '&').replace(/</g, '<').replace(/"/g, '"');
+  return String(s)
+    .replace(/&/g, '&')
+    .replace(/</g, '<')
+    .replace(/"/g, '"');
 }
 
 function pinHtml(pin: NearbyPin, selected: boolean) {
@@ -40,67 +43,25 @@ function coralPin(L: any, group: any, lat: number, lng: number) {
   }).addTo(group);
 }
 
-function loadCss(id: string, href: string) {
-  if (document.getElementById(id)) return;
-  const link = document.createElement('link');
-  link.id = id;
-  link.rel = 'stylesheet';
-  link.href = href;
-  document.head.appendChild(link);
-}
-
-function loadScript(id: string, src: string): Promise<void> {
-  const existing = document.getElementById(id) as HTMLScriptElement | null;
-  if (existing) {
-    if ((existing as any)._loaded || (window as any).maplibregl) return Promise.resolve();
-    return new Promise((resolve, reject) => {
-      existing.addEventListener('load', () => resolve());
-      existing.addEventListener('error', () => reject(new Error(src)));
-    });
-  }
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.id = id;
-    s.src = src;
-    s.async = true;
-    s.onload = () => {
-      (s as any)._loaded = true;
-      resolve();
-    };
-    s.onerror = () => reject(new Error(src));
-    document.head.appendChild(s);
-  });
-}
-
-function addOsmRaster(L: any, map: any) {
-  L.tileLayer(OSM_RASTER_URL, {
+function addBasemap(L: any, map: any) {
+  const osm = L.tileLayer(OSM_RASTER_URL, {
     attribution: BASEMAP_ATTR,
     maxZoom: 19,
-  }).addTo(map);
-}
-
-async function addBasemap(L: any, map: any) {
-  try {
-    (window as any).L = L;
-    loadCss('maplibre-css', 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css');
-    await Promise.race([
-      (async () => {
-        await loadScript('maplibre-js', 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js');
-        await loadScript('maplibre-leaflet-js', 'https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js');
-      })(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('basemap timeout')), 2800)),
-    ]);
-    if (typeof L.maplibreGL === 'function' && (window as any).maplibregl) {
-      L.maplibreGL({
-        style: OPENFREEMAP_STYLE,
-        attributionControl: false,
-      }).addTo(map);
-      return;
-    }
-  } catch {
-    /* OSM raster fallback — no API key, no watermark */
-  }
-  addOsmRaster(L, map);
+    crossOrigin: true,
+  });
+  let flipped = false;
+  let errors = 0;
+  osm.on('tileerror', () => {
+    errors += 1;
+    if (flipped || errors < 6) return;
+    flipped = true;
+    map.removeLayer(osm);
+    L.tileLayer(ESRI_LIGHT_URL, {
+      attribution: 'Tiles © Esri · ' + BASEMAP_ATTR,
+      maxZoom: 16,
+    }).addTo(map);
+  });
+  osm.addTo(map);
 }
 
 export default function NearbyMap(props: NearbyMapProps) {
@@ -140,7 +101,7 @@ export default function NearbyMap(props: NearbyMapProps) {
           dragging: mode === 'nearby',
           scrollWheelZoom: mode === 'nearby',
         });
-        await addBasemap(L, mapRef.current);
+        addBasemap(L, mapRef.current);
         if (cancelled) return;
       }
 
@@ -205,6 +166,7 @@ export default function NearbyMap(props: NearbyMapProps) {
     <View style={[styles.fill, compact && styles.compact]}>
       {createElement('div', {
         ref: host,
+        'data-basemap': 'osm',
         style: { width: '100%', height: '100%', minHeight: compact ? 200 : 280, background: '#e6e9ee' },
       })}
     </View>

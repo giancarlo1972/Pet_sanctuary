@@ -1,5 +1,5 @@
 import React from 'react';
-import { Platform, StyleSheet, View, Text } from 'react-native';
+import { StyleSheet, View, Text } from 'react-native';
 import MapView, { Circle, Marker, UrlTile } from 'react-native-maps';
 import type { NearbyMapProps } from './NearbyMapProps';
 import {
@@ -20,7 +20,7 @@ export default function NearbyMap(props: NearbyMapProps) {
   return (
     <MapView
       style={[styles.fill, compact && styles.compact]}
-      mapType={Platform.OS === 'android' ? 'none' : 'standard'}
+      mapType="none"
       region={{ latitude: lat, longitude: lng, latitudeDelta: latDelta, longitudeDelta: lonDelta }}
       onPress={() => {}}
       pitchEnabled={false}

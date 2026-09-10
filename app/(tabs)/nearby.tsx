@@ -19,7 +19,7 @@ const FALLBACK = { lat: 40.758, lng: -73.985 };
 const RADII = [5, 10, 25];
 const DEFAULT_MI = 10;
 const EXPAND_MI = 25;
-const LOAD_MS = 8000;
+const LOAD_MS = 4500;
 
 const TYPE_LABEL: Record<string, string> = {
   lost: 'Lost pet', stray: 'Found stray', injured: 'Injured animal',
@@ -158,12 +158,12 @@ export default function NearbyScreen() {
     setLoading(true);
     const watchdog = setTimeout(() => setLoading(false), LOAD_MS);
     try {
-      const device = await timed(deviceLocation(), 6000, null);
+      const device = await timed(deviceLocation(), 2500, null);
       let loc = device;
       let didLocate = Boolean(device);
       let state = '';
       if (didLocate && loc) {
-        const rev = await timed(reverseGeocode(loc.lat, loc.lng), 4000, null);
+        const rev = await timed(reverseGeocode(loc.lat, loc.lng), 2500, null);
         state = (rev?.stateCode || '').slice(0, 2).toUpperCase();
       }
       if (!state && user?.id) {

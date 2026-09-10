@@ -791,6 +791,7 @@ export default function PetRecordScreen() {
   const [weightUnit, setWeightUnit] = useState<'kg' | 'lb'>('lb');
   const [canEdit, setCanEdit] = useState(false);
   const [canCare, setCanCare] = useState(false);
+  const [canWriteClinical, setCanWriteClinical] = useState(false);
   const [isPetOwner, setIsPetOwner] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [visOpen, setVisOpen] = useState(false);
@@ -937,7 +938,7 @@ export default function PetRecordScreen() {
       .eq('user_id', user.id)
       .is('ended_on', null);
     const rels = (myRels || []).map((r) => (r.relationship || '').toLowerCase());
-    const isCoOwner = rels.some((r) => r === 'co_owner' || r === 'co-owner' || r === 'owner' || r === 'own');
+    const isCoOwner = rels.some((r) => /co[-_]?owner/.test(r) || r === 'owner' || r === 'own');
     const isCurrentFoster = rels.includes('foster') || rels.includes('caretaker');
 
     let isOrgStaff = false;
@@ -960,6 +961,17 @@ export default function PetRecordScreen() {
     setCanEdit(isOwner || isCoOwner || isOrgStaff);
     setCanCare(isOwner || isCoOwner || isCurrentFoster || isOrgStaff);
     setIsPetOwner(isOwner);
+    setCanWriteClinical(isOwner || isCoOwner);
+    try {
+      const { data: clinicalOk } = await supabase.rpc('can_write_pet_clinical', { pid: petId });
+      if (clinicalOk === true) {
+        setCanWriteClinical(true);
+        setCanEdit(true);
+        setCanCare(true);
+      }
+    } catch {
+      /* function may not be deployed yet — fall back to relationship flags */
+    }
 
     const { data: traitRows } = await supabase.from('pet_traits').select('key, label, sort_order').order('sort_order');
     if (traitRows && traitRows.length) {
@@ -2040,6 +2052,10 @@ export default function PetRecordScreen() {
 
   const applyExtraction = async () => {
     if (!extractionReview || !petId || !user) return;
+    if (!canWriteClinical && !canEdit) {
+      showBanner('Only the owner or co-owner can apply extracted records.');
+      return;
+    }
     setApplyingExtraction(true);
     const sourceDocId = extractionReview.documentId;
     let applied = { vaccinations: 0, weights: 0, labs: 0, visits: 0, exams: 0 };
@@ -2056,14 +2072,26 @@ export default function PetRecordScreen() {
     };
 
     try {
-      const { data: rel } = await supabase.from('pet_relationships').select('id').eq('pet_id', petId).eq('user_id', user.id).is('ended_on', null).maybeSingle();
-      if (!rel) {
-        console.log('[apply] ensuring owner relationship');
-        await supabase.from('pet_relationships').insert({
-          pet_id: petId, user_id: user.id, relationship: 'owner', started_on: new Date().toISOString().slice(0, 10),
+      const { data: relsNow, error: relErr } = await supabase
+        .from('pet_relationships')
+        .select('id, relationship')
+        .eq('pet_id', petId)
+        .eq('user_id', user.id)
+        .is('ended_on', null);
+      if (relErr) console.log('[apply] relationship lookup', relErr.message);
+      if (!relsNow?.length) {
+        const relationship = pet?.owner_id === user.id ? 'owner' : 'co_owner';
+        console.log('[apply] ensuring relationship', relationship);
+        const insRel = await supabase.from('pet_relationships').insert({
+          pet_id: petId, user_id: user.id, relationship, started_on: new Date().toISOString().slice(0, 10),
         });
+        if (insRel.error) console.log('[apply] relationship insert', insRel.error.message);
       }
+    } catch (e: any) {
+      console.log('[apply] relationship ensure', e?.message || e);
+    }
 
+    try {
       // 1. vaccinations — doses only; reminders update next_due on that type
       const seenDose = new Set<string>();
       const existingVaxKeys = new Set(
@@ -2598,7 +2626,7 @@ export default function PetRecordScreen() {
             {clinic ? <Text style={styles.docClinic}>{String(clinic)}</Text> : null}
           </View>
         </TouchableOpacity>
-        {canEdit && unreviewed ? (
+            {canEdit && unreviewed ? (
           <TouchableOpacity style={styles.docDeleteBtn} onPress={() => openConfirmFromParse(doc.id, ai)} activeOpacity={0.85}>
             <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.coral }}>Review</Text>
           </TouchableOpacity>
@@ -2871,6 +2899,10 @@ export default function PetRecordScreen() {
 
   const runAiHealth = async () => {
     if (!pet || !petId) return;
+    if (!canWriteClinical && !canEdit) {
+      showBanner('Only the owner or co-owner can run AI Health.');
+      return;
+    }
     setAiBusy(true);
     try {
       const record = {
@@ -2959,7 +2991,10 @@ export default function PetRecordScreen() {
           findings: json.findings || [],
           summary: json.conclusion || json.summary,
         }).select('*').maybeSingle();
-        if (ins.error) console.log('[ai] insert slim fail', ins.error.message);
+        if (ins.error) {
+          console.log('[ai] insert slim fail', ins.error.message);
+          showBanner(ins.error.message || 'Could not save AI Health (RLS).');
+        }
       }
       const packed = { ...json, id: ins.data?.id, run_number: nextNum, ran_at: json.ran_at || new Date().toISOString(), diff_vs_previous: diff };
       setAiFindings(packed);
@@ -4078,8 +4113,8 @@ export default function PetRecordScreen() {
                     <Text style={{ fontFamily: Fonts.regular, fontSize: 13, color: Colors.white, lineHeight: 20, marginTop: 6 }}>{aiFindings.conclusion}</Text>
                   </Card>
                 ) : null}
-                <TouchableOpacity style={[styles.aiPrimaryBtn, (aiBusy || !aiReady) && styles.btnDisabled]} disabled={aiBusy || !aiReady} onPress={runAiHealth} activeOpacity={0.85}>
-                  {aiBusy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.aiPrimaryTxt}>{aiReady ? 'Run AI Health' : 'Add records first'}</Text>}
+                <TouchableOpacity style={[styles.aiPrimaryBtn, (aiBusy || !aiReady || !canWriteClinical) && styles.btnDisabled]} disabled={aiBusy || !aiReady || !canWriteClinical} onPress={runAiHealth} activeOpacity={0.85}>
+                  {aiBusy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.aiPrimaryTxt}>{!canWriteClinical ? 'Owner / co-owner only' : (aiReady ? 'Run AI Health' : 'Add records first')}</Text>}
                 </TouchableOpacity>
                 <Text style={styles.aiLastRun}>
                   {aiFindings?.run_number ? `Run ${aiFindings.run_number} · ${formatDate(aiFindings.ran_at || aiLastRun)}` : (aiLastRun ? `Last run ${formatDate(aiLastRun)}` : 'Not run yet')}

@@ -167,16 +167,19 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
     } else setDuty(null);
 
     const [{ data: rels }, { data: owned }] = await Promise.all([
-      supabase.from('pet_relationships').select('id, pet_id, relationship, ended_on').eq('user_id', userId),
+      supabase.from('pet_relationships')
+        .select('id, pet_id, relationship, ended_on, pets(id, name, species, main_photo_url, listing_type, status)')
+        .eq('user_id', userId),
       supabase.from('pets').select('id, name, species, main_photo_url, listing_type, status').eq('owner_id', userId),
     ]);
-    const ids = [...new Set([...(rels || []).map((r: any) => r.pet_id), ...(owned || []).map((p: any) => p.id)])];
+    const ids = [...new Set([...(rels || []).map((r: any) => r.pet_id), ...(owned || []).map((p: any) => p.id)])].filter(Boolean);
     const { data: petRows } = ids.length ? await supabase.from('pets').select('id, name, species, main_photo_url, listing_type, status, shelter_id').in('id', ids) : { data: [] as any[] };
     const pmap: Record<string, any> = {};
     (petRows || []).forEach((x: any) => { pmap[x.id] = x; });
     const mapped: PetRel[] = [];
     for (const r of rels || []) {
-      const pet = pmap[r.pet_id];
+      const nested = Array.isArray((r as any).pets) ? (r as any).pets[0] : (r as any).pets;
+      const pet = nested || pmap[r.pet_id];
       mapped.push({
         id: r.id, pet_id: r.pet_id, pet_name: pet?.name || 'Pet', pet_photo: pet?.main_photo_url || null,
         species: pet?.species || null, relationship: r.relationship, ended_on: r.ended_on,
@@ -298,8 +301,9 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
   const petBucket = (r: PetRel) => {
     const rel = (r.relationship || '').toLowerCase();
     if (rel === 'foster') return 'foster';
-    if (rel === 'own' || rel === 'owner' || rel === 'co_owner' || rel === 'co-owner') return 'own';
-    if (rel === 'caretaker' || rel === 'org' || rel === 'manager') return 'manage';
+    if (rel === 'own' || rel === 'owner') return 'own';
+    if (rel === 'org' || rel === 'manager') return 'manage';
+    if (rel === 'co_owner' || rel === 'co-owner' || rel === 'caretaker' || rel === 'veterinarian' || rel === 'sponsor' || rel === 'sponsored') return 'shared';
     return 'shared';
   };
 

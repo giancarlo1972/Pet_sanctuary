@@ -67,7 +67,9 @@ import AppHeader from '@/components/AppHeader';
 import { FilterChips } from '@/components/Tabs';
 import { Page, CONTENT_MAX } from '@/components/Page';
 import { WeightLineChart, LabSparkline } from '@/components/PetCharts';
-import MedicalDashboard from '@/components/MedicalDashboard';
+import { DashboardPanel } from '@/components/DashboardPanel';
+import LabsByAnalyte from '@/components/LabsByAnalyte';
+import { AreaChart } from '@/components/MedicalCharts';
 import VetExamCard from '@/components/VetExamCard';
 import { Card, InnerTile } from '@/components/Card';
 import { extractPdf } from '@/lib/pdf-text';
@@ -881,6 +883,7 @@ export default function PetRecordScreen() {
   const [parseProgress, setParseProgress] = useState<string | null>(null);
   const [openVaxHist, setOpenVaxHist] = useState<Set<string>>(new Set());
   const [notesOpen, setNotesOpen] = useState(false);
+  const [aiNotesOpen, setAiNotesOpen] = useState(false);
   const [pastNotesOpen, setPastNotesOpen] = useState(false);
   const [condMenu, setCondMenu] = useState<string | null>(null);
   const [episodeOpen, setEpisodeOpen] = useState(true);
@@ -2741,8 +2744,8 @@ export default function PetRecordScreen() {
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'overview', label: 'Overview' },
-    { key: 'health', label: 'Health' },
     { key: 'lifestyle', label: 'Lifestyle' },
+    { key: 'health', label: 'Health' },
     { key: 'insurance', label: 'Insurance' },
     { key: 'documents', label: 'Documents' },
     { key: 'clinics', label: 'Clinics' },
@@ -3031,114 +3034,82 @@ export default function PetRecordScreen() {
         </View>
 
         {tab === 'overview' ? (
-          <Card>
-            <View style={styles.tileRow}>
-              <StatusTile icon={Syringe} label="Vaccinated" sub={vaxSub} tone={vaxTone} onPress={() => {
-                if (pendingDocs[0]) { setDocKindFilter(null); setTab('documents'); openConfirmFromParse(pendingDocs[0].id, pendingDocs[0].ai_summary || {}); }
-                else { setTab('health'); }
-              }} />
-              <StatusTile icon={Heart} label="Spayed" sub={pet.spayed_neutered ? 'Yes' : 'Not recorded'} tone={pet.spayed_neutered ? 'ok' : 'unknown'} />
-              <StatusTile icon={Shield} label="Microchipped" sub={chipNumber ? `••${String(chipNumber).slice(-4)}` : (pet.microchipped ? 'On file' : 'Not on file')} tone={(chipNumber || pet.microchipped) ? 'ok' : 'unknown'} />
-            </View>
-            <View style={styles.tileRow}>
-              <StatusTile icon={Scale} label="Weight" sub={weightSub} tone={weightTone} extraLink={canCare ? 'Record' : undefined} extraOnPress={openWeight} />
-              <StatusTile icon={FlaskConical} label="FELV-FIV" sub={felvTone === 'unknown' ? 'Add' : felvSub} tone={felvTone} onPress={() => { setTab('health'); }} />
-              <StatusTile icon={Activity} label="Activity" sub={activityTone === 'unknown' ? 'Connect' : activitySub} tone={activityTone} onPress={() => showBanner('Connect a litter box, feeder, or GPS collar from Me → Devices.', 'info')} />
-            </View>
-          </Card>
+          <DashboardPanel
+            tiles={[
+              { label: 'Vaccinated', value: vaxSub },
+              { label: 'Spayed', value: pet.spayed_neutered ? 'Yes' : '—' },
+              { label: 'Weight', value: latestLb != null ? `${formatLb(latestLb)} lb` : '—' },
+              { label: 'Activity', value: activitySub || '—' },
+            ]}
+          />
         ) : null}
 
         {tab === 'health' ? (
-          <MedicalDashboard
-            mode="panel"
-            petName={pet.name || 'Pet'}
-            verdict={healthVerdict}
-            healthScore={typeof aiFindings?.health_score === 'number'
-              ? aiFindings.health_score
-              : Math.max(20, Math.min(100, (healthVerdict === 'STABLE' ? 88 : 64) - (aiFindings?.findings || []).filter((f: any) => /urgent/i.test(f.severity)).length * 10))}
-            latestLb={latestLb}
-            targetLb={targetLb}
-            weightDelta={weightEntries[0] && weightEntries[1] ? Number(weightEntries[0].weight_lb) - Number(weightEntries[1].weight_lb) : null}
-            weightPts={weightEntries.slice().reverse().map((w) => ({ v: Number(w.weight_lb), at: w.measured_on, out: targetLb != null && Number(w.weight_lb) > targetLb * 1.05 }))}
-            bcs={bcsVal}
-            bcsDelta={bcsVal != null && prevBcs != null ? bcsVal - prevBcs : null}
-            bcsPts={petExams.map((e) => ({ v: Number(e.vitals?.bcs), at: e.visit_date })).filter((p) => Number.isFinite(p.v)).reverse()}
-            risks={(() => {
-              const list: string[] = [];
-              if (bcsVal != null && bcsVal >= 8) list.push('Overweight');
-              for (const c of activeConditions) {
-                const n = (c.name || '').trim();
-                if (!n) continue;
-                if (list.some((x) => x.toLowerCase().includes(n.toLowerCase()) || n.toLowerCase().includes(x.split('·')[0].trim().toLowerCase()))) continue;
-                list.push(n);
-              }
-              if (!list.includes('Hepatic lipidosis') && conditionGroups.episode) list.push('Hepatic lipidosis');
-              return list.slice(0, 3);
-            })()}
-            pastConditions={[
-              ...(conditionGroups.episode ? [conditionGroups.episode.title] : []),
-              ...conditions.filter((c) => condLifecycle(c) === 'resolved').map((c) => c.name),
-            ].filter(Boolean).slice(0, 4)}
-            lastExam={lastExam}
-            exams={petExams}
-            vitals={[]}
-            labRows={[]}
-            labCatalog={[]}
-            meds={[]}
-            diagnostics={[]}
-            aiFindings={aiFindings}
-            aiRuns={[]}
-            aiBusy={false}
-            aiShared={aiShared}
-            onRunAi={() => {}}
-            onShareAi={() => {}}
-            onSelectRun={() => {}}
-            onMenu={() => setDashMenu(true)}
+          <DashboardPanel
+            tiles={[
+              {
+                label: 'Health score',
+                value: typeof aiFindings?.health_score === 'number'
+                  ? aiFindings.health_score
+                  : Math.max(20, Math.min(100, (healthVerdict === 'STABLE' ? 88 : 64) - (aiFindings?.findings || []).filter((f: any) => /urgent/i.test(f.severity)).length * 10)),
+                hint: healthVerdict,
+              },
+              { label: 'Weight', value: latestLb != null ? `${latestLb} lb` : '—', hint: targetLb != null ? `target ${targetLb} lb` : undefined },
+              { label: 'BCS', value: bcsVal != null ? `${bcsVal} /9` : '—' },
+              { label: 'Main risk', value: (bcsVal != null && bcsVal >= 8) ? 'Overweight' : (activeConditions[0]?.name || 'None flagged') },
+            ]}
+            footer={(conditionGroups.episode || conditions.some((c) => condLifecycle(c) === 'resolved')) ? (
+              <Text style={{ fontFamily: Fonts.medium, fontSize: 11, color: '#9AA1AC' }}>
+                Past conditions · {[
+                  ...(conditionGroups.episode ? [conditionGroups.episode.title] : []),
+                  ...conditions.filter((c) => condLifecycle(c) === 'resolved').map((c) => c.name),
+                ].filter(Boolean).slice(0, 4).join(' · ')}
+              </Text>
+            ) : null}
           />
         ) : null}
 
         {tab === 'lifestyle' ? (
-          <Card>
-            <Text style={styles.ovKicker}>LIFESTYLE</Text>
-            <Text style={styles.ovFoot}>{petTraitChips(pet).slice(0, 4).join(' · ') || 'Add qualities she shows every day'}</Text>
-          </Card>
+          <DashboardPanel
+            tiles={[
+              { label: 'Age', value: compactAge(pet.date_of_birth, pet.age_text) || '—' },
+              { label: 'Weight', value: latestLb != null ? `${formatLb(latestLb)} lb` : '—' },
+              { label: 'Traits', value: petTraitChips(pet).length },
+            ]}
+          />
         ) : null}
 
         {tab === 'insurance' ? (
-          <View style={[styles.infoCard, { backgroundColor: Colors.navy, borderColor: Colors.navy, padding: 16 }]}>
-            <Text style={[styles.healthKicker, { marginTop: 0 }]}>PET INSURANCE</Text>
-            <Text style={{ fontFamily: Fonts.extrabold, fontSize: 17, color: Colors.white, marginTop: 8 }}>Policy & claims</Text>
-            <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>Upload a PDF or review claims below</Text>
-          </View>
+          <DashboardPanel
+            tiles={[
+              { label: 'Policy', value: documents.some((d) => docAccordionKeys(d).includes('insurance')) ? 'On file' : 'None' },
+              { label: 'Claims', value: (() => {
+                const policy = documents.find((d) => docAccordionKeys(d).includes('insurance') || /insur|policy|declaration/i.test(String(d.title || d.kind || '')));
+                const ai = policy && policy.ai_summary && typeof policy.ai_summary === 'object' ? policy.ai_summary as any : {};
+                return Array.isArray(ai.claims) ? ai.claims.length : 0;
+              })() },
+            ]}
+          />
         ) : null}
 
         {tab === 'documents' ? (
-          <View style={styles.docDash}>
-            <View style={styles.docTileRow}>
-              {DOC_ACCORDIONS.filter((s) => (DOC_HEADER_ALWAYS as readonly string[]).includes(s.key) || documents.filter((d) => docAccordionKeys(d).includes(s.key)).length > 0).filter((s) => s.key !== 'other').map((s) => {
-                const n = documents.filter((d) => docAccordionKeys(d).includes(s.key)).length;
-                return (
-                  <View key={s.key} style={styles.docTile}>
-                    <Text style={styles.docTileN}>{n}</Text>
-                    <Text style={styles.docTileL} numberOfLines={1}>{s.label}</Text>
-                  </View>
-                );
-              })}
-            </View>
-          </View>
+          <DashboardPanel
+            tiles={[
+              { label: 'Labs', value: documents.filter((d) => docAccordionKeys(d).includes('labs')).length + labRows.length },
+              { label: 'Records', value: documents.filter((d) => docAccordionKeys(d).includes('exam_visit')).length },
+              { label: 'Vaccines', value: documents.filter((d) => docAccordionKeys(d).includes('vaccinations')).length + vaccinations.filter((v) => v.confirmed !== false).length },
+              { label: 'Follow-ups', value: documents.filter((d) => docAccordionKeys(d).includes('follow_up')).length },
+            ]}
+          />
         ) : null}
 
         {tab === 'clinics' ? (
-          <View style={styles.tileRow}>
-            <View style={[styles.docTile, { flex: 1 }]}>
-              <Text style={styles.docTileN}>{new Set(petExams.map((e) => e.clinic).filter(Boolean)).size || 1}</Text>
-              <Text style={styles.docTileL}>Clinics</Text>
-            </View>
-            <View style={[styles.docTile, { flex: 1 }]}>
-              <Text style={styles.docTileN}>{petExams.filter((e) => e.vet_name).length || 1}</Text>
-              <Text style={styles.docTileL}>Veterinarians</Text>
-            </View>
-          </View>
+          <DashboardPanel
+            tiles={[
+              { label: 'Clinics', value: new Set(petExams.map((e) => e.clinic).filter(Boolean)).size || clinics.length || 0 },
+              { label: 'Veterinarians', value: new Set(petExams.map((e) => e.vet_name).filter(Boolean)).size || 0 },
+            ]}
+          />
         ) : null}
 
         {/* Pet hero — below the tab dashboard on every tab */}
@@ -3363,9 +3334,163 @@ export default function PetRecordScreen() {
 
         {tab === 'health' && (
           <View style={styles.tabContent}>
+            <Card>
+              <View style={styles.ovCardHead}>
+                <Text style={styles.ovKicker}>LATEST CONDITIONS</Text>
+              </View>
+              {activeConditions.slice(0, 3).length === 0 ? (
+                <Text style={styles.emptyText}>No active or monitoring conditions.</Text>
+              ) : activeConditions.slice(0, 3).map((c) => {
+                const life = condLifecycle(c);
+                const pill = life === 'active'
+                  ? { bg: Colors.tealBg, fg: Colors.tealDark, label: 'Active' }
+                  : { bg: Colors.standardBg, fg: Colors.accentDark, label: 'Monitoring' };
+                return (
+                  <View key={c.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 }}>
+                    <View style={[styles.lifePill, { backgroundColor: pill.bg }]}>
+                      <Text style={[styles.lifePillTxt, { color: pill.fg }]}>{pill.label}</Text>
+                    </View>
+                    <Text style={styles.docTitle}>{c.name}</Text>
+                  </View>
+                );
+              })}
+            </Card>
+            <Card>
+              <Text style={styles.ovKicker}>LATEST VET RECOMMENDATIONS</Text>
+              {latestVisitNotes.length > 0 ? (
+                <>
+                  <Text style={styles.noteFrom}>
+                    From {[latestVisitClinic, latestVisitDate ? formatDate(latestVisitDate) : null].filter(Boolean).join(' · ') || 'latest visit'}
+                  </Text>
+                  <Text style={styles.noteBody} numberOfLines={notesOpen ? 99 : 2}>
+                    {latestVisitNotes.map((n) => n.text).join('\n')}
+                  </Text>
+                  {latestVisitNotes.some((n) => n.text.length > 90) || latestVisitNotes.length > 1 ? (
+                    <TouchableOpacity onPress={() => setNotesOpen((v) => !v)} activeOpacity={0.85}>
+                      <Text style={styles.linkTxt}>{notesOpen ? 'Show less' : 'Show more'}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </>
+              ) : (
+                <Text style={styles.emptyText}>No recommendations on the latest visit.</Text>
+              )}
+            </Card>
+            <Card>
+              <Text style={styles.ovKicker}>AI NOTES</Text>
+              <Text style={styles.aiDisclaimerTxt}>AI is not a veterinarian. Findings are for your vet.</Text>
+              {aiFindings ? (
+                <>
+                  <Text style={styles.noteFrom}>
+                    Run {aiFindings.run_number || 1} · {formatDate(aiFindings.ran_at || aiLastRun)}
+                  </Text>
+                  <Text style={styles.noteBody} numberOfLines={aiNotesOpen ? 99 : 2}>
+                    {aiFindings.conclusion || (aiFindings.findings || []).map((f: any) => f.title).join(' · ') || 'No findings yet.'}
+                  </Text>
+                  <TouchableOpacity onPress={() => setAiNotesOpen((v) => !v)} activeOpacity={0.85}>
+                    <Text style={styles.linkTxt}>{aiNotesOpen ? 'Show less' : 'Show more'}</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <Text style={styles.emptyText}>No AI note yet.</Text>
+              )}
+              <TouchableOpacity
+                style={[styles.aiPrimaryBtn, (aiBusy || !aiReady || !canWriteClinical) && styles.btnDisabled]}
+                disabled={aiBusy || !aiReady || !canWriteClinical}
+                onPress={runAiHealth}
+                activeOpacity={0.85}
+              >
+                {aiBusy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.aiPrimaryTxt}>{!canWriteClinical ? 'Owner / co-owner only' : (aiReady ? 'Run AI Health' : 'Add records first')}</Text>}
+              </TouchableOpacity>
+            </Card>
+            <Card>
+              <Text style={styles.ovKicker}>WEIGHT</Text>
+              <WeightLineChart
+                points={weightEntries.map((w) => ({ ...w, bcs: w.bcs ?? (w.measured_on === weightEntries[0]?.measured_on ? bcsVal : null) }))}
+                targetLb={targetLb}
+                height={180}
+              />
+            </Card>
+            {([
+              ['Temperature', 'temp_f', '°F'] as const,
+              ['Heart rate', 'hr', 'bpm'] as const,
+              ['Resp rate', 'rr', '/min'] as const,
+            ]).map(([label, key, unit]) => {
+              const pts = [...vitalRows, ...petExams.map((e) => ({ recorded_at: e.visit_date, ...(e.vitals || {}) }))]
+                .filter((v: any) => v[key] != null)
+                .map((v: any) => ({ v: Number(v[key]), at: formatDate(v.recorded_at) }));
+              if (!pts.length) return null;
+              return (
+                <Card key={key}>
+                  <Text style={styles.ovKicker}>{label.toUpperCase()}</Text>
+                  {pts.length >= 2 ? <AreaChart points={pts} height={120} unit={unit} /> : (
+                    <Text style={styles.noteBody}>{label} {pts[0].v}{unit} · {pts[0].at || '—'}</Text>
+                  )}
+                </Card>
+              );
+            })}
+            <View style={styles.subHeader}>
+              <View style={styles.subHeaderLeft}>
+                <Syringe color={Colors.navy} size={18} />
+                <Text style={styles.subHeaderText}>Vaccinations</Text>
+              </View>
+            </View>
+            {vaccinations.length === 0 ? (
+              <Text style={styles.emptyText}>No vaccinations recorded.</Text>
+            ) : (
+              vaxGroups.map(({ type, current, history }) => {
+                if (!current) return null;
+                const status = vaccinationStatus(current.next_due_on);
+                const open = openVaxHist.has(type);
+                return (
+                  <View key={type} style={[
+                    styles.vaxCard,
+                    status === 'overdue' && styles.vaxCardOverdue,
+                    status === 'due-soon' && styles.vaxCardDueSoon,
+                  ]}>
+                    <View style={styles.vaxTopRow}>
+                      <Text style={styles.vaxName}>{type}</Text>
+                      <SourceBadge source={current.source} />
+                      {status === 'overdue' && (
+                        <View style={[styles.vaxStatusPill, { backgroundColor: Colors.criticalBg }]}>
+                          <CircleAlert color={Colors.critical} size={12} />
+                          <Text style={[styles.vaxStatusText, { color: Colors.critical }]}>Overdue</Text>
+                        </View>
+                      )}
+                      {status === 'due-soon' && (
+                        <View style={[styles.vaxStatusPill, { backgroundColor: Colors.urgentBg }]}>
+                          <Clock color={Colors.urgent} size={12} />
+                          <Text style={[styles.vaxStatusText, { color: Colors.urgent }]}>Due soon</Text>
+                        </View>
+                      )}
+                      {(status === 'ok' || status === 'none') && current.next_due_on && (
+                        <View style={[styles.vaxStatusPill, { backgroundColor: Colors.tealBg }]}>
+                          <Text style={[styles.vaxStatusText, { color: Colors.tealDark }]}>Valid thru {formatDate(current.next_due_on)}</Text>
+                        </View>
+                      )}
+                    </View>
+                    {current.administered_on ? <Text style={styles.vaxDetail}>Given: {formatDate(current.administered_on)}</Text> : <Text style={styles.vaxDetail}>No dose on file — due {formatDate(current.next_due_on)}</Text>}
+                    {history.length > 0 ? (
+                      <TouchableOpacity onPress={() => setOpenVaxHist((s) => { const n = new Set(s); n.has(type) ? n.delete(type) : n.add(type); return n; })} style={{ marginTop: 8 }}>
+                        <Text style={styles.linkTxt}>History ({history.length})</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    {open ? history.map((h) => (
+                      <View key={h.id} style={{ marginTop: 8, opacity: 0.7 }}>
+                        <Text style={styles.vaxDetail}>{h.vaccine} · {formatDate(h.administered_on)}</Text>
+                      </View>
+                    )) : null}
+                  </View>
+                );
+              })
+            )}
+          </View>
+        )}
+
+        {tab === 'lifestyle' && (
+          <View style={styles.tabContent}>
             <Card identity>
               <View style={styles.ovCardHead}>
-                <Text style={styles.ovKicker}>CHARACTERISTICS</Text>
+                <Text style={styles.ovKicker}>IDENTITY</Text>
                 {canEdit ? (
                   <TouchableOpacity onPress={openDetailsSheet}>
                     <Text style={styles.linkTxt}>Edit</Text>
@@ -3427,60 +3552,6 @@ export default function PetRecordScreen() {
                 </View>
               </View>
             </Card>
-            <Card>
-              <View style={styles.ovCardHead}>
-                <Text style={styles.ovKicker}>LATEST CONDITIONS</Text>
-              </View>
-              {activeConditions.slice(0, 3).length === 0 ? (
-                <Text style={styles.emptyText}>No active or monitoring conditions.</Text>
-              ) : activeConditions.slice(0, 3).map((c) => {
-                const life = condLifecycle(c);
-                const pill = life === 'active'
-                  ? { bg: Colors.tealBg, fg: Colors.tealDark, label: 'Active' }
-                  : { bg: Colors.standardBg, fg: Colors.accentDark, label: 'Monitoring' };
-                return (
-                  <View key={c.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 }}>
-                    <View style={[styles.lifePill, { backgroundColor: pill.bg }]}>
-                      <Text style={[styles.lifePillTxt, { color: pill.fg }]}>{pill.label}</Text>
-                    </View>
-                    <Text style={styles.docTitle}>{c.name}</Text>
-                  </View>
-                );
-              })}
-            </Card>
-            <Card>
-              <Text style={styles.ovKicker}>LATEST VET RECOMMENDATIONS</Text>
-              {latestVisitNotes.length > 0 ? (
-                <>
-                  <Text style={styles.noteFrom}>
-                    From {[latestVisitClinic, latestVisitDate ? formatDate(latestVisitDate) : null].filter(Boolean).join(' · ') || 'latest visit'}
-                  </Text>
-                  <Text style={styles.noteBody} numberOfLines={notesOpen ? 99 : 2}>
-                    {latestVisitNotes.map((n) => n.text).join('\n')}
-                  </Text>
-                  {latestVisitNotes.some((n) => n.text.length > 90) || latestVisitNotes.length > 1 ? (
-                    <TouchableOpacity onPress={() => setNotesOpen((v) => !v)} activeOpacity={0.85}>
-                      <Text style={styles.linkTxt}>{notesOpen ? 'Show less' : 'Show more'}</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                </>
-              ) : (
-                <Text style={styles.emptyText}>No recommendations on the latest visit.</Text>
-              )}
-            </Card>
-            <Card>
-              <Text style={styles.ovKicker}>WEIGHT</Text>
-              <WeightLineChart
-                points={weightEntries.map((w) => ({ ...w, bcs: w.bcs ?? (w.measured_on === weightEntries[0]?.measured_on ? bcsVal : null) }))}
-                targetLb={targetLb}
-                height={180}
-              />
-            </Card>
-          </View>
-        )}
-
-        {tab === 'lifestyle' && (
-          <View style={styles.tabContent}>
             <Card>
               <Text style={styles.ovKicker}>LIFESTYLE</Text>
               <Text style={styles.ovFoot}>Shown publicly only if you make {pet.name || 'this pet'} adoptable</Text>
@@ -3664,477 +3735,6 @@ export default function PetRecordScreen() {
           </View>
         )}
 
-        {/* MEDICAL HUB */}
-        {tab === 'health' && (
-          <View style={styles.tabContent}>
-            <MedicalDashboard
-              mode="body"
-              skipWeight
-              hideUploads
-              petName={pet.name || 'Pet'}
-              verdict={healthVerdict}
-              healthScore={typeof aiFindings?.health_score === 'number'
-                ? aiFindings.health_score
-                : Math.max(20, Math.min(100, (healthVerdict === 'STABLE' ? 88 : 64) - (aiFindings?.findings || []).filter((f: any) => /urgent/i.test(f.severity)).length * 10))}
-              latestLb={latestLb}
-              targetLb={targetLb}
-              weightDelta={weightEntries[0] && weightEntries[1] ? weightEntries[0].weight_lb - weightEntries[1].weight_lb : null}
-              weightPts={weightEntries.slice().reverse().map((w) => ({ v: w.weight_lb, at: w.measured_on, out: targetLb != null && w.weight_lb > targetLb * 1.05 }))}
-              bcs={bcsVal}
-              bcsDelta={bcsVal != null && prevBcs != null ? bcsVal - prevBcs : null}
-              bcsPts={petExams.map((e) => ({ v: Number(e.vitals?.bcs), at: e.visit_date })).filter((p) => Number.isFinite(p.v)).reverse()}
-              risks={(() => {
-                const list: string[] = [];
-                if (bcsVal != null && bcsVal >= 8) list.push(`Obesity · BCS ${bcsVal}`);
-                for (const c of activeConditions) {
-                  const n = (c.name || '').trim();
-                  if (!n) continue;
-                  if (list.some((x) => x.toLowerCase().includes(n.toLowerCase()) || n.toLowerCase().includes(x.split('·')[0].trim().toLowerCase()))) continue;
-                  list.push(n);
-                }
-                for (const f of (aiFindings?.findings || [])) {
-                  const t = String(f.title || '').trim();
-                  if (!t) continue;
-                  if (list.some((x) => x.toLowerCase() === t.toLowerCase())) continue;
-                  list.push(t);
-                }
-                return list.slice(0, 3);
-              })()}
-              lastExam={lastExam}
-              exams={petExams}
-              vitals={[
-                ...vitalRows,
-                ...petExams.map((e) => ({ recorded_at: e.visit_date, ...(e.vitals || {}) })),
-                ...weightEntries.map((w) => ({ recorded_at: w.measured_on, weight_lb: w.weight_lb })),
-              ]}
-              labRows={labRows}
-              labCatalog={labCatalog}
-              meds={medsGiven}
-              diagnostics={diagnostics}
-              aiFindings={aiFindings}
-              aiRuns={aiRuns}
-              aiBusy={aiBusy}
-              aiShared={aiShared}
-              aiReady={aiReady}
-              onAddWeight={openWeight}
-              onAddDob={openDetailsSheet}
-              onUploadRecord={() => { setDocKindFilter(null); setTab('documents'); }}
-              docCounts={{
-                labs: documents.filter((d) => docAccordionKeys(d).includes('labs')).length + labRows.length,
-                vaccines: documents.filter((d) => docAccordionKeys(d).includes('vaccinations')).length + vaccinations.filter((v) => v.confirmed !== false).length,
-                records: documents.filter((d) => docAccordionKeys(d).includes('exam_visit')).length,
-              }}
-              onOpenDocs={(kind) => { setDocKindFilter(kind); setDocOpen((s) => ({ ...s, [kind]: true })); setTab('documents'); }}
-              onRunAi={runAiHealth}
-              onShareAi={async () => {
-                if (aiFindings?.id) await supabase.from('ai_health_analyses').update({ shared_with_vet_at: new Date().toISOString() }).eq('id', aiFindings.id);
-                setAiShared(true);
-              }}
-              onSelectRun={(r) => setAiFindings({ ...r, ran_at: r.created_at, conclusion: r.conclusion || r.summary })}
-              onMenu={() => setDashMenu(true)}
-            />
-            <TouchableOpacity onPress={() => toggleMed('records')} style={styles.ovCardHead}>
-              <Text style={styles.ovKicker}>RECORDS</Text>
-              <Text style={styles.linkTxt}>{openMed.records === false ? 'Show' : 'Hide'}</Text>
-            </TouchableOpacity>
-            {openMed.records !== false && (
-            <View>
-
-            {/* Conditions */}
-            <View style={styles.subHeader}>
-              <View style={styles.subHeaderLeft}>
-                <Heart color={Colors.navy} size={18} />
-                <Text style={styles.subHeaderText}>Conditions & Allergies</Text>
-              </View>
-            </View>
-
-            {conditions.length === 0 ? (
-              <Text style={styles.emptyText}>No conditions, allergies, or medications recorded.</Text>
-            ) : (
-              <>
-                {conditionGroups.episode ? (
-                  <View style={styles.condCard}>
-                    <View style={styles.condTopRow}>
-                      {(() => {
-                        const s = conditionGroups.episode.status;
-                        const pill = s === 'active'
-                          ? { bg: Colors.tealBg, fg: Colors.tealDark, label: 'Active' }
-                          : s === 'monitoring'
-                            ? { bg: Colors.standardBg, fg: Colors.accentDark, label: 'Monitoring' }
-                            : { bg: Colors.surface, fg: Colors.textSecondary, label: 'Resolved' };
-                        return (
-                          <View style={[styles.lifePill, { backgroundColor: pill.bg }]}>
-                            <Text style={[styles.lifePillTxt, { color: pill.fg }]}>{pill.label}</Text>
-                          </View>
-                        );
-                      })()}
-                      <SourceBadge source={conditionGroups.episode.source} />
-                      <TouchableOpacity onPress={() => setEpisodeOpen((v) => !v)} activeOpacity={0.85}>
-                        <Text style={styles.linkTxt}>{episodeOpen ? 'Hide' : 'Show'}</Text>
-                      </TouchableOpacity>
-                    </View>
-                    <Text style={styles.condName}>{conditionGroups.episode.title}</Text>
-                    <Text style={styles.condDate}>
-                      {[
-                        conditionGroups.episode.onset ? `Onset ${formatDate(conditionGroups.episode.onset)}` : null,
-                        conditionGroups.episode.resolved ? `Resolved ${formatDate(conditionGroups.episode.resolved)}` : null,
-                      ].filter(Boolean).join(' → ')}
-                    </Text>
-                    {episodeOpen ? conditionGroups.episode.items.map((c) => (
-                      <View key={c.id} style={styles.condSub}>
-                        <Text style={styles.condSubName}>{c.name}</Text>
-                        <Text style={styles.condDate}>
-                          {[
-                            (c.onset_date || c.diagnosed_on) ? formatDate(c.onset_date || c.diagnosed_on) : null,
-                            (c.resolved_date || c.resolved_on) ? formatDate(c.resolved_date || c.resolved_on) : null,
-                          ].filter(Boolean).join(' → ')}
-                        </Text>
-                      </View>
-                    )) : null}
-                  </View>
-                ) : null}
-                {conditionGroups.standalone.map((c) => {
-                  const life = condLifecycle(c);
-                  const pill = life === 'active'
-                    ? { bg: Colors.tealBg, fg: Colors.tealDark, label: 'Active' }
-                    : life === 'monitoring'
-                      ? { bg: Colors.standardBg, fg: Colors.accentDark, label: 'Monitoring' }
-                      : { bg: Colors.surface, fg: Colors.textSecondary, label: 'Resolved' };
-                  const onset = c.onset_date || c.diagnosed_on;
-                  const resolved = c.resolved_date || c.resolved_on;
-                  return (
-                    <View key={c.id} style={[styles.condCard, life === 'resolved' && { opacity: 0.8 }]}>
-                      <View style={styles.condTopRow}>
-                        <View style={[styles.lifePill, { backgroundColor: pill.bg }]}>
-                          <Text style={[styles.lifePillTxt, { color: pill.fg }]}>{pill.label}</Text>
-                        </View>
-                        <SourceBadge source={c.source} />
-                        {canEdit ? (
-                          <TouchableOpacity onPress={() => setCondMenu(condMenu === c.id ? null : c.id)} style={styles.condMenuBtn} activeOpacity={0.85}>
-                            <MoreVertical color={Colors.navy} size={16} />
-                          </TouchableOpacity>
-                        ) : null}
-                      </View>
-                      <Text style={styles.condName}>{c.name}</Text>
-                      {onset || resolved ? (
-                        <Text style={styles.condDate}>
-                          {[onset ? `Onset ${formatDate(onset)}` : null, resolved ? `Resolved ${formatDate(resolved)}` : null].filter(Boolean).join(' → ')}
-                        </Text>
-                      ) : null}
-                      {c.notes ? <Text style={styles.condNotes}>{c.notes}</Text> : null}
-                      {condMenu === c.id ? (
-                        <View style={styles.condMenu}>
-                          <TouchableOpacity onPress={() => { setCondMenu(null); openEditCondition(c); }} style={styles.condMenuRow} activeOpacity={0.85}>
-                            <Text style={styles.condMenuTxt}>Edit</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity onPress={() => { setCondMenu(null); deleteCondition(c.id); }} style={styles.condMenuRow} activeOpacity={0.85}>
-                            <Text style={[styles.condMenuTxt, { color: Colors.critical }]}>Delete</Text>
-                          </TouchableOpacity>
-                        </View>
-                      ) : null}
-                    </View>
-                  );
-                })}
-              </>
-            )}
-
-            {/* Vaccinations */}
-            <View style={styles.subHeader}>
-              <View style={styles.subHeaderLeft}>
-                <Syringe color={Colors.navy} size={18} />
-                <Text style={styles.subHeaderText}>Vaccinations</Text>
-              </View>
-            </View>
-
-            {vaccinations.length === 0 ? (
-              <Text style={styles.emptyText}>No vaccinations recorded.</Text>
-            ) : (
-              vaxGroups.map(({ type, current, history }) => {
-                if (!current) return null;
-                const status = vaccinationStatus(current.next_due_on);
-                const open = openVaxHist.has(type);
-                return (
-                  <View key={type} style={[
-                    styles.vaxCard,
-                    status === 'overdue' && styles.vaxCardOverdue,
-                    status === 'due-soon' && styles.vaxCardDueSoon,
-                  ]}>
-                    <View style={styles.vaxTopRow}>
-                      <Text style={styles.vaxName}>{type}</Text>
-                      <SourceBadge source={current.source} />
-                      {status === 'overdue' && (
-                        <View style={[styles.vaxStatusPill, { backgroundColor: Colors.criticalBg }]}>
-                          <CircleAlert color={Colors.critical} size={12} />
-                          <Text style={[styles.vaxStatusText, { color: Colors.critical }]}>Overdue</Text>
-                        </View>
-                      )}
-                      {status === 'due-soon' && (
-                        <View style={[styles.vaxStatusPill, { backgroundColor: Colors.urgentBg }]}>
-                          <Clock color={Colors.urgent} size={12} />
-                          <Text style={[styles.vaxStatusText, { color: Colors.urgent }]}>Due soon</Text>
-                        </View>
-                      )}
-                      {(status === 'ok' || status === 'none') && current.next_due_on && (
-                        <View style={[styles.vaxStatusPill, { backgroundColor: Colors.tealBg }]}>
-                          <Text style={[styles.vaxStatusText, { color: Colors.tealDark }]}>Valid thru {formatDate(current.next_due_on)}</Text>
-                        </View>
-                      )}
-                    </View>
-                    {current.administered_on ? <Text style={styles.vaxDetail}>Given: {formatDate(current.administered_on)}</Text> : <Text style={styles.vaxDetail}>No dose on file — due {formatDate(current.next_due_on)}</Text>}
-                    {current.manufacturer ? <Text style={styles.vaxDetail}>Mfr: {current.manufacturer}</Text> : null}
-                    {current.lot_number ? <Text style={styles.vaxDetail}>Lot: {current.lot_number}</Text> : null}
-                    {canEdit && (
-                      <View style={styles.vaxActions}>
-                        <TouchableOpacity style={styles.vaxEditBtn} onPress={() => openEditVax(current)} activeOpacity={0.85}>
-                          <Text style={styles.vaxEditText}>Edit</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.vaxDeleteBtn} onPress={() => deleteVax(current.id)} activeOpacity={0.85}>
-                          <Trash2 color={Colors.critical} size={14} />
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                    {history.length > 0 ? (
-                      <TouchableOpacity onPress={() => setOpenVaxHist((s) => { const n = new Set(s); n.has(type) ? n.delete(type) : n.add(type); return n; })} style={{ marginTop: 8 }}>
-                        <Text style={styles.linkTxt}>History ({history.length})</Text>
-                      </TouchableOpacity>
-                    ) : null}
-                    {open ? history.map((h) => (
-                      <View key={h.id} style={{ marginTop: 8, opacity: 0.7 }}>
-                        <Text style={styles.vaxDetail}>{h.vaccine} · {formatDate(h.administered_on)}</Text>
-                      </View>
-                    )) : null}
-                  </View>
-                );
-              })
-            )}
-
-            {/* Medical Records */}
-            {medicalRecords.length > 0 ? (
-            <>
-            <View style={styles.subHeader}>
-              <View style={styles.subHeaderLeft}>
-                <Stethoscope color={Colors.navy} size={18} />
-                <Text style={styles.subHeaderText}>Medical Records</Text>
-              </View>
-            </View>
-            {medicalRecords.map((rec) => (
-                <View key={rec.id} style={styles.medCard}>
-                  <View style={styles.medTopRow}>
-                    <View style={styles.medBadge}>
-                      <Text style={styles.medBadgeText}>{titleCase(rec.record_type) || 'Record'}</Text>
-                    </View>
-                    <SourceBadge source={rec.source} />
-                    <Text style={styles.medDate}>{formatDate(rec.record_date)}</Text>
-                  </View>
-                  {rec.title ? <Text style={styles.medTitle}>{rec.title}</Text> : null}
-                </View>
-            ))}
-            </>
-            ) : null}
-          </View>
-            )}
-            {labRows.length > 0 ? (
-            <>
-            <TouchableOpacity onPress={() => toggleMed('labs')} style={styles.ovCardHead}>
-              <Text style={styles.ovKicker}>LABS</Text>
-              <Text style={styles.linkTxt}>{openMed.labs === false ? 'Show' : 'Hide'}</Text>
-            </TouchableOpacity>
-            {openMed.labs !== false && (
-              <View>
-                {(() => {
-                  const groups = new Map<string, any[]>();
-                  for (const row of labRows) {
-                    const name = (row.analyte || row.name || '').trim();
-                    if (!name) continue;
-                    const arr = groups.get(name.toLowerCase()) || [];
-                    arr.push(row);
-                    groups.set(name.toLowerCase(), arr);
-                  }
-                  const items = [...groups.entries()].map(([key, rows]) => {
-                    const sorted = [...rows].sort((a, b) => String(a.collected_on || a.created_at || '').localeCompare(String(b.collected_on || b.created_at || '')));
-                    const cur = sorted[sorted.length - 1];
-                    const prev = sorted[sorted.length - 2];
-                    const curN = parseFloat(cur.value ?? cur.value_num ?? cur.value_text);
-                    const prevN = prev ? parseFloat(prev.value ?? prev.value_num ?? prev.value_text) : NaN;
-                    const delta = !isNaN(curN) && !isNaN(prevN) ? curN - prevN : null;
-                    const flag = (cur.flag || '').toLowerCase();
-                    return { key, label: cur.analyte || cur.name, cur, prev, delta, flag, nums: sorted.map((r) => parseFloat(r.value ?? r.value_num ?? r.value_text)).filter((n) => !isNaN(n)) };
-                  });
-                  if (items.length === 0) return null;
-                  return (
-                    <View style={{ gap: 8 }}>
-                      {items.map((it) => (
-                        <TouchableOpacity key={it.key} style={styles.labRow} onPress={() => setLabSpark(labSpark === it.key ? null : it.key)} activeOpacity={0.85}>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.docTitle}>{it.label}</Text>
-                            <Text style={styles.docClinic}>
-                              {it.cur.value ?? it.cur.value_text ?? it.cur.value_num ?? '—'}{it.cur.unit ? ` ${it.cur.unit}` : ''}
-                              {it.delta != null ? `  ${it.delta > 0 ? '▲' : it.delta < 0 ? '▼' : '•'} ${Math.abs(it.delta)}` : ''}
-                            </Text>
-                          </View>
-                          <View style={[styles.docTypePill, it.flag === 'high' || it.flag === 'abnormal' ? { backgroundColor: Colors.criticalBg } : it.flag === 'low' ? { backgroundColor: Colors.standardBg } : { backgroundColor: Colors.tealBg }]}>
-                            <Text style={styles.docTypePillTxt}>{it.flag || 'normal'}</Text>
-                          </View>
-                          {labSpark === it.key && it.nums.length > 1 ? <LabSparkline values={it.nums} color={it.flag === 'high' || it.flag === 'abnormal' ? Colors.critical : Colors.navy} /> : null}
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  );
-                })()}
-              </View>
-            )}
-            </>
-            ) : null}
-            <TouchableOpacity onPress={() => toggleMed('visits')} style={styles.ovCardHead}>
-              <Text style={styles.ovKicker}>VISITS</Text>
-              <Text style={styles.linkTxt}>{openMed.visits === false ? 'Show' : 'Hide'}</Text>
-            </TouchableOpacity>
-            {openMed.visits !== false && (
-            <View>
-              {weightEntries.length > 0 ? (
-                <View style={{ backgroundColor: Colors.white, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: Colors.border, marginBottom: 14 }}>
-                  <Text style={styles.subHeaderText}>Weight (lb)</Text>
-                  <WeightLineChart points={weightEntries.slice().reverse()} targetLb={targetLb} height={180} />
-                </View>
-              ) : null}
-
-            {!historyVisible ? (
-              <View style={styles.historyLocked}>
-                <Shield color={Colors.textTertiary} size={32} />
-                <Text style={styles.historyLockedText}>
-                  History events are sensitive. They are only visible to users with the appropriate access level.
-                </Text>
-                <TouchableOpacity style={styles.historyUnlockBtn} onPress={() => setHistoryVisible(true)} activeOpacity={0.85}>
-                  <Text style={styles.historyUnlockText}>Show history</Text>
-                </TouchableOpacity>
-              </View>
-            ) : historyEvents.length === 0 ? (
-              <Text style={styles.emptyText}>No history events recorded.</Text>
-            ) : (
-              historyEvents.map((evt) => (
-                <View key={evt.id} style={styles.timelineCard}>
-                  <View style={styles.timelineDot} />
-                  <View style={styles.timelineContent}>
-                    <Text style={styles.timelineType}>{titleCase(evt.event_type)}</Text>
-                    <Text style={styles.timelineDate}>{formatDate(evt.occurred_on)}</Text>
-                    {evt.public_summary ? <Text style={styles.timelineSummary}>{evt.public_summary}</Text> : null}
-                    {evt.description ? <Text style={styles.timelineDesc}>{evt.description}</Text> : null}
-                  </View>
-                </View>
-              ))
-            )}
-          </View>
-            )}
-            {false && (
-              <View style={{ gap: 12 }}>
-                <View style={styles.aiDisclaimer}>
-                  <Text style={styles.aiDisclaimerTxt}>AI is not a veterinarian. Findings are for your vet — no diagnosis or treatment from Rescue Army.</Text>
-                </View>
-                {aiRuns.length > 0 ? (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-                    {aiRuns.map((r) => (
-                      <TouchableOpacity key={r.id} style={[styles.ovChip, aiFindings?.id === r.id && styles.ovChipTeal]} onPress={() => {
-                        setAiFindings({
-                          id: r.id,
-                          run_number: r.run_number,
-                          verdict: r.verdict || r.inputs?.verdict,
-                          findings: r.findings,
-                          timeline: r.timeline || r.inputs?.timeline,
-                          trends: r.trends || r.inputs?.trends,
-                          conclusion: r.conclusion || r.inputs?.conclusion || r.summary,
-                          ran_at: r.created_at || r.ran_at,
-                        });
-                        setAiShared(Boolean(r.shared_with_vet_at));
-                      }}>
-                        <Text style={aiFindings?.id === r.id ? styles.ovChipTealTxt : styles.ovChipTxt}>
-                          Run {r.run_number || '?'} · {formatDate(r.created_at || r.ran_at)}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                ) : null}
-                {weightEntries.length > 0 ? (
-                  <Card>
-                    <Text style={styles.ovKicker}>WEIGHT (LB)</Text>
-                    <WeightLineChart points={weightEntries.slice().reverse()} targetLb={targetLb} height={140} />
-                  </Card>
-                ) : null}
-                {(() => {
-                  const flagged = new Map<string, number[]>();
-                  for (const row of labRows) {
-                    const flag = String(row.flag || '').toLowerCase();
-                    if (flag !== 'high' && flag !== 'low' && flag !== 'abnormal') continue;
-                    const name = String(row.analyte || row.name || '').trim();
-                    if (!name) continue;
-                    const n = parseFloat(row.value ?? row.value_num ?? row.value_text);
-                    const arr = flagged.get(name) || [];
-                    if (!isNaN(n)) arr.push(n);
-                    flagged.set(name, arr);
-                  }
-                  for (const t of aiFindings?.trends || []) {
-                    if (!t.analyte || /weight/i.test(t.analyte)) continue;
-                    if (!flagged.has(t.analyte) && Array.isArray(t.points)) {
-                      flagged.set(t.analyte, t.points.map((p: any) => parseFloat(p.value)).filter((n: number) => !isNaN(n)));
-                    }
-                  }
-                  return [...flagged.entries()].map(([name, nums]) => nums.length > 1 ? (
-                    <Card key={name}>
-                      <Text style={styles.docTitle}>{name}</Text>
-                      <LabSparkline values={nums} color={Colors.critical} />
-                    </Card>
-                  ) : null);
-                })()}
-                {(aiFindings?.timeline || []).map((t: any, i: number) => (
-                  <View key={i} style={styles.timelineCard}>
-                    <View style={styles.timelineDot} />
-                    <View style={styles.timelineContent}>
-                      <Text style={styles.timelineType}>{t.title}</Text>
-                      <Text style={styles.timelineDate}>{t.date ? formatDate(t.date) : ''}</Text>
-                      {t.detail ? <Text style={styles.timelineSummary}>{t.detail}</Text> : null}
-                    </View>
-                  </View>
-                ))}
-                {(aiFindings?.findings || []).map((f: any, i: number) => {
-                  const sev = String(f.severity || 'info').toLowerCase();
-                  const dot = sev === 'urgent' ? Colors.critical : sev === 'watch' ? Colors.accent : Colors.teal;
-                  return (
-                    <View key={i} style={styles.aiFinding}>
-                      <View style={[styles.aiDot, { backgroundColor: dot }]} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.aiFindingTitle}>{f.title}</Text>
-                        <Text style={styles.aiFindingBody}>{f.body || f.detail}</Text>
-                      </View>
-                    </View>
-                  );
-                })}
-                {aiFindings?.conclusion ? (
-                  <Card style={{ backgroundColor: Colors.navy, borderColor: Colors.navy }}>
-                    <Text style={[styles.ovKicker, { color: '#B9BCE0' }]}>CONCLUSION</Text>
-                    <Text style={{ fontFamily: Fonts.regular, fontSize: 13, color: Colors.white, lineHeight: 20, marginTop: 6 }}>{aiFindings.conclusion}</Text>
-                  </Card>
-                ) : null}
-                <TouchableOpacity style={[styles.aiPrimaryBtn, (aiBusy || !aiReady || !canWriteClinical) && styles.btnDisabled]} disabled={aiBusy || !aiReady || !canWriteClinical} onPress={runAiHealth} activeOpacity={0.85}>
-                  {aiBusy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.aiPrimaryTxt}>{!canWriteClinical ? 'Owner / co-owner only' : (aiReady ? 'Run AI Health' : 'Add records first')}</Text>}
-                </TouchableOpacity>
-                <Text style={styles.aiLastRun}>
-                  {aiFindings?.run_number ? `Run ${aiFindings.run_number} · ${formatDate(aiFindings.ran_at || aiLastRun)}` : (aiLastRun ? `Last run ${formatDate(aiLastRun)}` : 'Not run yet')}
-                </Text>
-                {aiFindings ? (
-                  <TouchableOpacity
-                    style={[styles.aiShareBtn, aiShared && { backgroundColor: Colors.teal }]}
-                    onPress={async () => {
-                      if (aiFindings.id) await supabase.from('ai_health_analyses').update({ shared_with_vet_at: new Date().toISOString() }).eq('id', aiFindings.id);
-                      setAiShared(true);
-                    }}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.aiShareTxt}>{aiShared ? 'Shared with vet ✓' : 'Share analysis with my vet'}</Text>
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-            )}
-          </View>
-        )}
 
         {tab === 'documents' && (
             <View style={styles.tabContent}>
@@ -4199,9 +3799,12 @@ export default function PetRecordScreen() {
                     <Text style={styles.docAccordMeta}>{items.length} · {open ? 'Hide' : 'Show'}</Text>
                   </TouchableOpacity>
                   {open ? (
-                    items.length === 0
-                      ? <Text style={styles.emptyText}>No {section.label.toLowerCase()} documents.</Text>
-                      : items.map(renderDocRow)
+                    <>
+                      {section.key === 'labs' ? <LabsByAnalyte rows={labRows} /> : null}
+                      {items.length === 0 && section.key !== 'labs'
+                        ? <Text style={styles.emptyText}>No {section.label.toLowerCase()} documents.</Text>
+                        : items.map(renderDocRow)}
+                    </>
                   ) : null}
                 </View>
               );

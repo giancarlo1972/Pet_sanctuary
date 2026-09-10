@@ -33,6 +33,7 @@ import { useAuth } from '@/lib/context/AuthContext';
 import SignedImage from '@/components/SignedImage';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
+import { DashboardPanel } from '@/components/DashboardPanel';
 import { orgSection, orgTypeLabel, orgTileColor, orgListsPets, type OrgSection } from '@/lib/org-type';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -375,20 +376,13 @@ export default function OrganizationDetailsScreen() {
           </View>
           <View style={styles.statRow}>
             {listsPets ? (
-              <>
-                <View style={styles.statTile}>
-                  <Text style={styles.statValue}>{org.pets_listed}</Text>
-                  <Text style={styles.statLabel}>Pets listed</Text>
-                </View>
-                <View style={styles.statTile}>
-                  <Text style={styles.statValue}>{org.adoptions.toLocaleString()}</Text>
-                  <Text style={styles.statLabel}>Adoptions</Text>
-                </View>
-                <View style={styles.statTile}>
-                  <Text style={styles.statValue}>{org.followers.toLocaleString()}</Text>
-                  <Text style={styles.statLabel}>Followers</Text>
-                </View>
-              </>
+              <DashboardPanel
+                tiles={[
+                  { label: 'Pets listed', value: org.pets_listed },
+                  { label: 'Adoptions', value: org.adoptions.toLocaleString() },
+                  { label: 'Followers', value: org.followers.toLocaleString() },
+                ]}
+              />
             ) : (
               <View style={styles.roleBanner}>
                 <Text style={styles.roleBannerKicker}>

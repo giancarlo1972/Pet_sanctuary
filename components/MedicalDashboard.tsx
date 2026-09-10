@@ -6,6 +6,7 @@ import { AreaChart, HealthRing, RefBand } from '@/components/MedicalCharts';
 import { LabSparkline as MiniSpark } from '@/components/PetCharts';
 import { SourceBadge } from '@/components/SourceBadge';
 import { Card } from '@/components/Card';
+import { DashboardPanel } from '@/components/DashboardPanel';
 export { EXAM_PILLS } from '@/components/VetExamCard';
 
 export function classifyLab(name: string): 'Hematology' | 'Chemistry' | 'Endocrinology' | 'Urinalysis' {
@@ -170,53 +171,17 @@ export default function MedicalDashboard(props: {
   return (
     <View style={{ gap: 16 }}>
       {mode !== 'body' ? (
-      <View style={styles.navy}>
-        {props.onMenu ? (
-          <TouchableOpacity style={styles.menuBtn} onPress={props.onMenu} activeOpacity={0.85} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Text style={styles.menuTxt}>⋮</Text>
-          </TouchableOpacity>
-        ) : null}
-        <View style={styles.kpiRow}>
-          <View style={styles.kpi}>
-            <Text style={styles.kpiKLight}>Health score</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <HealthRing score={props.healthScore} size={64} />
-              <Text style={styles.kpiHint}>{props.verdict}</Text>
-            </View>
-          </View>
-          <View style={styles.kpi}>
-            <Text style={styles.kpiKLight}>Weight</Text>
-            <Text style={styles.kpiV}>{props.latestLb != null ? props.latestLb : '—'}<Text style={styles.kpiU}> lb</Text></Text>
-            {overPctLabel ? (
-              <Text style={[styles.kpiHint, { color: overPct != null && overPct > 15 ? '#F5C1B8' : overPct != null && overPct > 5 ? '#FCE9C8' : '#B9BCE0' }]}>{overPctLabel}</Text>
-            ) : (
-              <Delta d={wDelta} />
-            )}
-            {props.targetLb != null ? <Text style={styles.kpiHint}>target {props.targetLb} lb</Text> : null}
-            {props.weightPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.45, width: 90 }}><MiniSpark values={props.weightPts.map((p) => p.v)} color="#7EE0D6" height={28} /></View> : null}
-          </View>
-          <View style={styles.kpi}>
-            <Text style={styles.kpiKLight}>BCS</Text>
-            <Text style={styles.kpiV}>{props.bcs != null ? props.bcs : '—'}<Text style={styles.kpiU}> /9</Text></Text>
-            <Delta d={bcsDelta} />
-            {props.bcsPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.45, width: 90 }}><MiniSpark values={props.bcsPts.map((p) => p.v)} color="#FCE9C8" height={28} /></View> : null}
-          </View>
-          <View style={[styles.kpi, riskTone === 'red' ? { backgroundColor: 'rgba(215,68,62,0.28)' } : riskTone === 'yellow' ? { backgroundColor: 'rgba(229,164,21,0.22)' } : null]}>
-            <Text style={styles.kpiKLight}>Main risk</Text>
-            <Text style={[styles.kpiV, { fontSize: 16, color: riskTone === 'red' ? '#F5C1B8' : riskTone === 'yellow' ? '#FCE9C8' : Colors.white }]} numberOfLines={2}>{mainRisk}</Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
-              {computedRisks.slice(1, 3).map((r) => (
-                <View key={r.label} style={[styles.riskChip, r.tone === 'gray' ? { backgroundColor: 'rgba(255,255,255,0.10)' } : r.tone === 'red' ? { backgroundColor: 'rgba(215,68,62,0.35)' } : r.tone === 'yellow' ? { backgroundColor: 'rgba(229,164,21,0.28)' } : null]}>
-                  <Text style={[styles.riskTxt, r.tone === 'gray' ? { color: '#C5C8D8' } : null]} numberOfLines={1}>{r.label}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        </View>
-        {props.pastConditions && props.pastConditions.length > 0 ? (
+      <DashboardPanel
+        tiles={[
+          { label: 'Health score', value: props.healthScore, hint: props.verdict },
+          { label: 'Weight', value: props.latestLb != null ? `${props.latestLb} lb` : '—', hint: props.targetLb != null ? `target ${props.targetLb} lb` : undefined },
+          { label: 'BCS', value: props.bcs != null ? `${props.bcs} /9` : '—' },
+          { label: 'Main risk', value: mainRisk },
+        ]}
+        footer={props.pastConditions && props.pastConditions.length > 0 ? (
           <Text style={styles.pastLine}>Past conditions · {props.pastConditions.join(' · ')}</Text>
         ) : null}
-      </View>
+      />
       ) : null}
 
       {mode === 'panel' ? null : (

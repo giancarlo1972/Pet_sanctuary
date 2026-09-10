@@ -12,6 +12,7 @@ import { isPlatformAdmin } from '@/lib/admin-access';
 import { SUPPORT_EMAIL, supportMailto } from '@/lib/contact';
 import { Page } from '@/components/Page';
 import { Card as Surface } from '@/components/Card';
+import { DashboardPanel } from '@/components/DashboardPanel';
 
 type QueueItem = {
   id: string;
@@ -201,14 +202,9 @@ export default function AdminScreen() {
           <View style={styles.hero}>
             <Text style={styles.heroTitle}>Admin console</Text>
             <Text style={styles.heroSub}>Administrator · full access · all actions logged</Text>
-            <View style={styles.statRow}>
-              {stats.map((st) => (
-                <View key={st.label} style={styles.stat}>
-                  <Text style={[styles.statN, { color: st.color }]}>{st.n}</Text>
-                  <Text style={styles.statL}>{st.label}</Text>
-                </View>
-              ))}
-            </View>
+            <DashboardPanel
+              tiles={stats.map((st) => ({ label: st.label, value: st.n }))}
+            />
           </View>
           {error ? <Text style={styles.err}>{error}</Text> : null}
 

@@ -12,6 +12,7 @@ import AppHeader from '@/components/AppHeader';
 import { SegmentedTabs } from '@/components/Tabs';
 import { Page } from '@/components/Page';
 import SignedImage from '@/components/SignedImage';
+import { DashboardPanel } from '@/components/DashboardPanel';
 import { SUPPORT_EMAIL } from '@/lib/contact';
 import { useAuth } from '@/lib/context/AuthContext';
 import { isUsablePhoto } from '@/lib/photos';
@@ -77,7 +78,7 @@ function statusChip(status: string): { label: string; bg: string; color: string 
 }
 
 type MainTab = 'reports' | 'fund';
-type Filter = 'all' | 'urgent' | 'mine';
+type Filter = 'all' | 'critical' | 'urgent' | 'mine';
 
 const CAMPAIGNS = [
   {
@@ -158,14 +159,24 @@ export default function ReportsTabScreen() {
   useEffect(() => { loadReports(); }, [loadReports]);
   useFocusEffect(useCallback(() => { loadReports(); }, [loadReports]));
 
+  const counts = useMemo(() => {
+    const sev = (r: any) => String(r.severity || '').toLowerCase();
+    return {
+      all: reports.length,
+      critical: reports.filter((r) => sev(r) === 'critical').length,
+      urgent: reports.filter((r) => sev(r) === 'urgent').length,
+      mine: user?.id ? reports.filter((r) => r.user_id === user.id).length : 0,
+    };
+  }, [reports, user?.id]);
+
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return reports.filter((r) => {
-      if (filter === 'urgent' && r.severity !== 'urgent' && r.severity !== 'critical') return false;
+      const sev = String(r.severity || '').toLowerCase();
+      if (filter === 'critical' && sev !== 'critical') return false;
+      if (filter === 'urgent' && sev !== 'urgent') return false;
       if (filter === 'mine') {
-        if (!user?.id) return false;
-        if (r.user_id && r.user_id !== user.id) return false;
-        if (!r.user_id) return false;
+        if (!user?.id || r.user_id !== user.id) return false;
       }
       if (!q) return true;
       const hay = `${titleFor(r)} ${r.description || ''} ${TYPE_LABEL[r.report_type] || ''}`.toLowerCase();
@@ -195,14 +206,13 @@ export default function ReportsTabScreen() {
         </>
       ) : (
         <>
-          <SegmentedTabs
-            items={[
-              { key: 'all', label: 'All' },
-              { key: 'urgent', label: 'Urgent' },
-              { key: 'mine', label: 'Mine' },
+          <DashboardPanel
+            tiles={[
+              { key: 'all', label: 'All', value: counts.all, selected: filter === 'all', onPress: () => setFilter('all') },
+              { key: 'critical', label: 'Critical', value: counts.critical, tint: 'risk', selected: filter === 'critical', onPress: () => setFilter('critical') },
+              { key: 'urgent', label: 'Urgent', value: counts.urgent, tint: 'warn', selected: filter === 'urgent', onPress: () => setFilter('urgent') },
+              { key: 'mine', label: 'Mine', value: counts.mine, selected: filter === 'mine', onPress: () => setFilter('mine') },
             ]}
-            value={filter}
-            onChange={setFilter}
           />
 
           <View style={styles.searchBox}>

@@ -100,40 +100,61 @@ function WebFileBtn({
   onError: (msg: string) => void;
 }) {
   const Icon = camera ? Camera : ImageIcon;
-  return (
-    <View style={[styles.photoBtn, { overflow: 'hidden' }]}>
-      {createElement('input', {
-        type: 'file',
-        accept: 'image/*',
-        ref: (el: HTMLInputElement | null) => {
-          if (!el) return;
-          if (camera) el.setAttribute('capture', 'environment');
-          else el.removeAttribute('capture');
-        },
-        style: {
-          position: 'absolute',
-          inset: 0,
-          opacity: 0,
-          width: '100%',
-          height: '100%',
-          cursor: 'pointer',
-          fontSize: 22,
-          zIndex: 2,
-        },
-        onChange: async (ev: any) => {
-          const file = ev?.target?.files?.[0] as File | undefined;
-          if (ev?.target) ev.target.value = '';
-          if (!file) return;
-          try {
-            await onFile(file);
-          } catch (e: any) {
-            onError(e?.message || 'Could not read that picture.');
-          }
-        },
-      })}
-      <Icon color={Colors.navy} size={16} />
-      <Text style={styles.photoBtnText}>{label}</Text>
-    </View>
+  return createElement(
+    'label',
+    {
+      style: {
+        flex: 1,
+        display: 'flex',
+        position: 'relative',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        minHeight: 48,
+        padding: '12px 8px',
+        background: '#FFFFFF',
+        border: '1px solid #E8EAF0',
+        borderRadius: 12,
+        cursor: 'pointer',
+        overflow: 'hidden',
+        boxSizing: 'border-box',
+      },
+    },
+    createElement('input', {
+      type: 'file',
+      accept: 'image/*',
+      ...(camera ? { capture: 'environment' } : {}),
+      style: {
+        position: 'absolute',
+        inset: 0,
+        opacity: 0.01,
+        width: '100%',
+        height: '100%',
+        cursor: 'pointer',
+        fontSize: 16,
+        zIndex: 2,
+      },
+      onChange: async (ev: any) => {
+        const file = ev?.target?.files?.[0] as File | undefined;
+        if (ev?.target) ev.target.value = '';
+        if (!file) return;
+        try {
+          await onFile(file);
+        } catch (e: any) {
+          onError(e?.message || 'Could not read that picture.');
+        }
+      },
+    }),
+    createElement(Icon as any, { color: '#26265E', size: 16, style: { pointerEvents: 'none' } }),
+    createElement('span', {
+      style: {
+        fontFamily: 'Inter, system-ui, sans-serif',
+        fontWeight: 700,
+        fontSize: 13,
+        color: '#26265E',
+        pointerEvents: 'none',
+      },
+    }, label),
   );
 }
 
@@ -244,13 +265,14 @@ export default function NewReportScreen() {
   };
 
   const onPhotoError = (msg: string, code?: string) => {
+    const text = (msg || '').trim() || 'Could not read that picture.';
     if (code === 'camera-denied') {
       setCameraDenied(true);
-      setPhotoError(msg);
+      setPhotoError(text);
       return;
     }
-    setPhotoError(msg);
-    setBanner({ message: msg, kind: 'error' });
+    setPhotoError(text);
+    setBanner({ message: text, kind: 'error' });
   };
 
   const applyPhoto = async (camera: boolean) => {

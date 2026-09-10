@@ -32,8 +32,8 @@ function coralPin(L: any, group: any, lat: number, lng: number) {
   }).addTo(group);
   L.circleMarker([lat, lng], {
     radius: 8,
-    color: '#ffffff',
-    weight: 2.5,
+    color: PIN_HALO_STROKE,
+    weight: 2,
     fillColor: PIN_CORAL,
     fillOpacity: 1,
   }).addTo(group);
@@ -62,7 +62,7 @@ export default function NearbyMap(props: NearbyMapProps) {
       if (!document.getElementById('ra-pin-css')) {
         const s = document.createElement('style');
         s.id = 'ra-pin-css';
-        s.textContent = '.ra-pin{background:none!important;border:none!important} .leaflet-marker-icon.leaflet-div-icon{background:none!important;border:none!important}';
+        s.textContent = '.ra-pin{background:none!important;border:none!important} .leaflet-marker-icon.leaflet-div-icon{background:none!important;border:none!important} .leaflet-default-icon-path,.leaflet-marker-icon:not(.ra-pin){display:none!important}';
         document.head.appendChild(s);
       }
       const mod = await import('leaflet');

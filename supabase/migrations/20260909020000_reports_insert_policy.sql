@@ -1,6 +1,6 @@
--- Paste in the production Supabase SQL editor.
+-- Paste in the production Supabase SQL editor. Required before reports can submit.
 --
--- Production `anon_insert_reports` WITH CHECK read contact_name / contact_phone.
+-- Production `anon_insert_reports` WITH CHECK used to read contact_name / contact_phone.
 -- Those columns are not SELECTable by anon/authenticated (revoked for privacy),
 -- so Postgres evaluates the check as NULL and every insert fails with RLS —
 -- even when the app sends a phone number.
@@ -8,7 +8,8 @@
 -- Signed-in rows must belong to the caller. Always pending_moderation on insert.
 
 GRANT INSERT ON public.reports TO anon, authenticated;
-GRANT INSERT (contact_name, contact_phone, contact_email) ON public.reports TO anon, authenticated;
+GRANT INSERT (contact_name, contact_phone, contact_email, user_id, status, severity, report_type)
+  ON public.reports TO anon, authenticated;
 
 DO $$
 DECLARE pol record;

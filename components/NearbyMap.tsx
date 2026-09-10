@@ -44,9 +44,13 @@ export default function NearbyMap(props: NearbyMapProps) {
         fillColor={PIN_HALO_FILL}
         strokeWidth={2}
       />
-      <Marker coordinate={{ latitude: lat, longitude: lng }} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
-        <View style={styles.youDot} />
-      </Marker>
+      <Circle
+        center={{ latitude: lat, longitude: lng }}
+        radius={12}
+        strokeColor="#ffffff"
+        fillColor={PIN_CORAL}
+        strokeWidth={3}
+      />
       {mode === 'nearby' ? props.pins.map((pin) => {
         const label = pin.count != null ? String(pin.count) : pin.initial;
         if (!label) {
@@ -83,14 +87,6 @@ export default function NearbyMap(props: NearbyMapProps) {
 const styles = StyleSheet.create({
   fill: { flex: 1, width: '100%' },
   compact: { height: 200, minHeight: 200, flex: 0 },
-  youDot: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: PIN_CORAL,
-    borderWidth: 2.5,
-    borderColor: '#fff',
-  },
   bubble: {
     minWidth: 28, height: 28, paddingHorizontal: 6, borderRadius: 14,
     alignItems: 'center', justifyContent: 'center', borderColor: '#fff',

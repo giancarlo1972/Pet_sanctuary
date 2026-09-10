@@ -10,6 +10,7 @@ import {
   PawPrint, TriangleAlert, TrendingUp, Users, Building2, LifeBuoy, Search, X,
 } from 'lucide-react-native';
 import AppHeader from '@/components/AppHeader';
+import { FilterChips } from '@/components/Tabs';
 import { Page } from '@/components/Page';
 import { InlineBanner } from '@/components/InlineBanner';
 import { Colors } from '@/constants/Colors';
@@ -228,13 +229,11 @@ export default function PlatformScreen() {
   };
 
   const Filters = ({ options }: { options: string[] }) => (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>
-      {options.map((o) => (
-        <TouchableOpacity key={o} onPress={() => setFilter(o)} style={[styles.filterChip, filter === o && styles.filterOn]}>
-          <Text style={[styles.filterTxt, filter === o && styles.filterTxtOn]}>{o}</Text>
-        </TouchableOpacity>
-      ))}
-    </ScrollView>
+    <FilterChips
+      items={options.map((o) => ({ key: o, label: o }))}
+      value={filter}
+      onChange={setFilter}
+    />
   );
 
   const SearchBar = ({ placeholder }: { placeholder: string }) => (
@@ -770,11 +769,6 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 12, paddingHorizontal: 12, minHeight: 44,
   },
   searchInput: { flex: 1, fontFamily: INTER, fontSize: 14, color: Colors.text, paddingVertical: RNPlatform.OS === 'web' ? 8 : 10 },
-  filters: { gap: 8, paddingVertical: 4 },
-  filterChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999, backgroundColor: Colors.surface, marginRight: 8 },
-  filterOn: { backgroundColor: Colors.navy },
-  filterTxt: { fontFamily: INTERB, fontSize: 12, color: Colors.textSecondary, fontWeight: '700', textTransform: 'capitalize' },
-  filterTxtOn: { color: Colors.white },
   row: {
     flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: Colors.white,
     borderRadius: 14, padding: 12, borderWidth: 1, borderColor: Colors.border, minHeight: 44,

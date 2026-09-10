@@ -64,6 +64,7 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import AppHeader from '@/components/AppHeader';
+import { FilterChips } from '@/components/Tabs';
 import { Page, CONTENT_MAX } from '@/components/Page';
 import { WeightLineChart, LabSparkline } from '@/components/PetCharts';
 import MedicalDashboard from '@/components/MedicalDashboard';
@@ -3005,24 +3006,16 @@ export default function PetRecordScreen() {
         </View>
 
         {/* Tabs */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabBar}>
-          {TABS.map((t) => {
-            const active = tab === t.key;
-            return (
-              <TouchableOpacity
-                key={t.key}
-                style={[styles.pillTab, active && styles.pillTabOn]}
-                onPress={() => {
-                  if (t.key === 'documents') setDocKindFilter(null);
-                  setTab(t.key);
-                }}
-                activeOpacity={0.85}
-              >
-                <Text style={[styles.pillTabTxt, active && styles.pillTabTxtOn]}>{t.label}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+        <View style={styles.tabBar}>
+          <FilterChips
+            items={TABS}
+            value={tab}
+            onChange={(key) => {
+              if (key === 'documents') setDocKindFilter(null);
+              setTab(key);
+            }}
+          />
+        </View>
 
         {/* OVERVIEW */}
         {tab === 'overview' && (
@@ -3373,36 +3366,28 @@ export default function PetRecordScreen() {
             <Card>
               <Text style={styles.ovKicker}>LIFESTYLE</Text>
               <Text style={styles.ovFoot}>Shown publicly only if you make {pet.name || 'this pet'} adoptable</Text>
-              <View style={[styles.traitChips, { marginTop: 12 }]}>
-                {(() => {
-                  const selected = petTraitChips(pet);
-                  const extras = [
-                    ...selected,
-                    ...(diet?.treats ? String(diet.treats).split(/[,/]/).map((s) => s.trim()).filter(Boolean) : []),
-                  ];
-                  const seen = new Set(traitCatalog.map((t) => t.label.toLowerCase()));
-                  const catalog = [...traitCatalog];
-                  for (const x of extras) {
-                    if (!seen.has(x.toLowerCase())) {
-                      seen.add(x.toLowerCase());
-                      catalog.push({ key: x.toLowerCase().replace(/\s+/g, '_'), label: x });
-                    }
+              {(() => {
+                const selected = petTraitChips(pet);
+                const extras = [
+                  ...selected,
+                  ...(diet?.treats ? String(diet.treats).split(/[,/]/).map((s) => s.trim()).filter(Boolean) : []),
+                ];
+                const seen = new Set(traitCatalog.map((t) => t.label.toLowerCase()));
+                const catalog = [...traitCatalog];
+                for (const x of extras) {
+                  if (!seen.has(x.toLowerCase())) {
+                    seen.add(x.toLowerCase());
+                    catalog.push({ key: x.toLowerCase().replace(/\s+/g, '_'), label: x });
                   }
-                  return catalog.map((t) => {
-                    const on = selected.some((x) => x.toLowerCase() === t.label.toLowerCase());
-                    return (
-                      <TouchableOpacity
-                        key={t.key}
-                        onPress={() => canEdit && toggleLifestyle(t.label)}
-                        activeOpacity={canEdit ? 0.85 : 1}
-                        style={[styles.lifeChip, on && styles.lifeChipOn]}
-                      >
-                        <Text style={[styles.lifeChipTxt, on && styles.lifeChipTxtOn]}>{t.label}</Text>
-                      </TouchableOpacity>
-                    );
-                  });
-                })()}
-              </View>
+                }
+                return (
+                  <FilterChips
+                    items={catalog.map((t) => ({ key: t.label, label: t.label }))}
+                    value={selected}
+                    onChange={(label) => { if (canEdit) toggleLifestyle(label); }}
+                  />
+                );
+              })()}
               <Text style={[styles.ovKicker, { marginTop: 16 }]}>NOTES</Text>
               {canEdit ? (
                 <TextInput
@@ -4929,6 +4914,7 @@ const styles = StyleSheet.create({
   visTxtOn: { color: Colors.tealDark },
   visSheet: { backgroundColor: Colors.white, borderRadius: 16, padding: 18, gap: 12, marginHorizontal: 24, marginTop: 'auto', marginBottom: 'auto' },
   visRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 6 },
+  tabBar: { marginTop: 12, marginBottom: 0 },
   chipFrame: {
     flexDirection: 'row', gap: 12, alignItems: 'flex-start',
     backgroundColor: Colors.white, borderWidth: 2, borderColor: Colors.navy,
@@ -4936,21 +4922,11 @@ const styles = StyleSheet.create({
   },
   chipThumb: { width: 48, height: 48, borderRadius: 10, backgroundColor: Colors.surface },
   traitStripImg: { width: 112, height: 112, borderRadius: 12, backgroundColor: Colors.surface },
-  lifeChip: { backgroundColor: Colors.surface, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
-  lifeChipOn: { backgroundColor: Colors.navy },
-  lifeChipTxt: { fontFamily: Fonts.semibold, fontSize: 13, color: Colors.navy },
-  lifeChipTxtOn: { color: Colors.white },
   lifeNotes: {
     marginTop: 8, minHeight: 88, borderWidth: 1, borderColor: Colors.border, borderRadius: 12,
     padding: 12, fontFamily: Fonts.medium, fontSize: 13, color: Colors.navy, textAlignVertical: 'top',
   },
 
-  tabBar: { flexDirection: 'row', flexWrap: 'nowrap', gap: 8, paddingHorizontal: 0, marginTop: 12, marginBottom: 0, position: 'relative' },
-  hubRow: { flexDirection: 'row', gap: 8, paddingBottom: 12 },
-  pillTab: { backgroundColor: Colors.white, borderWidth: 1, borderColor: '#E8EAF0', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, flexShrink: 0 },
-  pillTabOn: { backgroundColor: Colors.navy, borderColor: Colors.navy },
-  pillTabTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.text },
-  pillTabTxtOn: { color: Colors.white },
   aiBox: { backgroundColor: Colors.criticalBg, borderRadius: 14, padding: 14, gap: 8 },
   aiDisclaimer: { backgroundColor: Colors.criticalBg, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
   aiDisclaimerTxt: { fontFamily: Fonts.medium, fontSize: 12, color: Colors.critical, lineHeight: 16 },

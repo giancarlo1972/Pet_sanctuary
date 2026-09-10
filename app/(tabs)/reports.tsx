@@ -9,6 +9,7 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import AppHeader from '@/components/AppHeader';
+import { SegmentedTabs } from '@/components/Tabs';
 import { Page } from '@/components/Page';
 import SignedImage from '@/components/SignedImage';
 import { SUPPORT_EMAIL } from '@/lib/contact';
@@ -180,43 +181,29 @@ export default function ReportsTabScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); loadReports(); }} colors={[Colors.coral]} />
         ) : undefined}
       >
-          <View style={styles.segment}>
-            {([
-              ['reports', 'Reports'],
-              ['fund', 'Care Fund'],
-            ] as const).map(([k, label]) => (
-              <TouchableOpacity
-                key={k}
-                style={[styles.segBtn, tab === k && styles.segOn]}
-                onPress={() => setTab(k)}
-                activeOpacity={0.85}
-              >
-                <Text style={[styles.segText, tab === k && styles.segTextOn]}>{label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+          <SegmentedTabs
+            items={[
+              { key: 'reports', label: 'Reports' },
+              { key: 'fund', label: 'Care Fund' },
+            ]}
+            value={tab}
+            onChange={setTab}
+          />
       {tab === 'fund' ? (
         <>
           <CareFund />
         </>
       ) : (
         <>
-          <View style={styles.segment}>
-            {([
-              ['all', 'All'],
-              ['urgent', 'Urgent'],
-              ['mine', 'Mine'],
-            ] as const).map(([k, label]) => (
-              <TouchableOpacity
-                key={k}
-                style={[styles.segBtn, filter === k && styles.segOn]}
-                onPress={() => setFilter(k)}
-                activeOpacity={0.85}
-              >
-                <Text style={[styles.segText, filter === k && styles.segTextOn]}>{label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+          <SegmentedTabs
+            items={[
+              { key: 'all', label: 'All' },
+              { key: 'urgent', label: 'Urgent' },
+              { key: 'mine', label: 'Mine' },
+            ]}
+            value={filter}
+            onChange={setFilter}
+          />
 
           <View style={styles.searchBox}>
             <Search color={Colors.textTertiary} size={16} />
@@ -339,11 +326,6 @@ function CampaignCard({ c }: { c: (typeof CAMPAIGNS)[number] }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
-  segment: { flexDirection: 'row', backgroundColor: '#EFF1F5', borderRadius: 999, padding: 4 },
-  segBtn: { flex: 1, paddingVertical: 10, borderRadius: 999, alignItems: 'center', backgroundColor: 'transparent' },
-  segOn: { backgroundColor: '#26265E' },
-  segText: { fontFamily: Fonts.bold, color: '#6B7280', fontSize: FontSizes.sm },
-  segTextOn: { color: '#FFFFFF' },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',

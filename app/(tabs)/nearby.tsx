@@ -4,9 +4,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { MapPin, PawPrint, Siren, Crosshair, Sparkles } from 'lucide-react-native';
 import AppHeader from '@/components/AppHeader';
 import NearbyMap from '@/components/NearbyMap';
+import { FilterChips } from '@/components/Tabs';
 import type { NearbyLayer, NearbyPin } from '@/components/NearbyMapProps';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
@@ -147,7 +147,7 @@ export default function NearbyScreen() {
   const [located, setLocated] = useState(false);
   const [radiusMi, setRadiusMi] = useState(DEFAULT_MI);
   const [rangeNote, setRangeNote] = useState<string | null>(null);
-  const [layers, setLayers] = useState<Record<NearbyLayer, boolean>>({ reports: true, pets: true, clinics: true, providers: true });
+  const [layer, setLayer] = useState<NearbyLayer>('reports');
   const [pins, setPins] = useState<NearbyPin[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -299,6 +299,10 @@ export default function NearbyScreen() {
           subtitle: TYPE_LABEL[r.report_type] || r.report_type,
           color: SEV_COLOR[r.severity] || Colors.accent,
           href: `/report-details?id=${r.id}`,
+          glyph: r.severity === 'standard' ? '?' : '!',
+          tag: (r.severity || 'standard').toUpperCase(),
+          tagFg: SEV_COLOR[r.severity] || Colors.accent,
+          tagBg: r.severity === 'critical' ? Colors.criticalBg : r.severity === 'urgent' ? Colors.urgentBg : Colors.standardBg,
         });
       }
 
@@ -326,6 +330,10 @@ export default function NearbyScreen() {
             color: Colors.teal,
             href: `/pet-details?id=${p.id}`,
             count: 1,
+            glyph: '1',
+            tag: 'ADOPTABLE',
+            tagFg: Colors.tealDark,
+            tagBg: Colors.tealBg,
           });
         } else {
           next.push({
@@ -337,6 +345,10 @@ export default function NearbyScreen() {
             color: Colors.teal,
             href: '/pets',
             count: n,
+            glyph: String(n),
+            tag: 'ADOPTABLE',
+            tagFg: Colors.tealDark,
+            tagBg: Colors.tealBg,
           });
         }
       }
@@ -357,6 +369,10 @@ export default function NearbyScreen() {
           color: Colors.navy,
           href: `/organization-details?id=${o.id}`,
           initial: orgInitial(o.name || ''),
+          glyph: orgInitial(o.name || ''),
+          tag: String(o.org_type || 'ORG').toUpperCase(),
+          tagFg: Colors.navy,
+          tagBg: Colors.surface,
         });
       }
 
@@ -408,11 +424,8 @@ export default function NearbyScreen() {
   useEffect(() => { load(); }, [load]);
 
   const visible = useMemo(() => {
-    return pins.filter((p) => {
-      if (!layers[p.layer]) return false;
-      return kmBetween(center, p) <= radiusKm + 0.05;
-    });
-  }, [pins, layers, center, radiusKm]);
+    return pins.filter((p) => p.layer === layer && kmBetween(center, p) <= radiusKm + 0.05);
+  }, [pins, layer, center, radiusKm]);
 
   const onSelect = (pin: NearbyPin) => {
     setSelectedId(pin.id);
@@ -424,14 +437,14 @@ export default function NearbyScreen() {
     router.push(pin.href as any);
   };
 
-  const toggle = (key: NearbyLayer) => setLayers((s) => ({ ...s, [key]: !s[key] }));
-
-  const counts = {
-    reports: visible.filter((p) => p.layer === 'reports').length,
-    pets: visible.reduce((s, p) => s + (p.layer === 'pets' ? (p.count || 1) : 0), 0),
-    clinics: visible.filter((p) => p.layer === 'clinics').length,
-    providers: visible.filter((p) => p.layer === 'providers').length,
+  const LAYER_COPY: Record<NearbyLayer, string> = {
+    reports: 'Reports',
+    pets: 'Adoptable pets',
+    clinics: 'Shelters & clinics',
+    providers: 'Providers',
   };
+
+  const toggle = (key: NearbyLayer) => setLayer(key);
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
@@ -445,38 +458,25 @@ export default function NearbyScreen() {
           onSelect={onSelect}
         />
         <View style={styles.chips} pointerEvents="box-none">
-          <View style={styles.chipRow}>
-            {([
-              { key: 'reports' as const, label: 'Reports', icon: Siren, n: counts.reports },
-              { key: 'pets' as const, label: 'Adoptable pets', icon: PawPrint, n: counts.pets },
-              { key: 'clinics' as const, label: 'Shelters & clinics', icon: MapPin, n: counts.clinics },
-              { key: 'providers' as const, label: 'Providers', icon: Sparkles, n: counts.providers },
-            ]).map((c) => {
-              const on = layers[c.key];
-              const Icon = c.icon;
-              return (
-                <TouchableOpacity key={c.key} style={[styles.chip, on && styles.chipOn]} onPress={() => toggle(c.key)} activeOpacity={0.85}>
-                  <Icon size={14} color={on ? Colors.white : Colors.navy} />
-                  <Text style={[styles.chipTxt, on && styles.chipTxtOn]}>{c.label} {c.n}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-          <View style={styles.chipRow}>
-            {RADII.map((mi) => (
-              <TouchableOpacity
-                key={mi}
-                style={[styles.rChip, radiusMi === mi && styles.rChipOn]}
-                onPress={() => { setRadiusMi(mi); setRangeNote(null); }}
-                activeOpacity={0.85}
-              >
-                <Text style={[styles.rTxt, radiusMi === mi && styles.rTxtOn]}>{mi} mi</Text>
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity style={styles.rChip} onPress={load} activeOpacity={0.85}>
-              <Crosshair size={13} color={Colors.navy} />
-              <Text style={styles.rTxt}>{located ? 'My location' : 'Locate'}</Text>
-            </TouchableOpacity>
+          <FilterChips
+            floating
+            accent="coral"
+            items={[
+              { key: 'reports', label: 'Reports' },
+              { key: 'pets', label: 'Adoptable pets' },
+              { key: 'clinics', label: 'Shelters & clinics' },
+              { key: 'providers', label: 'Providers' },
+            ]}
+            value={layer}
+            onChange={toggle}
+          />
+          <View style={{ marginTop: 8 }}>
+            <FilterChips
+              floating
+              items={RADII.map((mi) => ({ key: String(mi), label: `${mi} mi` }))}
+              value={String(radiusMi)}
+              onChange={(k) => { setRadiusMi(Number(k)); setRangeNote(null); }}
+            />
           </View>
         </View>
         <View style={styles.sheet}>
@@ -486,7 +486,7 @@ export default function NearbyScreen() {
               ? 'Finding what’s around you'
               : rangeNote
                 ? rangeNote
-                : `${visible.length} within ${radiusMi} mi`}
+                : `${visible.length} items on map · ${LAYER_COPY[layer]}`}
           </Text>
           {loading ? (
             <ActivityIndicator color={Colors.coral} style={{ marginTop: 12 }} />
@@ -495,8 +495,8 @@ export default function NearbyScreen() {
               {visible.length === 0 ? (
                 <Text style={styles.empty}>
                   {rangeNote
-                    ? 'Nothing in this radius yet. Widen the range or turn on another layer.'
-                    : `Nothing within ${radiusMi} mi yet. Widen the range or turn on another layer.`}
+                    ? 'Nothing in this radius yet. Widen the range or pick another layer.'
+                    : `Nothing within ${radiusMi} mi yet. Widen the range or pick another layer.`}
                 </Text>
               ) : visible.map((p) => (
                 <TouchableOpacity
@@ -506,13 +506,17 @@ export default function NearbyScreen() {
                   activeOpacity={0.85}
                 >
                   <View style={[styles.badge, { backgroundColor: p.color }]}>
-                    <Text style={styles.badgeTxt}>{p.count != null ? p.count : (p.initial || '•')}</Text>
+                    <Text style={styles.badgeTxt}>{p.glyph || p.count || p.initial || '•'}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
+                    {p.tag ? (
+                      <View style={[styles.sevPill, { backgroundColor: p.tagBg || Colors.surface }]}>
+                        <Text style={[styles.sevTxt, { color: p.tagFg || Colors.navy }]}>{p.tag}</Text>
+                      </View>
+                    ) : null}
                     <Text style={styles.rowTitle} numberOfLines={1}>{p.title}</Text>
-                    {p.subtitle ? <Text style={styles.rowSub} numberOfLines={1}>{p.subtitle}</Text> : null}
                   </View>
-                  <Text style={styles.ago}>{kmBetween(center, p).toFixed(1)} km</Text>
+                  <Text style={styles.chev}>›</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -526,42 +530,28 @@ export default function NearbyScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: Colors.screen },
   stage: { flex: 1, position: 'relative' },
-  chips: { position: 'absolute', top: 10, left: 12, right: 12, gap: 8 },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: 'rgba(255,255,255,0.94)', borderRadius: 999,
-    paddingHorizontal: 12, paddingVertical: 8,
-    borderWidth: 1, borderColor: '#E8EAF0',
-  },
-  chipOn: { backgroundColor: Colors.navy, borderColor: Colors.navy },
-  chipTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy },
-  chipTxtOn: { color: Colors.white },
-  rChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: 'rgba(255,255,255,0.94)', borderRadius: 999,
-    paddingHorizontal: 10, paddingVertical: 6,
-    borderWidth: 1, borderColor: '#E8EAF0',
-  },
-  rChipOn: { backgroundColor: Colors.teal, borderColor: Colors.teal },
-  rTxt: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy },
-  rTxtOn: { color: Colors.white },
+  chips: { position: 'absolute', top: 10, left: 12, right: 12, zIndex: 20 },
   sheet: {
     position: 'absolute', left: 0, right: 0, bottom: 0,
     backgroundColor: Colors.white, borderTopLeftRadius: 18, borderTopRightRadius: 18,
     paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12,
-    maxHeight: '42%',
-    borderTopWidth: 1, borderColor: Colors.border,
+    maxHeight: '46%',
+    shadowColor: '#26265E',
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: -8 },
+    elevation: 8,
   },
   handle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: '#D9DCE6', marginBottom: 8 },
-  sheetTitle: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.navy, marginBottom: 8 },
+  sheetTitle: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.navy, marginBottom: 8 },
   sheetList: { flexGrow: 0 },
   empty: { fontFamily: Fonts.regular, fontSize: FontSizes.sm, color: Colors.textSecondary, paddingVertical: 8 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, paddingHorizontal: 4, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, backgroundColor: '#FBFBFD', marginBottom: 8, paddingRight: 10 },
   rowOn: { backgroundColor: Colors.surface },
-  badge: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  badgeTxt: { fontFamily: Fonts.bold, fontSize: 10, color: Colors.white },
-  rowTitle: { fontFamily: Fonts.bold, fontSize: 14, color: Colors.navy },
-  rowSub: { fontFamily: Fonts.regular, fontSize: 12, color: Colors.textSecondary, marginTop: 1 },
-  ago: { fontFamily: Fonts.medium, fontSize: 11, color: Colors.textTertiary },
+  badge: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginLeft: 8 },
+  badgeTxt: { fontFamily: Fonts.extrabold, fontSize: 15, color: Colors.white },
+  sevPill: { alignSelf: 'flex-start', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, marginBottom: 2 },
+  sevTxt: { fontFamily: Fonts.extrabold, fontSize: 10 },
+  rowTitle: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.navy },
+  chev: { fontFamily: Fonts.bold, fontSize: 18, color: '#9AA1AC' },
 });

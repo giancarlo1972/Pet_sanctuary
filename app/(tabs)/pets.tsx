@@ -18,6 +18,7 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import AppHeader from '@/components/AppHeader';
+import { FilterChips } from '@/components/Tabs';
 import { Page } from '@/components/Page';
 import SignedImage from '@/components/SignedImage';
 
@@ -199,23 +200,11 @@ export default function PetsScreen() {
       <AppHeader title="Pets" />
       <Page scroll={false}>
       <View style={styles.filterBar}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterBarContent}>
-          {FILTER_CHIPS.map((chip) => {
-            const active = activeFilter === chip.id;
-            return (
-              <TouchableOpacity
-                key={chip.id}
-                style={[styles.filterChip, active && styles.filterChipActive]}
-                onPress={() => setActiveFilter(chip.id)}
-                activeOpacity={0.85}
-              >
-                <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
-                  {chip.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+        <FilterChips
+          items={FILTER_CHIPS.map((c) => ({ key: c.id, label: c.label }))}
+          value={activeFilter}
+          onChange={setActiveFilter}
+        />
       </View>
       <View style={styles.galleryHeader}>
         <Text style={styles.galleryLabel}>All pets</Text>
@@ -255,16 +244,6 @@ export default function PetsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
   filterBar: { paddingBottom: 8 },
-  filterBarContent: { gap: 8 },
-  filterChip: {
-    paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999,
-    backgroundColor: Colors.white, borderWidth: 1, borderColor: '#E8EAF0',
-  },
-  filterChipActive: { backgroundColor: Colors.navy, borderColor: Colors.navy },
-  filterChipText: {
-    fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.navy,
-  },
-  filterChipTextActive: { color: Colors.white },
   galleryHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     marginBottom: 12,

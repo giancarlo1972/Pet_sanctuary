@@ -11,6 +11,10 @@ export type NearbyPin = {
   href: string;
   initial?: string;
   count?: number;
+  glyph?: string;
+  tag?: string;
+  tagFg?: string;
+  tagBg?: string;
 };
 
 export type NearbyMapProps = {

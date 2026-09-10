@@ -29,26 +29,24 @@ export default function NearbyMap(props: NearbyMapProps) {
     >
       <UrlTile urlTemplate={CARTO_POSITRON_NATIVE} maximumZ={19} zIndex={-1} />
       {mode === 'nearby' ? (
-        <>
-          <Circle
-            center={{ latitude: lat, longitude: lng }}
-            radius={Math.max(200, props.radiusKm * 1000)}
-            strokeColor="rgba(38,38,94,0.45)"
-            fillColor="rgba(38,38,94,0.07)"
-            strokeWidth={1}
-          />
-          <Circle
-            center={{ latitude: lat, longitude: lng }}
-            radius={PIN_HALO_METERS}
-            strokeColor={PIN_HALO_STROKE}
-            fillColor={PIN_HALO_FILL}
-            strokeWidth={2}
-          />
-          <Marker coordinate={{ latitude: lat, longitude: lng }} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
-            <View style={styles.youDot} />
-          </Marker>
-        </>
+        <Circle
+          center={{ latitude: lat, longitude: lng }}
+          radius={Math.max(200, props.radiusKm * 1000)}
+          strokeColor="rgba(38,38,94,0.45)"
+          fillColor="rgba(38,38,94,0.07)"
+          strokeWidth={1}
+        />
       ) : null}
+      <Circle
+        center={{ latitude: lat, longitude: lng }}
+        radius={PIN_HALO_METERS}
+        strokeColor={PIN_HALO_STROKE}
+        fillColor={PIN_HALO_FILL}
+        strokeWidth={2}
+      />
+      <Marker coordinate={{ latitude: lat, longitude: lng }} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
+        <View style={styles.youDot} />
+      </Marker>
       {mode === 'nearby' ? props.pins.map((pin) => {
         const label = pin.count != null ? String(pin.count) : pin.initial;
         if (!label) {

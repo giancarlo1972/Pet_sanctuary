@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { createElement, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput, Switch,
   ActivityIndicator, KeyboardAvoidingView, Platform, Image, Linking, ScrollView,
@@ -13,7 +13,7 @@ import { useAuth } from '@/lib/context/AuthContext';
 import { InlineBanner } from '@/components/InlineBanner';
 import NearbyMap from '@/components/NearbyMap';
 import { CONTENT_MAX } from '@/components/Page';
-import { pickImage, releasePicked } from '@/lib/pick-image';
+import { pickImage, releasePicked, imageFromFile, PickImageError, type PickedImage } from '@/lib/pick-image';
 import { reverseGeocode, geocodePlace } from '@/lib/geocode';
 
 const INTER = Platform.OS === 'web' ? 'Inter, system-ui, sans-serif' : Fonts.regular;
@@ -82,13 +82,59 @@ function kmBetween(aLat: number, aLng: number, bLat: number, bLng: number) {
 }
 
 function supabaseMessage(err: any, fallback = 'Could not submit report.') {
-  const parts = [err?.message, err?.details, err?.hint].filter((p) => typeof p === 'string' && p.trim());
+  const parts = [err?.message, err?.details, err?.hint, err?.code].filter((p) => typeof p === 'string' && p.trim());
   const text = parts.join(' — ').trim();
   return text || fallback;
 }
 
 function phoneOk(raw: string) {
   return raw.replace(/\D/g, '').length >= 7;
+}
+
+function WebFileBtn({
+  camera, label, onFile, onError,
+}: {
+  camera: boolean;
+  label: string;
+  onFile: (file: File) => Promise<void>;
+  onError: (msg: string) => void;
+}) {
+  const Icon = camera ? Camera : ImageIcon;
+  return (
+    <View style={[styles.photoBtn, { overflow: 'hidden' }]}>
+      {createElement('input', {
+        type: 'file',
+        accept: 'image/*',
+        ref: (el: HTMLInputElement | null) => {
+          if (!el) return;
+          if (camera) el.setAttribute('capture', 'environment');
+          else el.removeAttribute('capture');
+        },
+        style: {
+          position: 'absolute',
+          inset: 0,
+          opacity: 0,
+          width: '100%',
+          height: '100%',
+          cursor: 'pointer',
+          fontSize: 22,
+          zIndex: 2,
+        },
+        onChange: async (ev: any) => {
+          const file = ev?.target?.files?.[0] as File | undefined;
+          if (ev?.target) ev.target.value = '';
+          if (!file) return;
+          try {
+            await onFile(file);
+          } catch (e: any) {
+            onError(e?.message || 'Could not read that picture.');
+          }
+        },
+      })}
+      <Icon color={Colors.navy} size={16} />
+      <Text style={styles.photoBtnText}>{label}</Text>
+    </View>
+  );
 }
 
 export default function NewReportScreen() {
@@ -185,28 +231,49 @@ export default function NewReportScreen() {
     setAnalyzing(false);
   };
 
+  const applyPicked = async (picked: PickedImage) => {
+    setBanner(null);
+    setPhotoError(null);
+    setCameraDenied(false);
+    releasePicked(photoUri);
+    setPhotoUri(picked.uri);
+    setPhotoBlob(picked.blob);
+    setAi(null);
+    setAnalyzeMs(null);
+    runAnalyze(picked.dataUrl);
+  };
+
+  const onPhotoError = (msg: string, code?: string) => {
+    if (code === 'camera-denied') {
+      setCameraDenied(true);
+      setPhotoError(msg);
+      return;
+    }
+    setPhotoError(msg);
+    setBanner({ message: msg, kind: 'error' });
+  };
+
   const applyPhoto = async (camera: boolean) => {
     setBanner(null);
     setPhotoError(null);
     try {
       const picked = await pickImage({ camera });
       if (!picked) return;
-      setCameraDenied(false);
-      releasePicked(photoUri);
-      setPhotoUri(picked.uri);
-      setPhotoBlob(picked.blob);
-      setAi(null);
-      setAnalyzeMs(null);
-      runAnalyze(picked.dataUrl);
+      await applyPicked(picked);
     } catch (e: any) {
       const msg = e?.message || 'Could not read that picture.';
-      if (e?.code === 'camera-denied') {
-        setCameraDenied(true);
-        setPhotoError(msg);
-        return;
-      }
-      setPhotoError(msg);
-      setBanner({ message: msg, kind: 'error' });
+      onPhotoError(msg, e instanceof PickImageError ? e.code : undefined);
+    }
+  };
+
+  const applyWebFile = async (file: File) => {
+    setBanner(null);
+    setPhotoError(null);
+    try {
+      const picked = await imageFromFile(file);
+      await applyPicked(picked);
+    } catch (e: any) {
+      onPhotoError(e?.message || 'Could not read that picture.');
     }
   };
 
@@ -295,6 +362,7 @@ export default function NewReportScreen() {
     }
     if (!phoneOk(phone)) {
       setBanner({ message: 'Add a phone number for follow-up. It is never public.', kind: 'error' });
+      setStep(2);
       return;
     }
     setLoading(true);
@@ -303,9 +371,14 @@ export default function NewReportScreen() {
       let photoUrl: string | null = null;
       if (photoBlob) {
         const path = `reports/${Date.now()}.jpg`;
-        const up = await supabase.storage.from('pet-photos').upload(path, photoBlob, { contentType: 'image/jpeg', upsert: true });
-        if (up.error) throw up.error;
-        photoUrl = supabase.storage.from('pet-photos').getPublicUrl(path).data.publicUrl;
+        const up = await supabase.storage.from('report-photos').upload(path, photoBlob, { contentType: 'image/jpeg', upsert: true });
+        if (up.error) {
+          const fallback = await supabase.storage.from('pet-photos').upload(path, photoBlob, { contentType: 'image/jpeg', upsert: true });
+          if (fallback.error) throw fallback.error;
+          photoUrl = supabase.storage.from('pet-photos').getPublicUrl(path).data.publicUrl;
+        } else {
+          photoUrl = supabase.storage.from('report-photos').getPublicUrl(path).data.publicUrl;
+        }
       }
       const address = location.replace(/^Detected:\s*/i, '').trim();
       const { data, error } = await supabase.from('reports').insert({
@@ -374,6 +447,24 @@ export default function NewReportScreen() {
 
   const onCancel = () => router.back();
 
+  const photoButtons = Platform.OS === 'web' ? (
+    <View style={styles.photoActions}>
+      <WebFileBtn camera label="Take photo" onFile={applyWebFile} onError={(m) => onPhotoError(m)} />
+      <WebFileBtn camera={false} label="Choose from library" onFile={applyWebFile} onError={(m) => onPhotoError(m)} />
+    </View>
+  ) : (
+    <View style={styles.photoActions}>
+      <TouchableOpacity style={styles.photoBtn} onPress={() => applyPhoto(true)} activeOpacity={0.85}>
+        <Camera color={Colors.navy} size={16} />
+        <Text style={styles.photoBtnText}>Take photo</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.photoBtn} onPress={() => applyPhoto(false)} activeOpacity={0.85}>
+        <ImageIcon color={Colors.navy} size={16} />
+        <Text style={styles.photoBtnText}>Choose from library</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
   if (sent) {
     return (
       <SafeAreaView style={styles.container}>
@@ -430,7 +521,7 @@ export default function NewReportScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.col}>
-            {banner && step !== 4 ? (
+            {banner ? (
               <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />
             ) : null}
             {step === 1 && (
@@ -488,18 +579,10 @@ export default function NewReportScreen() {
                     <Camera color={Colors.textTertiary} size={26} />
                     <Text style={styles.dashTitle}>Add photo</Text>
                     <Text style={styles.dashSub}>AI identifies the animal automatically</Text>
+                    {photoButtons}
                   </View>
                 )}
-                <View style={styles.photoActions}>
-                  <TouchableOpacity style={styles.photoBtn} onPress={() => applyPhoto(true)} activeOpacity={0.85}>
-                    <Camera color={Colors.navy} size={16} />
-                    <Text style={styles.photoBtnText}>Take photo</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.photoBtn} onPress={() => applyPhoto(false)} activeOpacity={0.85}>
-                    <ImageIcon color={Colors.navy} size={16} />
-                    <Text style={styles.photoBtnText}>Choose from library</Text>
-                  </TouchableOpacity>
-                </View>
+                {photoUri ? photoButtons : null}
                 {photoError ? (
                   <View style={styles.photoErr}>
                     <Text style={styles.photoErrText}>{photoError}</Text>
@@ -623,7 +706,6 @@ export default function NewReportScreen() {
 
             {step === 4 && (
               <>
-                {banner ? <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} /> : null}
                 <Text style={styles.heroTitle}>Review & send</Text>
                 <View style={styles.reviewCard}>
                   <ReviewRow label="Type" value={selected?.label || ''} />
@@ -667,14 +749,12 @@ function LocationPreview({ lat, lng }: { lat: number; lng: number }) {
     <View style={styles.mapWrap}>
       <NearbyMap
         center={{ lat, lng }}
-        zoom={14}
+        zoom={16}
         radiusKm={0.3}
         pins={[]}
         onSelect={() => {}}
         mode="pin"
       />
-      <View pointerEvents="none" style={styles.mapRadius} />
-      <View pointerEvents="none" style={styles.mapPinDot} />
     </View>
   );
 }
@@ -727,15 +807,15 @@ const styles = StyleSheet.create({
     borderColor: Colors.borderInput,
     borderRadius: 16,
     backgroundColor: Colors.white,
-    paddingVertical: 22,
-    paddingHorizontal: 18,
+    paddingVertical: 18,
+    paddingHorizontal: 14,
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
     marginTop: 4,
   },
   dashTitle: { fontSize: FontSizes.md, fontFamily: INTERB, fontWeight: '700', color: Colors.text, marginTop: 4 },
-  dashSub: { fontSize: FontSizes.sm, fontFamily: INTER, color: Colors.textTertiary },
-  photoActions: { flexDirection: 'row', gap: 10 },
+  dashSub: { fontSize: FontSizes.sm, fontFamily: INTER, color: Colors.textTertiary, marginBottom: 4 },
+  photoActions: { flexDirection: 'row', gap: 10, width: '100%', marginTop: 4 },
   photoBtn: {
     flex: 1,
     flexDirection: 'row',
@@ -748,6 +828,8 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 12,
     paddingHorizontal: 8,
+    position: 'relative',
+    minHeight: 48,
   },
   photoBtnText: { fontSize: FontSizes.sm, fontFamily: INTERB, fontWeight: '700', color: Colors.navy },
   photoErr: { backgroundColor: Colors.criticalBg, borderRadius: 12, padding: 12 },
@@ -775,31 +857,7 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: FontSizes.sm, fontFamily: INTERB, fontWeight: '700', color: Colors.text, marginTop: 2 },
   input: { borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 14, fontSize: FontSizes.md, fontFamily: INTER, color: Colors.text, backgroundColor: Colors.white },
   textArea: { minHeight: 100, textAlignVertical: 'top' },
-  mapWrap: { height: 200, borderRadius: 16, overflow: 'hidden', backgroundColor: '#e6e9ee', position: 'relative' },
-  mapRadius: {
-    position: 'absolute',
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: 'rgba(232,90,80,0.18)',
-    borderWidth: 2,
-    borderColor: 'rgba(232,90,80,0.5)',
-    top: 30,
-    left: '50%',
-    marginLeft: -70,
-  },
-  mapPinDot: {
-    position: 'absolute',
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: Colors.coral,
-    borderWidth: 2.5,
-    borderColor: Colors.white,
-    top: 91,
-    left: '50%',
-    marginLeft: -9,
-  },
+  mapWrap: { height: 200, borderRadius: 16, overflow: 'hidden', backgroundColor: '#e6e9ee' },
   mapPlaceholder: {
     height: 180,
     borderRadius: 16,

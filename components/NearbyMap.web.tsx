@@ -22,6 +22,23 @@ function pinHtml(pin: NearbyPin, selected: boolean) {
   return `<div style="width:${size}px;height:${size}px;border-radius:${size / 2}px;background:${esc(pin.color)};color:#fff;font:700 ${font}px/${size}px Inter,system-ui,sans-serif;text-align:center;border:${selected ? 3 : 2}px solid #fff;box-shadow:0 1px 4px rgba(38,38,94,.35)">${esc(label)}</div>`;
 }
 
+function coralPin(L: any, group: any, lat: number, lng: number) {
+  L.circle([lat, lng], {
+    radius: PIN_HALO_METERS,
+    color: PIN_HALO_STROKE,
+    weight: 2,
+    fillColor: PIN_HALO_FILL,
+    fillOpacity: 1,
+  }).addTo(group);
+  L.circleMarker([lat, lng], {
+    radius: 8,
+    color: '#ffffff',
+    weight: 2.5,
+    fillColor: PIN_CORAL,
+    fillOpacity: 1,
+  }).addTo(group);
+}
+
 export default function NearbyMap(props: NearbyMapProps) {
   const host = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
@@ -45,7 +62,7 @@ export default function NearbyMap(props: NearbyMapProps) {
       if (!document.getElementById('ra-pin-css')) {
         const s = document.createElement('style');
         s.id = 'ra-pin-css';
-        s.textContent = '.ra-pin{background:none!important;border:none!important}';
+        s.textContent = '.ra-pin{background:none!important;border:none!important} .leaflet-marker-icon.leaflet-div-icon{background:none!important;border:none!important}';
         document.head.appendChild(s);
       }
       const mod = await import('leaflet');
@@ -81,23 +98,9 @@ export default function NearbyMap(props: NearbyMapProps) {
           fillColor: '#26265E',
           fillOpacity: 0.07,
         }).addTo(group);
-
-        L.circle([props.center.lat, props.center.lng], {
-          radius: PIN_HALO_METERS,
-          color: PIN_HALO_STROKE,
-          weight: 2,
-          fillColor: PIN_HALO_FILL,
-          fillOpacity: 1,
-        }).addTo(group);
-
-        L.circleMarker([props.center.lat, props.center.lng], {
-          radius: 8,
-          color: '#ffffff',
-          weight: 2.5,
-          fillColor: PIN_CORAL,
-          fillOpacity: 1,
-        }).addTo(group);
       }
+
+      coralPin(L, group, props.center.lat, props.center.lng);
 
       if (mode === 'nearby') {
         for (const pin of props.pins) {

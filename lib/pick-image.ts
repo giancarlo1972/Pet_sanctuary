@@ -10,8 +10,8 @@ export const PICKER_OPTS = {
 };
 
 export class PickImageError extends Error {
-  code: 'camera-denied' | 'library-denied';
-  constructor(code: 'camera-denied' | 'library-denied', message: string) {
+  code: 'camera-denied' | 'library-denied' | 'read';
+  constructor(code: 'camera-denied' | 'library-denied' | 'read', message: string) {
     super(message);
     this.code = code;
   }
@@ -22,6 +22,20 @@ export type PickedImage = {
   uri: string;
   dataUrl: string;
 };
+
+/** Compress a user-picked File/Blob to 1600px JPEG @ 0.6. */
+export async function imageFromFile(file: Blob): Promise<PickedImage> {
+  if (!file) throw new PickImageError('read', 'Could not read that picture.');
+  const blob = await compressImage(file);
+  const uri = typeof URL !== 'undefined' ? URL.createObjectURL(blob) : '';
+  try {
+    const dataUrl = await blobToDataUrl(blob);
+    return { blob, uri, dataUrl };
+  } catch (e: any) {
+    if (uri) URL.revokeObjectURL(uri);
+    throw new PickImageError('read', e?.message || 'Could not read that picture.');
+  }
+}
 
 function pickWebFile(capture: boolean): Promise<File | null> {
   if (typeof document === 'undefined') return Promise.resolve(null);
@@ -43,7 +57,7 @@ function pickWebFile(capture: boolean): Promise<File | null> {
     const onFocus = () => {
       setTimeout(() => {
         if (!input.files?.length) finish(null);
-      }, 500);
+      }, 600);
     };
     input.onchange = () => finish(input.files?.[0] || null);
     document.body.appendChild(input);
@@ -57,10 +71,7 @@ export async function pickImage(opts?: { camera?: boolean }): Promise<PickedImag
     if (Platform.OS === 'web') {
       const file = await pickWebFile(!!opts?.camera);
       if (!file) return null;
-      const blob = await compressImage(file);
-      const uri = URL.createObjectURL(blob);
-      const dataUrl = await blobToDataUrl(blob);
-      return { blob, uri, dataUrl };
+      return imageFromFile(file);
     }
 
     if (opts?.camera) {
@@ -78,14 +89,13 @@ export async function pickImage(opts?: { camera?: boolean }): Promise<PickedImag
     return nativeAsset(result.assets[0]);
   } catch (e: any) {
     if (e instanceof PickImageError) throw e;
-    throw new Error(e?.message || 'Could not read that picture.');
+    throw new PickImageError('read', e?.message || 'Could not read that picture.');
   }
 }
 
 async function nativeAsset(asset: ImagePicker.ImagePickerAsset): Promise<PickedImage> {
   const blob = await (await fetch(asset.uri)).blob();
-  const compressed = await compressImage(blob);
-  return { blob: compressed, uri: asset.uri, dataUrl: await blobToDataUrl(compressed) };
+  return imageFromFile(blob);
 }
 
 export function releasePicked(uri: string | null | undefined) {

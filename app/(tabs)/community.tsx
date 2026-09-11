@@ -326,6 +326,26 @@ export default function CommunityScreen() {
       console.log('[community] orgs query', ms, 'ms');
       if (error || !data) return;
       let rows = data.map(mapOrgRow);
+      try {
+        const rg = await fetch('/api/rescuegroups?state=NY').then((r) => r.json());
+        const have = new Set(rows.map((r) => String(r.name || '').toLowerCase()));
+        for (const o of rg.orgs || []) {
+          const name = String(o.name || '').trim();
+          if (!name || have.has(name.toLowerCase())) continue;
+          have.add(name.toLowerCase());
+          rows.push(mapOrgRow({
+            id: o.id,
+            name,
+            org_type: o.org_type,
+            city: o.city,
+            state: o.state,
+            logo_url: o.logo_url,
+            description: o.description,
+            status: 'approved',
+            data_source: 'rescuegroups',
+          }));
+        }
+      } catch { /* RescueGroups is additive */ }
       rows = await attachPetCounts(rows);
       orgPageRef.current = page;
       setOrgHasMore(rows.length === ORG_PAGE);

@@ -44,6 +44,8 @@ export default {
       eas: {
         projectId: "91f43285-0d15-4fba-b369-27e354a501bc",
       },
+      supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL || '',
+      supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '',
     },
     owner: "ruuma-tech",
   },

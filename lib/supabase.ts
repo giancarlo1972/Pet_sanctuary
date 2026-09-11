@@ -1,7 +1,18 @@
 import { createClient } from '@supabase/supabase-js';
+import Constants from 'expo-constants';
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'public-anon-key';
+const extra = (Constants.expoConfig?.extra ?? {}) as {
+  supabaseUrl?: string;
+  supabaseAnonKey?: string;
+};
+const supabaseUrl =
+  extra.supabaseUrl ||
+  process.env.EXPO_PUBLIC_SUPABASE_URL ||
+  'https://placeholder.supabase.co';
+const supabaseAnonKey =
+  extra.supabaseAnonKey ||
+  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
+  'public-anon-key';
 
 let actingHeaders: Record<string, string> = {};
 

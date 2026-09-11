@@ -469,7 +469,8 @@ export function harvestKnownFacts(text) {
   }
 
   const visitDate = detectVisitDate(src);
-  const clinic = detectClinic(src);
+  const exporting = detectExportingPractice(src);
+  const clinic = detectClinic(src, exporting);
   const vet = detectVet(src);
   const reason = detectReason(src);
   const findings = detectSection(src, /findings|assessment|physical exam/i);
@@ -524,14 +525,69 @@ export function detectVisitDate(src) {
   return slash ? toIso(slash[1]) : null;
 }
 
-export function detectClinic(src) {
-  const labeled = String(src || '').match(/(?:clinic|practice|facility|hospital)\s*[:.]\s*([^\n]{3,80})/i);
+const PASSING_CLINIC_LINE = /(?:copy\s*to|cc\s*:|referr(?:ed|al)|ordered\s+by|prior\s+history|previously\s+(?:seen|treated)|outside\s+(?:records?|lab))/i;
+const KNOWN_CLINIC_RE = /\b(At[- ]Home(?:\s+Veterinary)?|Bond Vet(?:\s+Hell'?s Kitchen)?|VEG(?:\s+Chelsea)?|VCA[^\n,]{0,40}|Banfield|BluePearl|ASPCA|Animal Medical)\b/i;
+
+function cleanClinicName(s) {
+  const name = String(s || '').replace(/\s+/g, ' ').trim().replace(/[.,;]+$/, '');
+  if (!name || /^(n\/?a|unknown|practice|clinic|medical chart|provider)$/i.test(name)) return null;
+  if (isValidVetName(name)) return null;
+  return name;
+}
+
+function stripPassingMentions(s) {
+  return String(s || '')
+    .split('\n')
+    .filter((line) => !PASSING_CLINIC_LINE.test(line) && !/^\s*practice\s*:/i.test(line))
+    .join('\n');
+}
+
+/** Letterhead / Medical Chart title / footer — never Service-block body or lab copy-to. */
+export function detectExportingPractice(text) {
+  const src = String(text || '');
+  const firstService = src.search(/Service on\s+\d{1,2}\/\d{1,2}/i);
+  let preamble = '';
+  if (firstService > 0) preamble = src.slice(0, firstService);
+  else if (firstService < 0) preamble = src.slice(0, 2000);
+  const foot = src.slice(Math.max(0, src.length - 1200));
+  const from = (chunk) => {
+    const clean = stripPassingMentions(chunk);
+    const chart = clean.match(/([A-Z][^\n]{2,70})\r?\n[^\n]{0,80}Medical Chart/i)
+      || clean.match(/Medical Chart[^\n]{0,40}\r?\n([A-Z][^\n]{2,70})/i);
+    if (chart) {
+      const n = cleanClinicName(chart[1]);
+      if (n) return n;
+    }
+    const labeled = clean.match(/(?:^|\n)\s*(?:clinic|facility|hospital)\s*[:.]\s*([^\n]{3,80})/i);
+    if (labeled) {
+      const n = cleanClinicName(labeled[1]);
+      if (n) return n;
+    }
+    const known = clean.match(KNOWN_CLINIC_RE);
+    return known ? known[0].replace(/\s+/g, ' ').trim() : null;
+  };
+  return from(preamble) || from(foot);
+}
+
+/** Only an explicit Provider: / Seen at: line in this block names another practice. */
+export function detectProviderOverride(block) {
+  const m = String(block || '').match(/(?:^|\n)\s*(?:provider|seen at)\s*[:.]\s*([^\n]{3,80})/i);
+  if (!m) return null;
+  return cleanClinicName(m[1]);
+}
+
+export function detectClinic(src, exportingPractice = null) {
+  const override = detectProviderOverride(src);
+  if (override) return override;
+  const labeled = String(src || '').match(/(?:^|\n)\s*(?:clinic|facility|hospital)\s*[:.]\s*([^\n]{3,80})/i);
   if (labeled) {
-    const name = labeled[1].replace(/\s+/g, ' ').trim();
-    if (name && !/^(n\/?a|unknown|practice|clinic)$/i.test(name)) return name;
+    const around = String(src || '').slice(Math.max(0, labeled.index - 24), labeled.index + labeled[0].length);
+    if (!PASSING_CLINIC_LINE.test(around)) {
+      const n = cleanClinicName(labeled[1]);
+      if (n) return n;
+    }
   }
-  const known = String(src || '').match(/\b(Bond Vet(?:\s+Hell'?s Kitchen)?|VEG(?:\s+Chelsea)?|VCA[^\n,]{0,40}|Banfield|BluePearl|ASPCA|Animal Medical|At[- ]Home(?:\s+Veterinary)?)\b/i);
-  return known ? known[0].replace(/\s+/g, ' ').trim() : null;
+  return exportingPractice || null;
 }
 
 export function detectReason(src) {
@@ -777,43 +833,30 @@ export function detectVet(src) {
 export function detectIdexxHeader(text) {
   const head = String(text || '').slice(0, 2500);
   const practice = head.match(/(?:practice|facility|hospital|clinic)\s*[:.]\s*([^\n]{3,80})/i);
-  let clinic = practice ? String(practice[1]).replace(/\s+/g, ' ').trim() : null;
-  if (clinic && /^(n\/?a|unknown|practice|clinic)$/i.test(clinic)) clinic = null;
-  clinic = clinic || detectClinic(head);
-  const ordered = head.match(/ordered\s+by\s*[:.]?\s*([^\n]{3,80})/i)
-    || head.match(/(?:ordering|requesting)\s+(?:veterinarian|provider|doctor|vet)\s*[:.]?\s*([^\n]{3,80})/i);
-  const orderedBlob = ordered ? `${ordered[0]} ${ordered[1] || ''}` : '';
-  const vet = ordered ? (detectVet(orderedBlob) || detectVet(ordered[1] || '')) : null;
+  // Practice:/Ordered by on an IDEXX sheet are copy-to / requester, not the visit clinic.
   const collected = head.match(/(?:collected|drawn|taken|specimen|order(?:ed)?(?:\s+date)?|reported)\s*(?:on)?\s*[:.]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
   const date = collected ? (toIso(collected[1]) || monthEndIso(collected[1])) : detectVisitDate(head);
-  return { clinic: clinic || null, vet: vet || null, date: date || null };
+  return { clinic: null, vet: null, date: date || null, practice: practice ? cleanClinicName(practice[1]) : null };
 }
 
 export function latestVisit(visits) {
   return (visits || []).slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).find((v) => v && (v.date || v.clinic)) || null;
 }
 
-function applyLabSegmentHeader(seg, visitBlocks) {
+function applyLabSegmentHeader(seg, visitBlocks, exporting = null) {
   const hdr = detectIdexxHeader(seg.text);
   const date = hdr.date || seg.date || null;
   const precedingSameDate = visitBlocks.filter((v) => (v.start || 0) <= (seg.start || 0) && date && v.date === date);
   const match = precedingSameDate.length ? precedingSameDate[precedingSameDate.length - 1] : null;
-  // Clinic + vet are a tuple from ONE source. Never mix Ordered-by from At Home
-  // with a BondVet visit, or inherit the last segment seen.
-  if (hdr.clinic) {
-    seg.clinic = hdr.clinic;
-    seg.vet = hdr.vet || null;
-    seg.date = date || match?.date || null;
-    return;
-  }
+  // Never take clinic/vet from IDEXX Practice / Ordered by / copy-to.
   if (match) {
-    seg.clinic = match.clinic || null;
+    seg.clinic = match.clinic || exporting || null;
     seg.vet = match.vet || null;
     seg.date = match.date || date || null;
     return;
   }
-  seg.clinic = null;
-  seg.vet = hdr.vet || null;
+  seg.clinic = exporting || null;
+  seg.vet = null;
   seg.date = date || null;
 }
 
@@ -846,6 +889,7 @@ export function classifySegment(seg) {
 
 export function segment(text) {
   const src = String(text || '');
+  const exporting = detectExportingPractice(src);
   const hits = [];
   for (const marker of SEGMENT_MARKERS) {
     const re = new RegExp(marker.re.source, marker.re.flags);
@@ -868,7 +912,7 @@ export function segment(text) {
   if (!collapsed.length) {
     const one = {
       type: classifySegment({ text: src }),
-      clinic: detectClinic(src),
+      clinic: detectClinic(src, exporting),
       vet: detectVet(src),
       date: detectVisitDate(src),
       text: src,
@@ -882,7 +926,7 @@ export function segment(text) {
     const pre = src.slice(0, collapsed[0].index);
     segs.push({
       type: 'identity',
-      clinic: detectClinic(pre),
+      clinic: detectClinic(pre, exporting),
       vet: detectVet(pre),
       date: detectVisitDate(pre),
       text: pre,
@@ -895,7 +939,7 @@ export function segment(text) {
     const body = src.slice(h.index, end);
     segs.push({
       type: h.type,
-      clinic: detectClinic(body),
+      clinic: detectClinic(body, exporting),
       vet: detectVet(body),
       date: h.date || detectVisitDate(body),
       text: body,
@@ -907,12 +951,12 @@ export function segment(text) {
     s.type = classifySegment(s);
     const isVisitBoundary = s.type === 'visit' || /service on/i.test((s.text || '').slice(0, 40));
     if (isVisitBoundary) {
-      s.clinic = detectClinic(s.text) || null;
+      s.clinic = detectClinic(s.text, exporting);
       s.vet = detectVet(s.text) || null;
       s.date = s.date || detectVisitDate(s.text);
       visitBlocks.push({ clinic: s.clinic, vet: s.vet, date: s.date, start: s.start || 0 });
     } else if (s.type === 'labs') {
-      applyLabSegmentHeader(s, visitBlocks);
+      applyLabSegmentHeader(s, visitBlocks, exporting);
     } else if (visitBlocks.length) {
       const open = visitBlocks[visitBlocks.length - 1];
       if ((s.start || 0) >= (open.start || 0) && s.type !== 'weights' && s.type !== 'reminders' && s.type !== 'identity') {
@@ -921,6 +965,7 @@ export function segment(text) {
         if (!s.date) s.date = open.date;
       }
     }
+    if (!s.clinic) s.clinic = exporting || null;
   }
   return segs;
 }
@@ -931,14 +976,14 @@ export function inheritSegmentHeader(rows, seg) {
   const vet = normalizeVetName(seg?.vet);
   for (const l of rows.labs || []) {
     if (date && !l.collected_on) l.collected_on = date;
-    if (clinic && !l.clinic) l.clinic = clinic;
+    if (clinic) l.clinic = clinic;
     l.vet = normalizeVetName(l.vet) || vet || null;
   }
   for (const w of rows.weights || []) {
     if (date && !w.measured_on) w.measured_on = date;
   }
   for (const v of rows.vaccinations || []) {
-    if (clinic && !v.clinic) v.clinic = clinic;
+    if (clinic) v.clinic = clinic;
     v.vet = normalizeVetName(v.vet) || vet || null;
     if (v.next_due && !v.given && !v.administered_on && String(v.status || '').toLowerCase() !== 'overdue') {
       v.status = STATUS_CURRENT_UNKNOWN;
@@ -946,12 +991,12 @@ export function inheritSegmentHeader(rows, seg) {
   }
   for (const vis of rows.visits || []) {
     if (date && !vis.date) vis.date = date;
-    if (clinic && !vis.clinic) vis.clinic = clinic;
+    if (clinic) vis.clinic = clinic;
     vis.vet = normalizeVetName(vis.vet) || vet || null;
   }
   for (const e of rows.exams || []) {
     if (date && !e.visit_date) e.visit_date = date;
-    if (clinic && !e.clinic) e.clinic = clinic;
+    if (clinic) e.clinic = clinic;
     e.vet = normalizeVetName(e.vet) || vet || null;
   }
   return rows;
@@ -1244,7 +1289,10 @@ export function pipelineCode(text) {
   return merged;
 }
 
-export const GINA_CLINIC_FIXTURE = `Patient Information
+export const GINA_CLINIC_FIXTURE = `At Home Veterinary
+Medical Chart
+
+Patient Information
 Gina  Female  Spayed  Date of Birth 6/15/2020
 Microchip 981020000000001
 
@@ -1258,20 +1306,19 @@ Rabies 8/12/2026
 FVRCP 11/7/2026
 
 Service on 9/2/2026
-At Home Veterinary
 Jonathan Leshanski DVM
 Temp 101.2 F  HR 180  RR 28  BCS 8
 Assessment: doing well
 Plan: continue current diet
 
 Service on 8/7/2026
-Bond Vet Hell's Kitchen
+Jonathan Leshanski DVM
 Inventory Item PUREVAX Rabies Feline 3 year
 Given 8/7/2026 lot 12345 SC over right hind
 Assessment: wellness vaccines
+Copy to: Bond Vet Hell's Kitchen
 
 Service on 5/2/2026
-At Home Veterinary
 Jonathan Leshanski DVM
 weight 8.2 lb
 Vomiting overnight

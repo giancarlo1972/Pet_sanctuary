@@ -115,12 +115,12 @@ async function fileToDataUrl(uri: string): Promise<string> {
 type Tab = 'overview' | 'health' | 'lifestyle' | 'insurance' | 'documents' | 'clinics';
 
 const GINA_WEIGHT_SEED: { weight_lb: number; measured_on: string; source: string; bcs: number }[] = [
-  { weight_lb: 16.2, measured_on: '2023-09-06', source: 'Bond Vet', bcs: 6 },
-  { weight_lb: 16.5, measured_on: '2023-09-20', source: 'Bond Vet', bcs: 6 },
-  { weight_lb: 16.9, measured_on: '2023-10-18', source: 'Bond Vet', bcs: 6 },
-  { weight_lb: 17.4, measured_on: '2024-03-12', source: 'Bond Vet', bcs: 7 },
-  { weight_lb: 18.1, measured_on: '2025-04-08', source: 'Bond Vet', bcs: 8 },
-  { weight_lb: 18.48, measured_on: '2026-08-06', source: 'At-home Vet', bcs: 8 },
+  { weight_lb: 16.2, measured_on: '2023-09-06', source: 'At Home Veterinary', bcs: 6 },
+  { weight_lb: 16.5, measured_on: '2023-09-20', source: 'At Home Veterinary', bcs: 6 },
+  { weight_lb: 16.9, measured_on: '2023-10-18', source: 'At Home Veterinary', bcs: 6 },
+  { weight_lb: 17.4, measured_on: '2024-03-12', source: 'At Home Veterinary', bcs: 7 },
+  { weight_lb: 18.1, measured_on: '2025-04-08', source: 'At Home Veterinary', bcs: 8 },
+  { weight_lb: 18.48, measured_on: '2026-08-06', source: 'At Home Veterinary', bcs: 8 },
   { weight_lb: 18.48, measured_on: '2026-09-02', source: 'Home scale', bcs: 8 },
 ];
 

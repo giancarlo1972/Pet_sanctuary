@@ -19,6 +19,8 @@ import {
   parseReminders,
   parseInventoryVaccines,
   STATUS_CURRENT_UNKNOWN,
+  detectExportingPractice,
+  detectProviderOverride,
 } from './clinic-export.js';
 
 describe('Aurora visit harvest', () => {
@@ -139,17 +141,14 @@ describe('pipeline — Gina clinic export fixture', () => {
     assert.equal(segs.filter((s) => s.type === 'visit').length, 3, types.join(','));
   });
 
-  it('does not leak BondVet into At Home, and never pairs Leshanski with BondVet', () => {
-    const atHome = segs.filter((s) => s.type === 'visit' && /At Home/i.test(String(s.clinic || '')));
-    assert.ok(atHome.length >= 2, JSON.stringify(segs.map((s) => ({ type: s.type, clinic: s.clinic, vet: s.vet, date: s.date }))));
-    for (const v of atHome) {
-      assert.doesNotMatch(String(v.clinic), /Bond/i);
-      assert.match(String(v.vet), /Leshanski/i);
+  it('does not leak BondVet into At Home — every Service on is the exporting practice', () => {
+    const visits = segs.filter((s) => s.type === 'visit');
+    assert.equal(visits.length, 3, JSON.stringify(segs.map((s) => ({ type: s.type, clinic: s.clinic, date: s.date }))));
+    for (const v of visits) {
+      assert.match(String(v.clinic), /At Home/i);
+      assert.doesNotMatch(String(v.clinic || ''), /Bond/i);
     }
-    const bond = segs.find((s) => s.type === 'visit' && /Bond/i.test(String(s.clinic || '')));
-    assert.ok(bond, 'missing Bond Vet visit');
-    assert.equal(bond.date, '2026-08-07');
-    assert.doesNotMatch(String(bond.vet || ''), /Leshanski/i);
+    assert.equal(detectExportingPractice(GINA_CLINIC_FIXTURE), 'At Home Veterinary');
     const sep2 = segs.find((s) => s.type === 'visit' && s.date === '2026-09-02');
     assert.ok(sep2);
     assert.match(String(sep2.clinic), /At Home/i);
@@ -165,20 +164,21 @@ describe('pipeline — Gina clinic export fixture', () => {
     assert.equal(latest.measured_on, '2026-08-07');
   });
 
-  it('grounds Rabies given 8/7; ALT 190 is BondVet 8/7 with no Leshanski', () => {
-    const bond = out.visits.find((v) => v.date === '2026-08-07') || out.visits.find((v) => /Bond/i.test(v.clinic || ''));
-    assert.ok(bond);
-    assert.doesNotMatch(String(bond.vet || ''), /Leshanski/i);
+  it('8/7 is At Home Veterinary · PUREVAX Rabies given · ALT 190', () => {
+    const v87 = out.visits.find((v) => v.date === '2026-08-07');
+    assert.ok(v87, JSON.stringify(out.visits));
+    assert.match(String(v87.clinic), /At Home/i);
+    assert.doesNotMatch(String(v87.clinic || ''), /Bond/i);
     const rabies = out.vaccinations.find((v) => /rabies/i.test(v.name) && (v.given === '2026-08-07' || v.administered_on === '2026-08-07'));
     assert.ok(rabies, JSON.stringify(out.vaccinations));
-    assert.notEqual(rabies.given, '2026-08-12');
-    assert.doesNotMatch(String(rabies.vet || ''), /Leshanski/i);
+    assert.match(String(rabies.clinic), /At Home/i);
+    assert.doesNotMatch(String(rabies.clinic || ''), /Bond/i);
     const alt = out.labs.find((l) => String(l.analyte).toUpperCase() === 'ALT');
     assert.ok(alt, JSON.stringify(out.labs));
     assert.equal(String(alt.value), '190');
     assert.equal(alt.collected_on, '2026-08-07');
-    assert.match(String(alt.clinic), /Bond Vet/i);
-    assert.doesNotMatch(String(alt.vet || ''), /Leshanski/i);
+    assert.match(String(alt.clinic), /At Home/i);
+    assert.doesNotMatch(String(alt.clinic || ''), /Bond/i);
   });
 
   it('latest visit is At Home Veterinary · 2026-09-02 with Leshanski', () => {
@@ -193,12 +193,12 @@ describe('pipeline — Gina clinic export fixture', () => {
     assert.match(String(out.vet), /Leshanski/i);
   });
 
-  it('IDEXX after a later At Home visit still maps to the same-date BondVet Service on', () => {
+  it('IDEXX Practice/Ordered by Bond is a passing mention, not the lab clinic', () => {
     const labSeg = segs.find((s) => s.type === 'labs');
     assert.ok(labSeg, JSON.stringify(segs.map((s) => s.type)));
-    assert.match(String(labSeg.clinic), /Bond Vet/i);
+    assert.match(String(labSeg.clinic), /At Home/i);
+    assert.doesNotMatch(String(labSeg.clinic || ''), /Bond/i);
     assert.equal(labSeg.date, '2026-08-07');
-    assert.doesNotMatch(String(labSeg.vet || ''), /Leshanski/i);
   });
 
   it('verify rejects a Rabies given date that is not in the visit segment', () => {
@@ -207,32 +207,58 @@ describe('pipeline — Gina clinic export fixture', () => {
     assert.ok(bad.ungrounded.length >= 1, JSON.stringify(bad));
   });
 
-  it('IDEXX without a practice line uses the nearest same-date Service on, not the last visit', () => {
-    const text = `Service on 8/7/2026
-Bond Vet Hell's Kitchen
+  it('copy-to / Practice Bond never set clinic; Provider:/Seen at: does', () => {
+    const text = `At Home Veterinary
+Medical Chart
+
+Service on 8/7/2026
+Jonathan Leshanski DVM
 Inventory Item PUREVAX Rabies Feline 3 year
 Given 8/7/2026
+Copy to: Bond Vet Hell's Kitchen
 
 Service on 9/2/2026
-At Home Veterinary
 Jonathan Leshanski DVM
 Assessment: doing well
 
 IDEXX Reference Laboratories
+Practice: Bond Vet Hell's Kitchen
+Ordered by: Bond Vet
 Collected: 8/7/2026
 TEST RESULT  REFERENCE RANGE
 ALT 190 H 12-130
 `;
     const lab = segment(text).find((s) => s.type === 'labs');
     assert.ok(lab);
-    assert.match(String(lab.clinic), /Bond Vet/i);
+    assert.match(String(lab.clinic), /At Home/i);
+    assert.doesNotMatch(String(lab.clinic || ''), /Bond/i);
     assert.equal(lab.date, '2026-08-07');
-    assert.doesNotMatch(String(lab.vet || ''), /Leshanski/i);
-    const alt = pipelineCode(text).labs.find((l) => String(l.analyte).toUpperCase() === 'ALT');
+    const out2 = pipelineCode(text);
+    const alt = out2.labs.find((l) => String(l.analyte).toUpperCase() === 'ALT');
     assert.ok(alt);
-    assert.match(String(alt.clinic), /Bond Vet/i);
-    assert.doesNotMatch(String(alt.vet || ''), /Leshanski/i);
+    assert.match(String(alt.clinic), /At Home/i);
+    assert.doesNotMatch(String(alt.clinic || ''), /Bond/i);
     assert.equal(alt.collected_on, '2026-08-07');
+    const v87 = out2.visits.find((v) => v.date === '2026-08-07');
+    assert.match(String(v87?.clinic), /At Home/i);
+
+    const seen = `At Home Veterinary
+Medical Chart
+Service on 8/7/2026
+Seen at: VEG Chelsea
+Inventory Item PUREVAX Rabies Feline 3 year
+Given 8/7/2026
+`;
+    assert.equal(detectProviderOverride(seen), 'VEG Chelsea');
+    const vis = segment(seen).find((s) => s.type === 'visit');
+    assert.match(String(vis.clinic), /VEG Chelsea/i);
+    const provider = `At Home Veterinary
+Medical Chart
+Service on 8/7/2026
+Provider: Banfield
+Assessment: wellness
+`;
+    assert.match(String(segment(provider).find((s) => s.type === 'visit').clinic), /Banfield/i);
   });
 
   it('Reminders table is next_due only; inventory given is 8/7', () => {
@@ -303,7 +329,7 @@ describe('given vs due', () => {
 
   it('inventory given only from Service on + Inventory Item', () => {
     const given = parseInventoryVaccines(
-      `Service on 8/7/2026\nBond Vet Hell's Kitchen\nInventory Item PUREVAX Rabies Feline 3 year\nGiven 8/7/2026`,
+      `Service on 8/7/2026\nAt Home Veterinary\nInventory Item PUREVAX Rabies Feline 3 year\nGiven 8/7/2026`,
       '2026-08-07',
     );
     assert.equal(given.length, 1);

@@ -12,7 +12,7 @@
     "@expo-google-fonts/inter": "^0.2.3",
     "@expo/vector-icons": "~14.0.4",
     "@opentelemetry/api": "1.9.0",
-    "@supabase/supabase-js": "2.45.4",
+    "@supabase/supabase-js": "2.116.0",
     "expo": "~52.0.30",
     "expo-build-properties": "~0.13.3",
     "expo-constants": "~17.0.3",

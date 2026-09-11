@@ -122,22 +122,30 @@ describe('pipeline — Gina clinic export fixture', () => {
   const segs = segment(GINA_CLINIC_FIXTURE);
   const out = pipelineCode(GINA_CLINIC_FIXTURE);
 
-  it('splits Patient Information, Weight History, Reminders, and each Service on', () => {
+  it('splits Patient Information, Weight History, Reminders, each Service on, and IDEXX', () => {
     const types = segs.map((s) => s.type);
     assert.ok(types.includes('identity'), types.join(','));
     assert.ok(types.includes('weights'), types.join(','));
     assert.ok(types.includes('reminders'), types.join(','));
-    assert.equal(segs.filter((s) => s.type === 'visit').length, 2, types.join(','));
+    assert.ok(types.includes('labs'), types.join(','));
+    assert.equal(segs.filter((s) => s.type === 'visit').length, 3, types.join(','));
   });
 
-  it('does not leak BondVet into the At Home visit', () => {
-    const atHome = segs.find((s) => s.type === 'visit' && s.date === '2026-05-02');
-    assert.ok(atHome, JSON.stringify(segs.map((s) => ({ type: s.type, clinic: s.clinic, date: s.date }))));
-    assert.match(String(atHome.clinic), /At Home/i);
-    assert.doesNotMatch(String(atHome.clinic), /Bond/i);
-    const bond = segs.find((s) => s.type === 'visit' && s.date === '2026-08-07');
-    assert.match(String(bond.clinic), /Bond Vet/i);
-    assert.match(String(bond.vet), /Leshanski/i);
+  it('does not leak BondVet into At Home, and never pairs Leshanski with BondVet', () => {
+    const atHome = segs.filter((s) => s.type === 'visit' && /At Home/i.test(String(s.clinic || '')));
+    assert.ok(atHome.length >= 2, JSON.stringify(segs.map((s) => ({ type: s.type, clinic: s.clinic, vet: s.vet, date: s.date }))));
+    for (const v of atHome) {
+      assert.doesNotMatch(String(v.clinic), /Bond/i);
+      assert.match(String(v.vet), /Leshanski/i);
+    }
+    const bond = segs.find((s) => s.type === 'visit' && /Bond/i.test(String(s.clinic || '')));
+    assert.ok(bond, 'missing Bond Vet visit');
+    assert.equal(bond.date, '2026-08-07');
+    assert.doesNotMatch(String(bond.vet || ''), /Leshanski/i);
+    const sep2 = segs.find((s) => s.type === 'visit' && s.date === '2026-09-02');
+    assert.ok(sep2);
+    assert.match(String(sep2.clinic), /At Home/i);
+    assert.match(String(sep2.vet), /Leshanski/i);
   });
 
   it('parses Weight History in code (3 points, latest 18.48)', () => {
@@ -149,21 +157,73 @@ describe('pipeline — Gina clinic export fixture', () => {
     assert.equal(latest.measured_on, '2026-08-07');
   });
 
-  it('grounds Rabies given 8/7 not reminder 8/12; ALT 190 on BondVet visit', () => {
+  it('grounds Rabies given 8/7; ALT 190 is BondVet 8/7 with no Leshanski', () => {
     const bond = out.visits.find((v) => v.date === '2026-08-07') || out.visits.find((v) => /Bond/i.test(v.clinic || ''));
     assert.ok(bond);
+    assert.doesNotMatch(String(bond.vet || ''), /Leshanski/i);
     const rabies = out.vaccinations.find((v) => /rabies/i.test(v.name) && (v.given === '2026-08-07' || v.administered_on === '2026-08-07'));
     assert.ok(rabies, JSON.stringify(out.vaccinations));
     assert.notEqual(rabies.given, '2026-08-12');
+    assert.doesNotMatch(String(rabies.vet || ''), /Leshanski/i);
     const alt = out.labs.find((l) => String(l.analyte).toUpperCase() === 'ALT');
     assert.ok(alt, JSON.stringify(out.labs));
     assert.equal(String(alt.value), '190');
     assert.equal(alt.collected_on, '2026-08-07');
+    assert.match(String(alt.clinic), /Bond Vet/i);
+    assert.doesNotMatch(String(alt.vet || ''), /Leshanski/i);
+  });
+
+  it('latest visit is At Home Veterinary · 2026-09-02 with Leshanski', () => {
+    const latest = out.visits.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))[0];
+    assert.ok(latest);
+    assert.equal(latest.date, '2026-09-02');
+    assert.match(String(latest.clinic), /At Home/i);
+    assert.match(String(latest.vet), /Leshanski/i);
+    assert.doesNotMatch(String(latest.clinic), /Bond/i);
+    assert.equal(out.date, '2026-09-02');
+    assert.match(String(out.clinic), /At Home/i);
+    assert.match(String(out.vet), /Leshanski/i);
+  });
+
+  it('IDEXX after a later At Home visit still maps to the same-date BondVet Service on', () => {
+    const labSeg = segs.find((s) => s.type === 'labs');
+    assert.ok(labSeg, JSON.stringify(segs.map((s) => s.type)));
+    assert.match(String(labSeg.clinic), /Bond Vet/i);
+    assert.equal(labSeg.date, '2026-08-07');
+    assert.doesNotMatch(String(labSeg.vet || ''), /Leshanski/i);
   });
 
   it('verify rejects a Rabies given date that is not in the visit segment', () => {
     const visit = segs.find((s) => s.type === 'visit' && s.date === '2026-08-07');
     const bad = verify(visit, { vaccinations: [{ name: 'Rabies', given: '2026-08-12', administered_on: '2026-08-12' }], labs: [], weights: [] });
     assert.ok(bad.ungrounded.length >= 1, JSON.stringify(bad));
+  });
+
+  it('IDEXX without a practice line uses the nearest same-date Service on, not the last visit', () => {
+    const text = `Service on 8/7/2026
+Bond Vet Hell's Kitchen
+Inventory Item PUREVAX Rabies Feline 3 year
+Given 8/7/2026
+
+Service on 9/2/2026
+At Home Veterinary
+Jonathan Leshanski DVM
+Assessment: doing well
+
+IDEXX Reference Laboratories
+Collected: 8/7/2026
+TEST RESULT  REFERENCE RANGE
+ALT 190 H 12-130
+`;
+    const lab = segment(text).find((s) => s.type === 'labs');
+    assert.ok(lab);
+    assert.match(String(lab.clinic), /Bond Vet/i);
+    assert.equal(lab.date, '2026-08-07');
+    assert.doesNotMatch(String(lab.vet || ''), /Leshanski/i);
+    const alt = pipelineCode(text).labs.find((l) => String(l.analyte).toUpperCase() === 'ALT');
+    assert.ok(alt);
+    assert.match(String(alt.clinic), /Bond Vet/i);
+    assert.doesNotMatch(String(alt.vet || ''), /Leshanski/i);
+    assert.equal(alt.collected_on, '2026-08-07');
   });
 });

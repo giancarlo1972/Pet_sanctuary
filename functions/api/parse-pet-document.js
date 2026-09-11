@@ -8,6 +8,7 @@ import {
   harvestKnownFacts,
   reconcileVaxDates,
   inheritVisitDate,
+  latestVisit,
   itemsTrulyUndated,
   segment,
   classifySegment,
@@ -199,6 +200,8 @@ const EXTRACTION_SCHEMA = {
           ref_high: NULLABLE_NUM,
           flag: NULLABLE_STR,
           collected_on: NULLABLE_STR,
+          clinic: NULLABLE_STR,
+          vet: NULLABLE_STR,
           prior_value: NULLABLE_NUM,
           prior_date: NULLABLE_STR,
           group: NULLABLE_STR,
@@ -408,6 +411,8 @@ function normalizeLab(l) {
     ref_low: l?.ref_low ?? null,
     ref_high: l?.ref_high ?? null,
     collected_on: l?.collected_on || l?.date || l?.taken_on || null,
+    clinic: l?.clinic || l?.clinic_name || null,
+    vet: l?.vet || l?.vet_name || l?.veterinarian || null,
     prior_value: l?.prior_value ?? null,
     prior_date: l?.prior_date || null,
     group: l?.group || null,
@@ -629,10 +634,12 @@ function shapeParsed(parsed) {
     .map(normalizeWeight)
     .filter(Boolean);
   const visits = (Array.isArray(parsed.visits) ? parsed.visits : []).map(normalizeVisit).filter(Boolean);
+  const latest = latestVisit(visits);
   const shaped = {
     ...parsed,
-    date: parsed.date || visits.find((v) => v.date)?.date || null,
-    clinic: parsed.clinic || visits.find((v) => v.clinic)?.clinic || null,
+    date: parsed.date || latest?.date || null,
+    clinic: parsed.clinic || latest?.clinic || null,
+    vet: parsed.vet || latest?.vet || null,
     vaccinations,
     labs,
     weights,
@@ -646,7 +653,7 @@ function shapeParsed(parsed) {
     lifestyle: parsed.lifestyle || null,
     identity: parsed.identity || null,
   };
-  inheritVisitDate(shaped, shaped.date);
+  if (visits.filter((v) => v && v.date).length <= 1) inheritVisitDate(shaped, shaped.date);
   shaped.undated = collectUndated(shaped);
   const trends = trendLines(labs);
   if (trends.length) {
@@ -870,7 +877,11 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
 
   const recAll = reconcileVaxDates(text, merged.vaccinations);
   merged.vaccinations = recAll.vaccinations;
-  inheritVisitDate(merged, merged.visits[0]?.date || segs[0]?.date || harvested.date);
+  const latest = latestVisit(merged.visits);
+  const datedVisits = (merged.visits || []).filter((v) => v && v.date);
+  if (datedVisits.length <= 1) {
+    inheritVisitDate(merged, latest?.date || segs[0]?.date || harvested.date);
+  }
 
   const dedupeVax = [];
   const seenV = new Set();
@@ -903,8 +914,9 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
     vitals_series: merged.vitals_series.length ? merged.vitals_series : parseFlowsheet(text),
     lifestyle: merged.lifestyle,
     identity: merged.identity,
-    date: visits[0]?.date || harvested.date || segs[0]?.date || null,
-    clinic: visits[0]?.clinic || harvested.clinic || segs[0]?.clinic || null,
+    date: latest?.date || harvested.date || segs[0]?.date || null,
+    clinic: latest?.clinic || (datedVisits.length <= 1 ? (harvested.clinic || segs[0]?.clinic || null) : null),
+    vet: latest?.vet || null,
     ai_note: `${segs.length} segments · ${weights.length} weights · ${dedupeVax.length} vaccines · ${dedupeLabs.length} labs`,
     undated: [],
   });

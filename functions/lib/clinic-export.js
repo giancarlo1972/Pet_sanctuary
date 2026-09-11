@@ -133,9 +133,13 @@ export function parseLabTables(text) {
   }
   const harvested = harvestKnownFacts(text);
   for (const l of harvested.labs) {
-    if (!labs.some((x) => String(x.analyte).toLowerCase() === String(l.analyte).toLowerCase() && String(x.value) === String(l.value))) {
-      labs.push(l);
+    const existing = labs.find((x) => String(x.analyte).toLowerCase() === String(l.analyte).toLowerCase() && String(x.value) === String(l.value));
+    if (existing) {
+      if (!existing.collected_on && l.collected_on) existing.collected_on = l.collected_on;
+      if (!existing.clinic && l.clinic) existing.clinic = l.clinic;
+      continue;
     }
+    labs.push(l);
   }
   return labs;
 }
@@ -436,7 +440,7 @@ export function harvestKnownFacts(text) {
     });
   }
 
-  const wRe = /(\d{1,2}\/\d{1,2}\/\d{2,4})?[^\n]{0,12}\b(\d{1,2}(?:\.\d{1,2})?)\s*(lb|lbs|kg)\b/gi;
+  const wRe = /(\d{1,2}\/\d{1,2}\/\d{2,4})?[^\n]{0,12}(?<![\d.])(\d{1,2}(?:\.\d{1,2})?)\s*(lb|lbs|kg)\b/gi;
   while ((m = wRe.exec(src.slice(0, 12000)))) {
     const n = parseFloat(m[2]);
     if (n < 1 || n > 200) continue;
@@ -445,12 +449,7 @@ export function harvestKnownFacts(text) {
 
   const visitDate = detectVisitDate(src);
   const clinic = detectClinic(src);
-  const vets = [];
-  const vetRe = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s*,?\s*(DVM|VMD)\b/g;
-  let vm;
-  while ((vm = vetRe.exec(src.slice(0, 8000)))) vets.push(`${vm[1]} ${vm[2]}`);
-  const dr = src.match(/\bDr\.?\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/);
-  if (dr) vets.push(`Dr. ${dr[1]}`);
+  const vet = detectVet(src);
   const reason = detectReason(src);
   const findings = detectSection(src, /findings|assessment|physical exam/i);
   const plan = detectSection(src, /plan|recommendations?|follow[- ]up/i);
@@ -462,8 +461,8 @@ export function harvestKnownFacts(text) {
     visits.push({
       date: visitDate,
       clinic,
-      vet: vets[0] || null,
-      vets,
+      vet,
+      vets: vet ? [vet] : [],
       reason,
       findings,
       plan,
@@ -493,7 +492,9 @@ export function monthEndIso(s) {
 }
 
 export function detectVisitDate(src) {
-  const head = String(src || '').slice(0, 2500);
+  const head = String(src || '').slice(0, 2500)
+    .replace(/date of birth[^\n]*/gi, '')
+    .replace(/\bDOB\b[^\n]*/gi, '');
   const labeled = head.match(/(?:service on|visit date|exam date|date of (?:visit|exam|service)|date)\s*[:.]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
   if (labeled) return toIso(labeled[1]) || monthEndIso(labeled[1]);
   const named = head.match(/\b([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\b/);
@@ -503,9 +504,12 @@ export function detectVisitDate(src) {
 }
 
 export function detectClinic(src) {
-  const labeled = String(src || '').match(/clinic\s*[:.]\s*([^\n]{3,60})/i);
-  if (labeled) return labeled[1].replace(/\s+/g, ' ').trim();
-  const known = String(src || '').match(/\b(Bond Vet(?:\s+Hell'?s Kitchen)?|VEG(?:\s+Chelsea)?|VCA[^\n,]{0,30}|Banfield|BluePearl|ASPCA|Animal Medical|At[- ]home(?:\s+veterinary)?)\b/i);
+  const labeled = String(src || '').match(/(?:clinic|practice|facility|hospital)\s*[:.]\s*([^\n]{3,80})/i);
+  if (labeled) {
+    const name = labeled[1].replace(/\s+/g, ' ').trim();
+    if (name && !/^(n\/?a|unknown|practice|clinic)$/i.test(name)) return name;
+  }
+  const known = String(src || '').match(/\b(Bond Vet(?:\s+Hell'?s Kitchen)?|VEG(?:\s+Chelsea)?|VCA[^\n,]{0,40}|Banfield|BluePearl|ASPCA|Animal Medical|At[- ]Home(?:\s+Veterinary)?)\b/i);
   return known ? known[0].replace(/\s+/g, ' ').trim() : null;
 }
 
@@ -677,7 +681,7 @@ export function reconcileVaxDates(text, vaccinations) {
     if (!hits.length) return v;
     const givenDates = hits.filter((h) => h.givenish && !h.dueish).flatMap((h) => h.dates);
     const noteDates = hits.flatMap((h) => h.dates);
-    const preferred = givenDates[0] || (hits.length === 1 && hits[0].dates.length === 1 && !hits[0].dueish ? hits[0].dates[0] : null);
+    const preferred = givenDates[0] || null;
     if (preferred && v.given && preferred !== v.given) {
       mismatches.push({ kind: 'vaccine_date', mention: `${product} structured ${v.given} but note has ${preferred}` });
       return { ...v, given: preferred, administered_on: preferred, date: preferred };
@@ -718,12 +722,59 @@ Plan: follow-up vaccination in 3 weeks, fecal pending
 export function detectVet(src) {
   const text = String(src || '').slice(0, 8000);
   const vets = [];
-  const vetRe = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s*,?\s*(DVM|VMD)\b/g;
+  const vetRe = /\b([A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+){0,2})[ \t]*,?[ \t]*(DVM|VMD)\b/g;
   let vm;
-  while ((vm = vetRe.exec(text))) vets.push(`${vm[1]} ${vm[2]}`);
-  const dr = text.match(/\bDr\.?\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/);
+  while ((vm = vetRe.exec(text))) {
+    if (/veterinary|hospital|practice|laborator|reference/i.test(vm[1])) continue;
+    vets.push(`${vm[1]} ${vm[2]}`);
+  }
+  const dr = text.match(/\bDr\.?[ \t]+([A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+)?)/);
   if (dr) vets.push(`Dr. ${dr[1]}`);
   return vets[0] || null;
+}
+
+/** IDEXX / reference-lab cover sheet: practice + Ordered by + collected date. */
+export function detectIdexxHeader(text) {
+  const head = String(text || '').slice(0, 2500);
+  const practice = head.match(/(?:practice|facility|hospital|clinic)\s*[:.]\s*([^\n]{3,80})/i);
+  let clinic = practice ? String(practice[1]).replace(/\s+/g, ' ').trim() : null;
+  if (clinic && /^(n\/?a|unknown|practice|clinic)$/i.test(clinic)) clinic = null;
+  clinic = clinic || detectClinic(head);
+  const ordered = head.match(/ordered\s+by\s*[:.]?\s*([^\n]{3,80})/i)
+    || head.match(/(?:ordering|requesting)\s+(?:veterinarian|provider|doctor|vet)\s*[:.]?\s*([^\n]{3,80})/i);
+  const orderedBlob = ordered ? `${ordered[0]} ${ordered[1] || ''}` : '';
+  const vet = ordered ? (detectVet(orderedBlob) || detectVet(ordered[1] || '')) : null;
+  const collected = head.match(/(?:collected|drawn|taken|specimen|order(?:ed)?(?:\s+date)?|reported)\s*(?:on)?\s*[:.]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
+  const date = collected ? (toIso(collected[1]) || monthEndIso(collected[1])) : detectVisitDate(head);
+  return { clinic: clinic || null, vet: vet || null, date: date || null };
+}
+
+export function latestVisit(visits) {
+  return (visits || []).slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).find((v) => v && (v.date || v.clinic)) || null;
+}
+
+function applyLabSegmentHeader(seg, visitBlocks) {
+  const hdr = detectIdexxHeader(seg.text);
+  const date = hdr.date || seg.date || null;
+  const precedingSameDate = visitBlocks.filter((v) => (v.start || 0) <= (seg.start || 0) && date && v.date === date);
+  const match = precedingSameDate.length ? precedingSameDate[precedingSameDate.length - 1] : null;
+  // Clinic + vet are a tuple from ONE source. Never mix Ordered-by from At Home
+  // with a BondVet visit, or inherit the last segment seen.
+  if (hdr.clinic) {
+    seg.clinic = hdr.clinic;
+    seg.vet = hdr.vet || null;
+    seg.date = date || match?.date || null;
+    return;
+  }
+  if (match) {
+    seg.clinic = match.clinic || null;
+    seg.vet = match.vet || null;
+    seg.date = match.date || date || null;
+    return;
+  }
+  seg.clinic = null;
+  seg.vet = hdr.vet || null;
+  seg.date = date || null;
 }
 
 export const SEGMENT_TYPES = ['visit', 'vitals', 'labs', 'vaccines', 'weights', 'reminders', 'identity', 'narrative'];
@@ -735,7 +786,7 @@ const SEGMENT_MARKERS = [
   { re: /(?:^|\n)\s*Weight History\b/gi, type: 'weights' },
   { re: /(?:^|\n)\s*Reminders?\b/gi, type: 'reminders' },
   // IDEXX / panel tables only — not inline "Urinalysis: 1+ protein" in a visit note.
-  { re: /(?:^|\n)\s*(?:IDEXX(?:\s+Reference(?:\s+Laboratories)?)?|TEST RESULTS?|Chemistry Panel|CBC(?:\s+with(?:\s+diff(?:erential)?)?)?|Reference (?:Value|Range)s?)\b/gim, type: 'labs' },
+  { re: /(?:^|\n)\s*(?:IDEXX(?:\s+Reference(?:\s+Laboratories)?)?|Chemistry Panel|CBC(?:\s+with(?:\s+diff(?:erential)?)?)?)\b/gim, type: 'labs' },
 ];
 
 export function classifySegment(seg) {
@@ -811,23 +862,24 @@ export function segment(text) {
       start: h.index,
     });
   }
-  let visitHeader = { clinic: null, vet: null, date: null };
+  const visitBlocks = [];
   for (const s of segs) {
     s.type = classifySegment(s);
-    const isVisitBoundary = s.type === 'visit' || /service on/i.test(s.text.slice(0, 40));
+    const isVisitBoundary = s.type === 'visit' || /service on/i.test((s.text || '').slice(0, 40));
     if (isVisitBoundary) {
-      visitHeader = {
-        clinic: s.clinic || null,
-        vet: s.vet || null,
-        date: s.date || null,
-      };
-      s.clinic = visitHeader.clinic;
-      s.vet = visitHeader.vet;
-      s.date = visitHeader.date;
-    } else {
-      if (!s.clinic) s.clinic = visitHeader.clinic;
-      if (!s.vet) s.vet = visitHeader.vet;
-      if (!s.date) s.date = visitHeader.date;
+      s.clinic = detectClinic(s.text) || null;
+      s.vet = detectVet(s.text) || null;
+      s.date = s.date || detectVisitDate(s.text);
+      visitBlocks.push({ clinic: s.clinic, vet: s.vet, date: s.date, start: s.start || 0 });
+    } else if (s.type === 'labs') {
+      applyLabSegmentHeader(s, visitBlocks);
+    } else if (visitBlocks.length) {
+      const open = visitBlocks[visitBlocks.length - 1];
+      if ((s.start || 0) >= (open.start || 0) && s.type !== 'weights' && s.type !== 'reminders' && s.type !== 'identity') {
+        if (!s.clinic) s.clinic = open.clinic;
+        if (!s.vet) s.vet = open.vet;
+        if (!s.date) s.date = open.date;
+      }
     }
   }
   return segs;
@@ -839,6 +891,8 @@ export function inheritSegmentHeader(rows, seg) {
   const vet = seg?.vet || null;
   for (const l of rows.labs || []) {
     if (date && !l.collected_on) l.collected_on = date;
+    if (clinic && !l.clinic) l.clinic = clinic;
+    if (vet && !l.vet) l.vet = vet;
   }
   for (const w of rows.weights || []) {
     if (date && !w.measured_on) w.measured_on = date;
@@ -918,7 +972,7 @@ export function parseSegmentCode(seg) {
         rows.vaccinations.push(v);
       }
     });
-    if (type === 'visit' || type === 'narrative' || type === 'identity') {
+    if (type === 'visit' || type === 'narrative') {
       harvested.weights.forEach((w) => {
         if (!rows.weights.some((x) => x.measured_on === w.measured_on && x.value === w.value)) rows.weights.push(w);
       });
@@ -937,6 +991,8 @@ export function parseSegmentCode(seg) {
       });
       parseConditions(t).forEach((c) => rows.conditions.push(c));
       parseMedsTable(t).forEach((m) => rows.medications.push(m));
+    } else if (type === 'identity') {
+      if (harvested.identity) rows.identity = { ...(rows.identity || {}), ...harvested.identity };
     }
   }
   if (type === 'visit' && !rows.visits.length) {
@@ -1132,12 +1188,17 @@ export function pipelineCode(text) {
   if (!merged.vaccinations.length && harvested.vaccinations.length) merged.vaccinations = harvested.vaccinations;
   if (!merged.visits.length && harvested.visits.length) merged.visits = harvested.visits;
   if (!merged.labs.length && harvested.labs.length) merged.labs = harvested.labs;
-  inheritVisitDate(merged, merged.visits[0]?.date || segs[0]?.date || harvested.date);
+  const latest = latestVisit(merged.visits);
+  const datedVisits = (merged.visits || []).filter((v) => v && v.date);
+  if (datedVisits.length <= 1) {
+    inheritVisitDate(merged, latest?.date || segs[0]?.date || harvested.date);
+  }
   merged.undated = itemsTrulyUndated(merged);
   merged.segment_stats = stats;
   merged.mentioned_but_missing = parts.flatMap((p) => p.mentioned_but_missing || []);
-  merged.date = merged.visits[0]?.date || harvested.date || segs[0]?.date || null;
-  merged.clinic = merged.visits[0]?.clinic || harvested.clinic || segs[0]?.clinic || null;
+  merged.date = latest?.date || harvested.date || segs[0]?.date || null;
+  merged.clinic = latest?.clinic || (datedVisits.length <= 1 ? (harvested.clinic || segs[0]?.clinic || null) : null);
+  merged.vet = latest?.vet || null;
   return merged;
 }
 
@@ -1154,17 +1215,30 @@ Reminders
 Rabies 8/12/2026
 FVRCP 11/7/2026
 
+Service on 9/2/2026
+At Home Veterinary
+Jonathan Leshanski DVM
+Temp 101.2 F  HR 180  RR 28  BCS 8
+Assessment: doing well
+Plan: continue current diet
+
 Service on 8/7/2026
 Bond Vet Hell's Kitchen
-Jonathan Leshanski DVM
 Inventory Item PUREVAX Rabies Feline 3 year
 Given 8/7/2026 lot 12345 SC over right hind
-ALT 190
-Assessment: doing well
+Assessment: wellness vaccines
 
 Service on 5/2/2026
 At Home Veterinary
+Jonathan Leshanski DVM
 weight 8.2 lb
 Vomiting overnight
+
+IDEXX Reference Laboratories
+Practice: Bond Vet Hell's Kitchen
+Ordered by: Bond Vet
+Collected: 8/7/2026
+TEST RESULT  REFERENCE RANGE
+ALT 190 H 12-130
 `;
 

@@ -358,6 +358,8 @@ interface ExtractedLabResult {
   ref_high: number | null;
   flag: string | null;
   collected_on?: string | null;
+  clinic_name?: string | null;
+  vet_name?: string | null;
 }
 
 interface ExtractedLabPanel {
@@ -383,6 +385,7 @@ interface ExtractedProcedure {
   notes: string | null;
   cost_cents: number | null;
   clinic_name?: string | null;
+  vet_name?: string | null;
 }
 
 interface ExtractedIdentity {
@@ -1935,7 +1938,7 @@ export default function PetRecordScreen() {
         tag_number: v.tag_number || v.tag || null,
         vet_name: v.vet_name || v.vet || v.veterinarian || v.doctor || v.provider || v.clinician || null,
         vet_license: v.vet_license || v.license || v.vet_license_no || null,
-        clinic_name: v.clinic || v.clinic_name || parsed.clinic || null,
+        clinic_name: v.clinic || v.clinic_name || null,
         reactions: v.reactions || null,
         status: v.status || null,
         notes: v.notes || null,
@@ -1959,7 +1962,9 @@ export default function PetRecordScreen() {
         ref_low: l.ref_low ?? null,
         ref_high: l.ref_high ?? null,
         flag,
-        collected_on: l.collected_on || l.date || parsed.date || null,
+        collected_on: l.collected_on || l.date || null,
+        clinic_name: l.clinic || l.clinic_name || null,
+        vet_name: l.vet || l.vet_name || l.veterinarian || null,
       };
       const rows = [row];
       if (l.prior_value != null && l.prior_date && !l.is_prior) {
@@ -1979,7 +1984,8 @@ export default function PetRecordScreen() {
       title: v.reason || v.clinic || 'Visit',
       notes: v.summary || [v.findings, v.plan].filter(Boolean).join(' · ') || null,
       cost_cents: null,
-      clinic_name: v.clinic || parsed.clinic || null,
+      clinic_name: v.clinic || null,
+      vet_name: v.vet || v.vet_name || v.veterinarian || null,
     }));
     const vaxDuplicates = new Set<number>();
     vax.forEach((v: any, i: number) => {
@@ -2006,7 +2012,27 @@ export default function PetRecordScreen() {
         }))
       : (wt.value != null ? [wt] : []);
     setEditableWeights(allWeights);
-    setEditableLabs(labs.length ? [{ panel_name: 'Labs', collected_on: parsed.date || null, clinic_name: parsed.clinic || null, vet_name: null, results: labs }] : []);
+    setEditableLabs((() => {
+      if (!labs.length) return [];
+      const groups = new Map<string, ExtractedLabPanel>();
+      for (const row of labs) {
+        const clinic = row.clinic_name || null;
+        const vet = row.vet_name || null;
+        const date = row.collected_on || null;
+        const k = `${clinic || ''}|${vet || ''}|${date || ''}`;
+        if (!groups.has(k)) {
+          groups.set(k, {
+            panel_name: clinic || 'Labs',
+            collected_on: date,
+            clinic_name: clinic,
+            vet_name: vet,
+            results: [],
+          });
+        }
+        groups.get(k)!.results.push(row);
+      }
+      return [...groups.values()];
+    })());
     setEditableWeight(wt);
     setEditableProcedures(visits);
     setConfirmEdit(new Set());
@@ -2253,8 +2279,8 @@ export default function PetRecordScreen() {
 
       // 2. labs — write pet_id on every row (monitors query by pet_id, not panel_id)
       const rawDoc: any = documents.find((d) => d.id === sourceDocId)?.ai_summary || {};
-      const labFlat: { analyte: string; value_text: string | null; value_num: number | null; unit: string | null; flag: string | null; collected_on: string | null; ref_low?: any; ref_high?: any }[] = [];
-      const pushLab = (r: any, collected?: string | null) => {
+      const labFlat: { analyte: string; value_text: string | null; value_num: number | null; unit: string | null; flag: string | null; collected_on: string | null; clinic?: string | null; vet?: string | null; ref_low?: any; ref_high?: any }[] = [];
+      const pushLab = (r: any, collected?: string | null, clinic?: string | null, vet?: string | null) => {
         const analyte = r.analyte || r.name;
         if (!analyte) return;
         const printed = r.value_text != null ? String(r.value_text) : (r.value != null ? String(r.value) : (r.value_num != null ? String(r.value_num) : ''));
@@ -2265,13 +2291,15 @@ export default function PetRecordScreen() {
           value_num: Number.isFinite(value_num) ? value_num : null,
           unit: r.unit || null,
           flag: r.flag && String(r.flag).toLowerCase() !== 'unknown' ? r.flag : null,
-          collected_on: r.collected_on || r.date || collected || rawDoc.date || null,
+          collected_on: r.collected_on || r.date || collected || null,
+          clinic: r.clinic || r.clinic_name || clinic || null,
+          vet: r.vet || r.vet_name || vet || null,
           ref_low: r.ref_low,
           ref_high: r.ref_high,
         });
       };
-      for (const panel of editableLabs) (panel.results || []).forEach((r) => pushLab(r, panel.collected_on));
-      (rawDoc.labs || []).forEach((r: any) => pushLab(r, rawDoc.date));
+      for (const panel of editableLabs) (panel.results || []).forEach((r) => pushLab(r, panel.collected_on, panel.clinic_name, panel.vet_name));
+      if (!editableLabs.length) (rawDoc.labs || []).forEach((r: any) => pushLab(r, null));
       const seenLab = new Set<string>();
       for (const row of labFlat) {
         const key = `${row.analyte}|${row.collected_on}|${row.value_text}`;
@@ -2287,6 +2315,8 @@ export default function PetRecordScreen() {
           unit: row.unit,
           flag: row.flag,
           collected_on: row.collected_on,
+          clinic: row.clinic || null,
+          vet: row.vet || null,
           ref_low: row.ref_low ?? null,
           ref_high: row.ref_high ?? null,
           source: 'ai_extracted',
@@ -2295,9 +2325,13 @@ export default function PetRecordScreen() {
         let res = await supabase.from('lab_results').insert(full).select('id').maybeSingle();
         if (res.error) {
           console.log('[apply] lab fail', row.analyte, res.error.message);
-          const slim = { pet_id: petId, name: row.analyte, value: row.value_text, unit: row.unit, flag: row.flag, collected_on: row.collected_on };
-          res = await supabase.from('lab_results').insert(slim).select('id').maybeSingle();
-          if (res.error) { console.log('[apply] lab slim fail', row.analyte, res.error.message); errors.push(`Lab "${row.analyte}": ${res.error.message}`); continue; }
+          const withClinic = { pet_id: petId, name: row.analyte, value: row.value_text, unit: row.unit, flag: row.flag, collected_on: row.collected_on, clinic: row.clinic || null };
+          res = await supabase.from('lab_results').insert(withClinic).select('id').maybeSingle();
+          if (res.error) {
+            const slim = { pet_id: petId, name: row.analyte, value: row.value_text, unit: row.unit, flag: row.flag, collected_on: row.collected_on };
+            res = await supabase.from('lab_results').insert(slim).select('id').maybeSingle();
+            if (res.error) { console.log('[apply] lab slim fail', row.analyte, res.error.message); errors.push(`Lab "${row.analyte}": ${res.error.message}`); continue; }
+          }
         }
         applied.labs++;
       }
@@ -2910,7 +2944,7 @@ export default function PetRecordScreen() {
       const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
       const clinic = d.clinic || ai.clinic || ai.clinic_name;
       for (const v of ai.visits || []) {
-        push(v.owner_instructions || v.home_care || v.instructions || v.notes || v.summary, v.date || v.occurred_on || d.taken_on, v.clinic || clinic);
+        push(v.owner_instructions || v.home_care || v.instructions || v.notes || v.summary, v.date || v.occurred_on, v.clinic || v.clinic_name || null);
       }
       for (const n of ai.owner_notes || []) {
         push(typeof n === 'string' ? n : (n.text || n.note), n.date || d.taken_on, clinic);
@@ -4710,6 +4744,8 @@ export default function PetRecordScreen() {
                           {shown ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Result  </Text>{shown}</Text> : null}
                           {result.flag ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Flag  </Text>{result.flag}</Text> : null}
                           {(result.collected_on || panel.collected_on) ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Collected  </Text>{result.collected_on || panel.collected_on}</Text> : null}
+                          {(result.clinic_name || panel.clinic_name) ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Clinic  </Text>{result.clinic_name || panel.clinic_name}</Text> : null}
+                          {(result.vet_name || panel.vet_name) ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Vet  </Text>{result.vet_name || panel.vet_name}</Text> : null}
                         </>
                       )}
                     </View>
@@ -4748,6 +4784,7 @@ export default function PetRecordScreen() {
                         <>
                           {proc.occurred_on ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Date  </Text>{proc.occurred_on}</Text> : null}
                           {proc.clinic_name ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Clinic  </Text>{proc.clinic_name}</Text> : null}
+                          {proc.vet_name ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Vet  </Text>{proc.vet_name}</Text> : null}
                           {proc.notes ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Clinical summary  </Text>{proc.notes}</Text> : null}
                         </>
                       )}

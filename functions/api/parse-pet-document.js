@@ -20,6 +20,10 @@ import {
   verify,
   dropUngrounded,
   mergeRowSets,
+  detectExportingPractice,
+  detectDocumentDate,
+  stampEventDates,
+  coalesceConditionOnset,
 } from '../lib/clinic-export.js';
 
 function decodedBytes(b64) {
@@ -107,7 +111,7 @@ const SCHEMA_PARTS = {
   "conditions": [{"name": "", "kind": "condition|allergy", "status": "active|resolved|monitoring", "onset_date": "YYYY-MM-DD or null", "resolved_date": "YYYY-MM-DD or null", "notes": null}],
   "owner_notes": [{"text": "behavioral or lifestyle guidance for the owner", "date": "YYYY-MM-DD or null"}],
   "lifestyle": {"diet": null, "food_brand": null, "food_product": null, "food_type": "dry|wet|canned|null", "parasite_prevention": null},
-  "identity": {"date_of_birth": "YYYY-MM-DD or estimated from age", "age_years": null, "microchip": null, "sex": null}`,
+  "identity": {"owner": null, "patient": null, "species": null, "breed": null, "sex": "F|M or null", "spayed_neutered": "true|false|null", "microchip": null, "allergies": null, "patient_id": null, "date_of_birth": "YYYY-MM-DD or estimated from age", "document_date": "YYYY-MM-DD or null"}`,
   weight: `"weight": {"value": null, "unit": "lb|kg", "measured_on": null},
   "vitals_series": [{"at": "YYYY-MM-DDTHH:MM or YYYY-MM-DD", "temp_f": null, "hr": null, "rr": null, "weight_lb": null, "bcs": null}]`,
   medications: `"medications": [{"name": "", "dose": null, "route": null, "given_on": null, "status": "active|completed"}]`,
@@ -119,7 +123,7 @@ const SCHEMA_PARTS = {
 const RULE_PARTS = {
   vaccinations: '- vaccinations: EVERY vaccine mentioned, including current/overdue with no given-date. A vaccine without a given-date is still a vaccine. "Rabies current through September 2026" → status=current, next_due=2026-09-30, administered_on=null. "second FVRCP booster missed" → status=overdue + note.',
   labs: '- labs: EVERY numeric or qualitative result, including prose ("creatinine 1.5, BUN 19", "T4 1.7 µg/dL", "1+ protein", "FeLV/FIV negative"). collected_on defaults to the visit/document date — never undated because the number and date were in different sentences.',
-  exam_visit: '- The document itself is a visit. Always emit visits[] with clinic + date from the header, reason, findings, plan.\n- exams: one per physical exam. systems MUST cover 12: Oral-Nasal-Throat, Ears, Eyes, Cardiovascular, Respiratory, Abdominal, Genitourinary, Musculoskeletal, Integument, Lymphatics, Neurological, Rectal.\n- conditions: one row per distinct issue.\n- owner_notes: behavioral/lifestyle guidance.\n- lifestyle: diet brand/product/type (Purina Pro Plan dry) and parasite prevention — these become the Food card.\n- identity: Age 1.2 y → date_of_birth estimated from the visit date when DOB is not printed.',
+  exam_visit: '- The document itself is a visit. Always emit visits[] with clinic + date from the header, reason, findings, plan.\n- exams: one per physical exam. systems MUST cover 12: Oral-Nasal-Throat, Ears, Eyes, Cardiovascular, Respiratory, Abdominal, Genitourinary, Musculoskeletal, Integument, Lymphatics, Neurological, Rectal.\n- conditions: one row per distinct issue. onset_date = first mention (block date).\n- owner_notes: behavioral/lifestyle guidance.\n- lifestyle: diet brand/product/type (Purina Pro Plan dry) and parasite prevention — these become the Food card.\n- identity: Owner/Patient/Species/Breed/Weight/Sex/Microchip/Allergies/Patient ID/DOB. Female (Intact) → sex=F, spayed_neutered=false. "None listed" → null. Age is derived from DOB, never stored. Age 1.2 y → date_of_birth estimated from the visit date only when DOB is not printed.\n- issuing_clinic: letterhead practice (logo BondVet, At Home Veterinary in the chart title). Rows inherit it unless the Service block names another provider.',
   weight: '- weight: return the printed {value, unit} as-is (do not convert).\n- vitals_series: EVERY timestamped vital from flowsheets plus exam vitals.',
   medications: '- medications: every drug administered or prescribed (name, dose, route PO/SC/IV, date, active vs completed).',
   imaging: '- diagnostics: imaging (x-ray, ultrasound) and PCR/Idexx panels with the printed result text.',
@@ -518,8 +522,10 @@ function normalizeWeight(w) {
 
 function normalizeVisit(v) {
   if (!v || typeof v !== 'object') return null;
+  const date = v.event_date || v.date || v.visit_date || v.occurred_on || null;
   return {
-    date: v.date || v.visit_date || v.occurred_on || null,
+    date,
+    event_date: v.event_date || date || null,
     clinic: v.clinic || v.clinic_name || null,
     vet: normalizeVetName(v.vet || v.vet_name || v.veterinarian || null),
     reason: v.reason || v.title || null,
@@ -662,8 +668,10 @@ function shapeParsed(parsed) {
     owner_notes: Array.isArray(parsed.owner_notes) ? parsed.owner_notes.filter((n) => n && n.text) : [],
     lifestyle: parsed.lifestyle || null,
     identity: parsed.identity || null,
+    issuing_clinic: parsed.issuing_clinic || null,
+    document_date: parsed.document_date || parsed.identity?.document_date || null,
   };
-  if (visits.filter((v) => v && v.date).length <= 1) inheritVisitDate(shaped, shaped.date);
+  if (visits.filter((v) => v && (v.event_date || v.date)).length <= 1) inheritVisitDate(shaped, shaped.date);
   shaped.undated = collectUndated(shaped);
   const trends = trendLines(labs);
   if (trends.length) {
@@ -878,19 +886,26 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
   const merged = mergeRowSets(parts);
   const header = parsePatientHeader(text);
   const harvested = harvestKnownFacts(text);
+  const exporting = detectExportingPractice(text);
+  const document_date = detectDocumentDate(text) || header.document_date || harvested.identity?.document_date || null;
   if (harvested.lifestyle && !merged.lifestyle) merged.lifestyle = harvested.lifestyle;
   if (harvested.identity) merged.identity = { ...header, ...(merged.identity || {}), ...harvested.identity };
   else merged.identity = { ...header, ...(merged.identity || {}) };
+  if (merged.identity && !merged.identity.document_date) merged.identity.document_date = document_date;
   if (!merged.vaccinations.length && harvested.vaccinations.length) merged.vaccinations = harvested.vaccinations;
   if (!merged.visits.length && harvested.visits.length) merged.visits = harvested.visits;
   if (!merged.labs.length && harvested.labs.length) merged.labs = harvested.labs;
+  merged.issuing_clinic = exporting || null;
+  merged.document_date = document_date;
+  merged.conditions = coalesceConditionOnset(merged.conditions);
+  stampEventDates(merged, document_date);
 
   const recAll = reconcileVaxDates(text, merged.vaccinations);
   merged.vaccinations = recAll.vaccinations;
   const latest = latestVisit(merged.visits);
-  const datedVisits = (merged.visits || []).filter((v) => v && v.date);
+  const datedVisits = (merged.visits || []).filter((v) => v && (v.event_date || v.date));
   if (datedVisits.length <= 1) {
-    inheritVisitDate(merged, latest?.date || segs[0]?.date || harvested.date);
+    inheritVisitDate(merged, latest?.event_date || latest?.date || segs[0]?.date || harvested.date);
   }
 
   const dedupeVax = [];
@@ -924,9 +939,11 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
     vitals_series: merged.vitals_series.length ? merged.vitals_series : parseFlowsheet(text),
     lifestyle: merged.lifestyle,
     identity: merged.identity,
-    date: latest?.date || harvested.date || segs[0]?.date || null,
+    date: latest?.event_date || latest?.date || harvested.date || segs[0]?.date || null,
     clinic: latest?.clinic || (datedVisits.length <= 1 ? (harvested.clinic || segs[0]?.clinic || null) : null),
     vet: latest?.vet || null,
+    issuing_clinic: exporting || null,
+    document_date,
     ai_note: `${segs.length} segments · ${weights.length} weights · ${dedupeVax.length} vaccines · ${dedupeLabs.length} labs`,
     undated: [],
   });
@@ -967,6 +984,8 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
     weight: latestW,
     identity: shaped.identity,
     lifestyle: shaped.lifestyle,
+    issuing_clinic: shaped.issuing_clinic || exporting || null,
+    document_date: shaped.document_date || document_date,
     page_count: pageCount,
     char_count: charCount,
     progress: { page_count: pageCount, char_count: charCount, visits_total: segs.length, visits_parsed: segs.length, stage: 'done' },
@@ -979,12 +998,15 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
   };
   applyKinds(out, kinds);
   if (documentId) {
-    await updateDoc(env, documentId, {
+    const patch = {
       ai_status: aiStatus,
       ai_summary: out,
       title: out.title,
       taken_on: out.date || undefined,
-    });
+      clinic: out.clinic || undefined,
+      issuing_clinic: out.issuing_clinic || undefined,
+    };
+    await updateDoc(env, documentId, patch);
   }
   return Response.json(out, { headers });
 }
@@ -1006,6 +1028,21 @@ async function updateDoc(env, documentId, patch) {
     },
     body: JSON.stringify(body),
   });
+  if (!resp.ok && body.issuing_clinic != null) {
+    const { issuing_clinic, ...rest } = body;
+    const retry = await fetch(`${url}/rest/v1/pet_documents?id=eq.${documentId}`, {
+      method: 'PATCH',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify(rest),
+    });
+    console.log('[parse-pet-document] patch', documentId, retry.status, Object.keys(rest).join(','), 'issuing_clinic skipped');
+    return;
+  }
   console.log('[parse-pet-document] patch', documentId, resp.status, Object.keys(body).join(','));
 }
 

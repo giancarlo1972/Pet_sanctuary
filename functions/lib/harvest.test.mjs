@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   AURORA_VISIT_FIXTURE,
   GINA_CLINIC_FIXTURE,
+  RYAN_CLINIC_FIXTURE,
   harvestKnownFacts,
   inheritVisitDate,
   itemsTrulyUndated,
@@ -21,6 +22,8 @@ import {
   STATUS_CURRENT_UNKNOWN,
   detectExportingPractice,
   detectProviderOverride,
+  parsePatientHeader,
+  latestVisit,
 } from './clinic-export.js';
 
 describe('Aurora visit harvest', () => {
@@ -282,6 +285,28 @@ Assessment: wellness
     assert.equal(dueOnly.administered_on, null);
     assert.equal(dueOnly.status, STATUS_CURRENT_UNKNOWN);
   });
+
+  it('identity: Gina Female Spayed DOB 2020-06-15, microchip kept, issuing At Home', () => {
+    const ident = out.identity || {};
+    assert.equal(ident.patient, 'Gina');
+    assert.equal(ident.sex, 'F');
+    assert.equal(ident.spayed_neutered, true);
+    assert.equal(ident.date_of_birth, '2020-06-15');
+    assert.equal(ident.microchip, '981020000000001');
+    assert.equal(ident.age_years, null);
+    assert.equal(out.issuing_clinic, 'At Home Veterinary');
+    assert.equal(detectExportingPractice(GINA_CLINIC_FIXTURE), 'At Home Veterinary');
+    for (const v of out.visits) {
+      assert.match(String(v.clinic), /At Home/i);
+      assert.doesNotMatch(String(v.clinic || ''), /Bond/i);
+      assert.ok(v.event_date, JSON.stringify(v));
+    }
+    const obese = out.conditions.find((c) => /obese/i.test(c.name));
+    assert.ok(obese, JSON.stringify(out.conditions));
+    assert.equal(obese.onset_date, '2026-09-02');
+    const latest = latestVisit(out.visits);
+    assert.equal(latest.event_date || latest.date, '2026-09-02');
+  });
 });
 
 describe('vet-name extraction', () => {
@@ -341,5 +366,77 @@ describe('given vs due', () => {
     assert.equal(noService.length, 0);
     const noItem = parseInventoryVaccines('Service on 8/7/2026\nPUREVAX Rabies Feline 3 year', '2026-08-07');
     assert.equal(noItem.length, 0);
+  });
+});
+
+describe('pipeline — Ryan BondVet identity header', () => {
+  const out = pipelineCode(RYAN_CLINIC_FIXTURE);
+  const ident = out.identity || {};
+  const header = parsePatientHeader(RYAN_CLINIC_FIXTURE);
+
+  it('issuing clinic is BondVet from the letterhead logo', () => {
+    assert.equal(detectExportingPractice(RYAN_CLINIC_FIXTURE), 'BondVet');
+    assert.equal(out.issuing_clinic, 'BondVet');
+    assert.match(String(out.clinic), /BondVet|Bond Vet/i);
+  });
+
+  it('parses the identity block as a first-class object', () => {
+    assert.equal(header.owner, 'Listed Owner');
+    assert.equal(header.patient, 'Private Ryan');
+    assert.equal(header.species, 'dog');
+    assert.equal(header.breed, 'Terrier Mix');
+    assert.equal(header.weight_lb, 22.4);
+    assert.equal(header.sex, 'F');
+    assert.equal(header.spayed_neutered, false);
+    assert.equal(header.microchip, null);
+    assert.equal(header.allergies, null);
+    assert.equal(header.patient_id, 'BV-10482');
+    assert.equal(header.date_of_birth, '2022-01-15');
+    assert.equal(header.document_date, '2025-01-07');
+    assert.equal(ident.owner, 'Listed Owner');
+    assert.equal(ident.patient, 'Private Ryan');
+    assert.equal(ident.sex, 'F');
+    assert.equal(ident.spayed_neutered, false);
+    assert.equal(ident.microchip, null);
+    assert.equal(ident.patient_id, 'BV-10482');
+    assert.equal(ident.date_of_birth, '2022-01-15');
+    assert.equal(ident.document_date, '2025-01-07');
+    assert.equal(ident.age_years, null);
+    assert.equal(out.document_date, '2025-01-07');
+  });
+
+  it('Female (Intact) is F + spayed false; None listed is null', () => {
+    assert.equal(ident.sex, 'F');
+    assert.equal(ident.spayed_neutered, false);
+    assert.equal(ident.microchip, null);
+    assert.equal(ident.allergies, null);
+  });
+
+  it('latest visit is BondVet · 2025-01-07 with event_date', () => {
+    const latest = latestVisit(out.visits);
+    assert.ok(latest, JSON.stringify(out.visits));
+    assert.equal(latest.event_date || latest.date, '2025-01-07');
+    assert.match(String(latest.clinic), /BondVet|Bond Vet/i);
+    assert.equal(out.date, '2025-01-07');
+  });
+
+  it('a named BondVet Service block on an At Home chart is BondVet; copy-to is not', () => {
+    const named = `At Home Veterinary
+Medical Chart
+Service on 8/7/2026
+BondVet
+Wellness exam
+`;
+    const vis = segment(named).find((s) => s.type === 'visit');
+    assert.match(String(vis.clinic), /BondVet|Bond Vet/i);
+    const copy = `At Home Veterinary
+Medical Chart
+Service on 8/7/2026
+Copy to: BondVet
+Wellness exam
+`;
+    const vis2 = segment(copy).find((s) => s.type === 'visit');
+    assert.match(String(vis2.clinic), /At Home/i);
+    assert.doesNotMatch(String(vis2.clinic || ''), /Bond/i);
   });
 });

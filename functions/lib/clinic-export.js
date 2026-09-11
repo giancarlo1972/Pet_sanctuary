@@ -169,36 +169,105 @@ export function parseLabTables(text) {
 }
 
 export function parsePatientHeader(text) {
-  const head = text.slice(0, 12000);
-  const dobLine = (head.split(/\r?\n/).find((l) => /date of birth|\bDOB\b/i.test(l)) || '');
-  const dob = toIso((dobLine.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/) || [])[1]);
-  const microchip = (head.match(/microchip\s*[:.#]?\s*([0-9]{9,15})/i) || [])[1] || null;
-  const species = (head.match(/species\s*[:.]?\s*(cat|dog|feline|canine)/i) || [])[1] || null;
-  const sexLine = (head.match(/sex\s*[:.]?\s*([^\n]{0,40})/i) || [])[1] || '';
-  const spayed = /spay|neuter|castrat/i.test(sexLine) || /spayed|neutered/i.test(head.slice(0, 8000));
-  const sex = /female/i.test(sexLine) ? 'female' : /male/i.test(sexLine) ? 'male' : null;
+  const head = String(text || '').slice(0, 8000);
+
+  const labeled = (keys) => {
+    const re = new RegExp(`(?:^|\\n)\\s*(?:${keys})\\s*[:.#]\\s*([^\\n]{1,100})`, 'i');
+    const m = head.match(re);
+    return m ? m[1].replace(/\s+/g, ' ').trim() : null;
+  };
+  const blank = (s) => {
+    if (s == null || s === '') return null;
+    const t = String(s).replace(/\s+/g, ' ').trim();
+    if (!t || /^(none(?:\s+listed)?|n\/?a|unknown|not\s+listed|—|-|nil)$/i.test(t)) return null;
+    return t;
+  };
+
+  const owner = blank(labeled('owner|client|guardian'));
+  let patient = blank(labeled('patient|pet\\s*name'));
+  const speciesRaw = blank(labeled('species'));
+  const breed = blank(labeled('breed'));
+  const weightRaw = labeled('weight') || '';
+  const sexRaw = labeled('sex|gender') || '';
+  const microRaw = labeled('microchip(?:\\s*(?:number|#|no\\.)?)?')
+    || (head.match(/microchip\s*[:.#]?\s*([0-9]{9,15}|none listed)/i) || [])[1]
+    || '';
+  const allergies = blank(labeled('allerg(?:y|ies)'));
+  const patientId = blank(labeled('patient\\s*id|chart\\s*id|medical\\s*record\\s*(?:#|no\\.?|number)'));
+  let dobSrc = labeled('date\\s*of\\s*birth|\\bdob\\b');
+  if (!dobSrc) {
+    const dobLine = head.split(/\r?\n/).find((l) => /date of birth|\bDOB\b/i.test(l)) || '';
+    dobSrc = (dobLine.match(/(\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/) || [])[1] || null;
+  }
+  const date_of_birth = toIso(dobSrc) || monthEndIso(dobSrc);
+
+  // Unlabeled Patient Information line: "Gina  Female  Spayed  Date of Birth 6/15/2020"
+  const infoLine = head.split(/\r?\n/).find((l) => /\b(female|male)\b/i.test(l) && (/spay|neuter|intact|date of birth/i.test(l) || /\b(female|male)\b/i.test(l))) || '';
+  if (!patient) {
+    const afterPi = head.match(/patient information\s*\n([^\n]{2,80})/i);
+    if (afterPi) {
+      const tok = afterPi[1].trim().split(/\s{2,}|\s+(?=female|male|spay|neuter)/i)[0];
+      if (tok && !/^(female|male|patient)/i.test(tok)) patient = tok.replace(/\s+/g, ' ').trim();
+    }
+  }
+
+  const sexBlob = `${sexRaw} ${infoLine}`.slice(0, 200);
+  let sex = null;
+  if (/\bfemale\b|\bF\s*\(/i.test(sexBlob) || /\bsex\s*[:.]?\s*F\b/i.test(head.slice(0, 2000))) sex = 'F';
+  else if (/\bmale\b|\bM\s*\(/i.test(sexBlob) || /\bsex\s*[:.]?\s*M\b/i.test(head.slice(0, 2000))) sex = 'M';
+  const intact = /intact|not\s+(?:spay|neuter)|unspayed|unneutered/i.test(sexBlob);
+  const altered = /spay|neuter|castrat|altered/i.test(sexBlob);
+  let spayed_neutered = null;
+  if (intact) spayed_neutered = false;
+  else if (altered) spayed_neutered = true;
+
+  let species = null;
+  if (speciesRaw) {
+    if (/feline|\bcat\b/i.test(speciesRaw)) species = 'cat';
+    else if (/canine|\bdog\b/i.test(speciesRaw)) species = 'dog';
+    else species = speciesRaw.toLowerCase();
+  }
+
+  const wHit = String(weightRaw).match(/(\d+(?:\.\d+)?)\s*(lb|lbs|kg)?/i);
+  const weight_lb = wHit ? ( /kg/i.test(wHit[2] || '') ? Math.round(parseFloat(wHit[1]) * 2.20462 * 100) / 100 : parseFloat(wHit[1]) ) : null;
+
+  const microchip = blank(microRaw) && /^\d{9,15}$/.test(String(microRaw).replace(/\s/g, ''))
+    ? String(microRaw).replace(/\s/g, '')
+    : null;
+
+  const agePrinted = blank(labeled('age'));
   const bcsMatch = head.match(/BCS\s*[:.]?\s*(\d(?:\.\d)?)\s*(?:[–\-]\s*\d)?/i);
   const bcs = bcsMatch ? parseInt(bcsMatch[1], 10) : NaN;
+
   return {
-    date_of_birth: dob,
-    microchip,
+    owner,
+    patient,
     species,
+    breed,
+    weight_lb: Number.isFinite(weight_lb) ? weight_lb : null,
     sex,
-    spayed_neutered: spayed,
+    spayed_neutered,
+    microchip,
+    allergies,
+    patient_id: patientId,
+    date_of_birth: date_of_birth || null,
+    document_date: detectDocumentDate(head),
+    age_printed: agePrinted,
     bcs: Number.isFinite(bcs) ? bcs : null,
   };
 }
 
-export function parseConditions(text) {
+export function parseConditions(text, onsetDate = null) {
   const out = [];
+  const onset = onsetDate || null;
   if (/BCS\s*[89]|obese|overweight/i.test(text)) {
-    out.push({ name: 'Obese (BCS 8–9)', kind: 'condition', status: 'active', notes: 'BCS 8–9' });
+    out.push({ name: 'Obese (BCS 8–9)', kind: 'condition', status: 'active', notes: 'BCS 8–9', onset_date: onset, event_date: onset });
   }
   if (/not jumping normally|musculoskeletal|lameness/i.test(text)) {
-    out.push({ name: 'Musculoskeletal — not jumping normally', kind: 'condition', status: 'monitoring' });
+    out.push({ name: 'Musculoskeletal — not jumping normally', kind: 'condition', status: 'monitoring', onset_date: onset, event_date: onset });
   }
   if (/Strongid|pyrantel|deworm/i.test(text)) {
-    out.push({ name: 'Strongid T deworming', kind: 'medication', status: 'monitoring', notes: 'repeat as directed' });
+    out.push({ name: 'Strongid T deworming', kind: 'medication', status: 'monitoring', notes: 'repeat as directed', onset_date: onset, event_date: onset });
   }
   return out;
 }
@@ -482,6 +551,7 @@ export function harvestKnownFacts(text) {
   if (isVisitDoc) {
     visits.push({
       date: visitDate,
+      event_date: visitDate,
       clinic,
       vet,
       vets: vet ? [vet] : [],
@@ -525,14 +595,99 @@ export function detectVisitDate(src) {
   return slash ? toIso(slash[1]) : null;
 }
 
+/** Printed / report date from the letterhead — not DOB, not Service on. */
+export function detectDocumentDate(text) {
+  const head = String(text || '').slice(0, 2500)
+    .replace(/date of birth[^\n]*/gi, '')
+    .replace(/\bDOB\b[^\n]*/gi, '');
+  const labeled = head.match(/(?:printed|report(?:ed)?|document|run|generated|as of)\s*(?:on|:)?\s*(\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})/i);
+  if (labeled) return toIso(labeled[1]) || monthEndIso(labeled[1]);
+  const named = head.match(/\b((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4})\b/);
+  if (named) return toIso(named[1]);
+  return null;
+}
+
+export function coalesceDate(...cands) {
+  for (const c of cands) {
+    if (!c) continue;
+    const iso = toIso(c) || (/^\d{4}-\d{2}-\d{2}/.test(String(c)) ? String(c).slice(0, 10) : null) || monthEndIso(c);
+    if (iso) return iso;
+  }
+  return null;
+}
+
+/** Block date > document date > null. Never today. Does not invent vaccine given dates. */
+export function stampEventDates(parsed, documentDate = null) {
+  const docDate = coalesceDate(documentDate, parsed?.document_date, parsed?.identity?.document_date);
+  const setEvent = (row, ...blockDates) => {
+    if (!row || typeof row !== 'object') return;
+    row.event_date = coalesceDate(row.event_date, ...blockDates, docDate);
+  };
+  for (const vis of parsed.visits || []) {
+    setEvent(vis, vis.date, vis.visit_date, vis.occurred_on);
+    if (!vis.date) vis.date = vis.event_date || null;
+  }
+  for (const l of parsed.labs || []) setEvent(l, l.collected_on);
+  for (const w of parsed.weights || []) setEvent(w, w.measured_on);
+  for (const v of parsed.vaccinations || []) {
+    // Given dates stay printed-only (inventory). event_date is the given date if present.
+    v.event_date = coalesceDate(v.given, v.administered_on) || null;
+  }
+  for (const c of parsed.conditions || []) {
+    setEvent(c, c.onset_date);
+    if (!c.onset_date && c.event_date) c.onset_date = c.event_date;
+  }
+  for (const e of parsed.exams || []) {
+    setEvent(e, e.visit_date);
+    if (!e.visit_date) e.visit_date = e.event_date || null;
+  }
+  for (const m of parsed.medications || []) setEvent(m, m.given_on, m.administered_on);
+  for (const n of parsed.owner_notes || []) setEvent(n, n.date);
+  return parsed;
+}
+
+/** Conditions inherit onset from their first mention (earliest event_date). */
+export function coalesceConditionOnset(conditions) {
+  const byName = new Map();
+  for (const c of conditions || []) {
+    const k = String(c.name || '').trim().toLowerCase();
+    if (!k) continue;
+    const onset = coalesceDate(c.onset_date, c.event_date);
+    const existing = byName.get(k);
+    if (!existing) {
+      byName.set(k, { ...c, onset_date: onset || null, event_date: onset || c.event_date || null });
+      continue;
+    }
+    const first = [onset, existing.onset_date].filter(Boolean).sort()[0] || null;
+    existing.onset_date = first;
+    existing.event_date = first || existing.event_date || null;
+    if (c.notes && !existing.notes) existing.notes = c.notes;
+  }
+  return [...byName.values()];
+}
+
 const PASSING_CLINIC_LINE = /(?:copy\s*to|cc\s*:|referr(?:ed|al)|ordered\s+by|prior\s+history|previously\s+(?:seen|treated)|outside\s+(?:records?|lab))/i;
-const KNOWN_CLINIC_RE = /\b(At[- ]Home(?:\s+Veterinary)?|Bond Vet(?:\s+Hell'?s Kitchen)?|VEG(?:\s+Chelsea)?|VCA[^\n,]{0,40}|Banfield|BluePearl|ASPCA|Animal Medical)\b/i;
+const KNOWN_CLINIC_RE = /\b(BondVet|Bond\s+Vet(?:\s+Hell'?s Kitchen)?|At[- ]Home(?:\s+Veterinary)?|VEG(?:\s+Chelsea)?|VCA[^\n,]{0,40}|Banfield|BluePearl|ASPCA|Animal Medical)\b/i;
 
 function cleanClinicName(s) {
   const name = String(s || '').replace(/\s+/g, ' ').trim().replace(/[.,;]+$/, '');
   if (!name || /^(n\/?a|unknown|practice|clinic|medical chart|provider)$/i.test(name)) return null;
   if (isValidVetName(name)) return null;
   return name;
+}
+
+function clinicKey(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function clinicNamesEqual(a, b) {
+  const ka = clinicKey(a);
+  const kb = clinicKey(b);
+  if (!ka || !kb) return false;
+  if (ka === kb) return true;
+  if (ka.startsWith('bondvet') && kb.startsWith('bondvet')) return true;
+  if (ka.startsWith('athome') && kb.startsWith('athome')) return true;
+  return ka.includes(kb) || kb.includes(ka);
 }
 
 function stripPassingMentions(s) {
@@ -542,7 +697,7 @@ function stripPassingMentions(s) {
     .join('\n');
 }
 
-/** Letterhead / Medical Chart title / footer — never Service-block body or lab copy-to. */
+/** Letterhead / logo / Medical Chart title / footer. */
 export function detectExportingPractice(text) {
   const src = String(text || '');
   const firstService = src.search(/Service on\s+\d{1,2}\/\d{1,2}/i);
@@ -552,6 +707,11 @@ export function detectExportingPractice(text) {
   const foot = src.slice(Math.max(0, src.length - 1200));
   const from = (chunk) => {
     const clean = stripPassingMentions(chunk);
+    const logo = clean.match(/^\s*(BondVet|Bond\s+Vet(?:\s+Hell'?s Kitchen)?|At[- ]Home(?:\s+Veterinary)?)\s*$/im);
+    if (logo) {
+      const n = cleanClinicName(logo[1]);
+      if (n) return n;
+    }
     const chart = clean.match(/([A-Z][^\n]{2,70})\r?\n[^\n]{0,80}Medical Chart/i)
       || clean.match(/Medical Chart[^\n]{0,40}\r?\n([A-Z][^\n]{2,70})/i);
     if (chart) {
@@ -576,9 +736,26 @@ export function detectProviderOverride(block) {
   return cleanClinicName(m[1]);
 }
 
-export function detectClinic(src, exportingPractice = null) {
-  const override = detectProviderOverride(src);
+/** A non-passing clinic-name line in the block (not copy-to / Practice / Ordered by). */
+export function detectNamedClinicInBlock(block, exportingPractice = null) {
+  const override = detectProviderOverride(block);
   if (override) return override;
+  const lines = String(block || '').split('\n');
+  for (const line of lines) {
+    if (PASSING_CLINIC_LINE.test(line) || /^\s*practice\s*:/i.test(line)) continue;
+    if (/^\s*service on/i.test(line)) continue;
+    const known = line.match(KNOWN_CLINIC_RE);
+    if (!known) continue;
+    const name = known[0].replace(/\s+/g, ' ').trim();
+    if (exportingPractice && clinicNamesEqual(name, exportingPractice)) return exportingPractice;
+    return name;
+  }
+  return null;
+}
+
+export function detectClinic(src, exportingPractice = null) {
+  const named = detectNamedClinicInBlock(src, exportingPractice);
+  if (named) return named;
   const labeled = String(src || '').match(/(?:^|\n)\s*(?:clinic|facility|hospital)\s*[:.]\s*([^\n]{3,80})/i);
   if (labeled) {
     const around = String(src || '').slice(Math.max(0, labeled.index - 24), labeled.index + labeled[0].length);
@@ -661,7 +838,8 @@ export function harvestIdentity(src, asOf) {
   if (!date_of_birth && age_years && asOf) date_of_birth = dobFromAge(age_years, asOf);
   return {
     ...header,
-    age_years,
+    // Age is derived from DOB at display time and is never a stored pet field.
+    age_years: date_of_birth ? null : age_years,
     date_of_birth,
     date_of_birth_estimated: Boolean(!header.date_of_birth && date_of_birth),
   };
@@ -692,14 +870,7 @@ export function inheritVisitDate(parsed, fallbackDate) {
   }
   for (const vis of parsed.visits || []) {
     if (!vis.date) vis.date = visitDate;
-  }
-  for (const v of parsed.vaccinations || []) {
-    const status = String(v.status || '').toLowerCase();
-    if (status === 'current' || status === 'overdue') continue;
-    if (!v.administered_on && !v.given && !v.next_due && /given|administ/i.test(String(v.notes || ''))) {
-      v.given = visitDate;
-      v.administered_on = visitDate;
-    }
+    if (!vis.event_date) vis.event_date = vis.date || visitDate;
   }
   return parsed;
 }
@@ -840,7 +1011,10 @@ export function detectIdexxHeader(text) {
 }
 
 export function latestVisit(visits) {
-  return (visits || []).slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).find((v) => v && (v.date || v.clinic)) || null;
+  return (visits || [])
+    .slice()
+    .sort((a, b) => String(b.event_date || b.date || '').localeCompare(String(a.event_date || a.date || '')))
+    .find((v) => v && (v.event_date || v.date || v.clinic)) || null;
 }
 
 function applyLabSegmentHeader(seg, visitBlocks, exporting = null) {
@@ -978,9 +1152,11 @@ export function inheritSegmentHeader(rows, seg) {
     if (date && !l.collected_on) l.collected_on = date;
     if (clinic) l.clinic = clinic;
     l.vet = normalizeVetName(l.vet) || vet || null;
+    l.event_date = l.event_date || l.collected_on || date || null;
   }
   for (const w of rows.weights || []) {
     if (date && !w.measured_on) w.measured_on = date;
+    w.event_date = w.event_date || w.measured_on || null;
   }
   for (const v of rows.vaccinations || []) {
     if (clinic) v.clinic = clinic;
@@ -991,13 +1167,19 @@ export function inheritSegmentHeader(rows, seg) {
   }
   for (const vis of rows.visits || []) {
     if (date && !vis.date) vis.date = date;
+    vis.event_date = vis.event_date || vis.date || date || null;
     if (clinic) vis.clinic = clinic;
     vis.vet = normalizeVetName(vis.vet) || vet || null;
   }
   for (const e of rows.exams || []) {
     if (date && !e.visit_date) e.visit_date = date;
+    e.event_date = e.event_date || e.visit_date || date || null;
     if (clinic) e.clinic = clinic;
     e.vet = normalizeVetName(e.vet) || vet || null;
+  }
+  for (const c of rows.conditions || []) {
+    c.event_date = c.event_date || c.onset_date || date || null;
+    if (!c.onset_date) c.onset_date = c.event_date || null;
   }
   return rows;
 }
@@ -1076,7 +1258,7 @@ export function parseSegmentCode(seg) {
           rows.labs.push({ ...l, collected_on: l.collected_on || seg.date });
         }
       });
-      parseConditions(t).forEach((c) => rows.conditions.push(c));
+      parseConditions(t, coalesceDate(seg.date)).forEach((c) => rows.conditions.push(c));
       parseMedsTable(t).forEach((m) => rows.medications.push(m));
     } else if (type === 'identity') {
       if (harvested.identity) rows.identity = { ...(rows.identity || {}), ...harvested.identity };
@@ -1085,6 +1267,7 @@ export function parseSegmentCode(seg) {
   if (type === 'visit' && !rows.visits.length) {
     rows.visits.push({
       date: seg.date,
+      event_date: seg.date || null,
       clinic: seg.clinic,
       vet: seg.vet,
       reason: detectReason(t),
@@ -1242,6 +1425,8 @@ export function mergeRowSets(parts) {
 
 export function pipelineCode(text) {
   const segs = segment(text);
+  const exporting = detectExportingPractice(text);
+  const document_date = detectDocumentDate(text);
   const stats = [];
   const parts = segs.map((seg) => {
     const rows = parseSegmentCode(seg);
@@ -1275,15 +1460,20 @@ export function pipelineCode(text) {
   if (!merged.vaccinations.length && harvested.vaccinations.length) merged.vaccinations = harvested.vaccinations;
   if (!merged.visits.length && harvested.visits.length) merged.visits = harvested.visits;
   if (!merged.labs.length && harvested.labs.length) merged.labs = harvested.labs;
+  merged.issuing_clinic = exporting || null;
+  merged.document_date = document_date || merged.identity?.document_date || null;
+  if (merged.identity && !merged.identity.document_date) merged.identity.document_date = merged.document_date;
+  merged.conditions = coalesceConditionOnset(merged.conditions);
+  stampEventDates(merged, merged.document_date);
   const latest = latestVisit(merged.visits);
-  const datedVisits = (merged.visits || []).filter((v) => v && v.date);
+  const datedVisits = (merged.visits || []).filter((v) => v && (v.event_date || v.date));
   if (datedVisits.length <= 1) {
-    inheritVisitDate(merged, latest?.date || segs[0]?.date || harvested.date);
+    inheritVisitDate(merged, latest?.event_date || latest?.date || segs[0]?.date || harvested.date);
   }
   merged.undated = itemsTrulyUndated(merged);
   merged.segment_stats = stats;
   merged.mentioned_but_missing = parts.flatMap((p) => p.mentioned_but_missing || []);
-  merged.date = latest?.date || harvested.date || segs[0]?.date || null;
+  merged.date = latest?.event_date || latest?.date || harvested.date || segs[0]?.date || null;
   merged.clinic = latest?.clinic || (datedVisits.length <= 1 ? (harvested.clinic || segs[0]?.clinic || null) : null);
   merged.vet = latest?.vet || null;
   return merged;
@@ -1329,5 +1519,23 @@ Ordered by: Bond Vet
 Collected: 8/7/2026
 TEST RESULT  REFERENCE RANGE
 ALT 190 H 12-130
+`;
+
+export const RYAN_CLINIC_FIXTURE = `BondVet
+Medical Chart
+Owner: Listed Owner
+Patient: Private Ryan
+Age: 3 y
+Species: Canine
+Breed: Terrier Mix
+Weight: 22.4 lb
+Sex: Female (Intact)
+Microchip: None listed
+Allergies: None listed
+Patient ID: BV-10482
+DOB: 01/15/2022
+January 7, 2025
+Service on 1/7/2025
+Wellness exam
 `;
 

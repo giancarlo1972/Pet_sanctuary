@@ -324,6 +324,7 @@ interface PetDocument {
   title: string | null;
   taken_on: string | null;
   clinic: string | null;
+  issuing_clinic?: string | null;
   notes: string | null;
   ai_summary?: any;
   ai_status?: string | null;
@@ -389,12 +390,28 @@ interface ExtractedProcedure {
 }
 
 interface ExtractedIdentity {
-  microchip: string | null;
-  date_of_birth: string | null;
+  owner?: string | null;
+  patient?: string | null;
+  species?: string | null;
+  breed?: string | null;
+  weight_lb?: number | null;
   sex: string | null;
-  breed: string | null;
+  spayed_neutered?: boolean | null;
+  microchip: string | null;
+  allergies?: string | null;
+  patient_id?: string | null;
+  date_of_birth: string | null;
+  document_date?: string | null;
+  age_printed?: string | null;
   colors: string | null;
   bcs?: number | null;
+}
+
+function sexToGender(sex: string | null | undefined): 'female' | 'male' | null {
+  const s = String(sex || '').trim().toLowerCase();
+  if (s === 'f' || s === 'female') return 'female';
+  if (s === 'm' || s === 'male') return 'male';
+  return null;
 }
 
 interface ExtractedData {
@@ -927,6 +944,8 @@ export default function PetRecordScreen() {
     lifestyle?: { diet?: string | null; food_brand?: string | null; food_product?: string | null; food_type?: string | null; parasite_prevention?: string | null; source?: string | null } | null;
     suggestedDob?: string | null;
     dobEstimated?: boolean;
+    issuingClinic?: string | null;
+    documentDate?: string | null;
   } | null>(null);
   const parsedAttempted = useRef<Set<string>>(new Set());
   const [editableVax, setEditableVax] = useState<ExtractedVaccination[]>([]);
@@ -1148,6 +1167,7 @@ export default function PetRecordScreen() {
       title: d.title,
       taken_on: d.taken_on,
       clinic: d.clinic,
+      issuing_clinic: d.issuing_clinic || null,
       notes: d.notes,
       ai_summary: d.ai_summary || d.extracted || null,
       ai_status: d.ai_status || null,
@@ -1980,7 +2000,7 @@ export default function PetRecordScreen() {
     });
     const visits = (parsed.visits || []).map((v: any) => ({
       event_type: 'visit',
-      occurred_on: v.date || parsed.date || null,
+      occurred_on: v.event_date || v.date || parsed.document_date || null,
       title: v.reason || v.clinic || 'Visit',
       notes: v.summary || [v.findings, v.plan].filter(Boolean).join(' · ') || null,
       cost_cents: null,
@@ -2055,6 +2075,8 @@ export default function PetRecordScreen() {
       lifestyle: parsed.lifestyle || null,
       suggestedDob: parsed.identity?.date_of_birth || null,
       dobEstimated: Boolean(parsed.identity?.date_of_birth_estimated),
+      issuingClinic: parsed.issuing_clinic || null,
+      documentDate: parsed.document_date || parsed.identity?.document_date || null,
     });
   };
 
@@ -2148,15 +2170,21 @@ export default function PetRecordScreen() {
       const title = result.title || null;
       const status = Array.isArray(result.mentioned_but_missing) && result.mentioned_but_missing.length ? 'partial' : 'ready';
       const kindsOut = explicitKinds(result.content_kinds) || detectedContentKinds(result);
-      await supabase.from('pet_documents').update({
+      const docPatch: any = {
         ai_status: status,
         ai_summary: { ...result, schemaVersion: 2, content_kinds: kindsOut },
         title: title || undefined,
         clinic: result.clinic || undefined,
+        issuing_clinic: result.issuing_clinic || undefined,
         taken_on: result.date || undefined,
         content_kinds: kindsOut.length ? kindsOut : undefined,
-      }).eq('id', documentId);
-      setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: status, ai_summary: result, title: title || d.title, clinic: result.clinic || d.clinic, content_kinds: kindsOut.length ? kindsOut : d.content_kinds } : d));
+      };
+      let docUp = await supabase.from('pet_documents').update(docPatch).eq('id', documentId);
+      if (docUp.error && /issuing_clinic/i.test(docUp.error.message || '')) {
+        delete docPatch.issuing_clinic;
+        docUp = await supabase.from('pet_documents').update(docPatch).eq('id', documentId);
+      }
+      setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: status, ai_summary: result, title: title || d.title, clinic: result.clinic || d.clinic, issuing_clinic: result.issuing_clinic || d.issuing_clinic, content_kinds: kindsOut.length ? kindsOut : d.content_kinds } : d));
       if (!silent) openConfirmFromParse(documentId, result);
     } catch (err: any) {
       console.error('[parse-pet-document] extraction error:', err);
@@ -2336,7 +2364,7 @@ export default function PetRecordScreen() {
         applied.labs++;
       }
 
-      // 3. weights — every Weight History row
+      // 3. weights — every Weight History row. Skip undated; never invent today.
       const rawWeights: ExtractedWeight[] = editableWeights.length
         ? editableWeights
         : Array.isArray(rawDoc.weights) ? rawDoc.weights : (editableWeight.value != null ? [editableWeight] : []);
@@ -2344,18 +2372,19 @@ export default function PetRecordScreen() {
       const seenWeight = new Set<string>();
       for (const w of rawWeights) {
         if (w.value == null) continue;
+        const measured = w.measured_on || null;
+        if (!measured) continue;
         const unit = String(w.unit || 'lb').toLowerCase();
         const lb = unit.startsWith('kg') ? Number(w.value) * 2.20462 : Number(w.value);
-        const measured = w.measured_on || null;
         const key = `${measured}|${Math.round(lb * 10) / 10}`;
         if (seenWeight.has(key)) continue;
         seenWeight.add(key);
-        const payload: any = { pet_id: petId, weight_lb: lb, measured_on: measured || new Date().toISOString().slice(0, 10), source: 'ai_extracted', author_id: user.id };
+        const payload: any = { pet_id: petId, weight_lb: lb, measured_on: measured, source: 'ai_extracted', author_id: user.id };
         console.log('[apply] weight payload', payload);
         let res = await supabase.from('weight_entries').insert(payload);
         if (res.error) {
           console.log('[apply] weight fail', res.error.message, payload);
-          res = await supabase.from('weight_entries').insert({ pet_id: petId, weight_lb: lb });
+          res = await supabase.from('weight_entries').insert({ pet_id: petId, weight_lb: lb, measured_on: measured });
           if (res.error) { errors.push(`Weight ${measured}: ${res.error.message}`); continue; }
         }
         applied.weights++;
@@ -2381,9 +2410,46 @@ export default function PetRecordScreen() {
       }
 
       const identApply: any = extractionReview.data?.identity || rawDoc.identity || {};
+      const petIdentPatch: any = {};
       if (!pet?.date_of_birth && (identApply.date_of_birth || extractionReview.suggestedDob)) {
         const dob = parseAnyDate(identApply.date_of_birth || extractionReview.suggestedDob);
-        if (dob) await run('Suggested DOB', () => supabase.from('pets').update({ date_of_birth: dob }).eq('id', petId));
+        if (dob) petIdentPatch.date_of_birth = dob;
+      }
+      const gender = sexToGender(identApply.sex);
+      if (!pet?.gender && gender) petIdentPatch.gender = gender;
+      if (pet?.spayed_neutered == null && typeof identApply.spayed_neutered === 'boolean') {
+        petIdentPatch.spayed_neutered = identApply.spayed_neutered;
+      }
+      if (Object.keys(petIdentPatch).length) {
+        await run('Identity', () => supabase.from('pets').update(petIdentPatch).eq('id', petId));
+      }
+      const chip = identApply.microchip ? String(identApply.microchip).replace(/\s/g, '') : '';
+      if (chip && /^\d{9,15}$/.test(chip) && !chipNumber) {
+        const chipRow = { pet_id: petId, microchip_number: chip };
+        let chipRes = await supabase.from('pet_identifiers').upsert(chipRow, { onConflict: 'pet_id' });
+        if (chipRes.error) chipRes = await supabase.from('pet_identifiers').insert(chipRow);
+        if (chipRes.error) console.log('[apply] pet_identifiers', chipRes.error.message);
+        else {
+          setChipNumber(chip);
+          await supabase.from('pets').update({ microchipped: true }).eq('id', petId);
+        }
+      }
+      const clinicId = identApply.patient_id ? String(identApply.patient_id).trim() : '';
+      const clinicName = extractionReview.issuingClinic || rawDoc.issuing_clinic || rawDoc.clinic || null;
+      if (clinicId && clinicName) {
+        const idRow = { pet_id: petId, clinic: clinicName, patient_id: clinicId };
+        let idRes = await supabase.from('pet_clinic_ids').upsert(idRow, { onConflict: 'pet_id,clinic' });
+        if (idRes.error) {
+          console.log('[apply] pet_clinic_ids', idRes.error.message);
+          await supabase.from('pet_clinic_ids').insert(idRow).then(() => {}, () => {});
+        }
+      }
+      if (clinicName) {
+        const issPatch: any = { issuing_clinic: clinicName, clinic: clinicName };
+        let iss = await supabase.from('pet_documents').update(issPatch).eq('id', sourceDocId);
+        if (iss.error && /issuing_clinic/i.test(iss.error.message || '')) {
+          await supabase.from('pet_documents').update({ clinic: clinicName }).eq('id', sourceDocId);
+        }
       }
 
       const life = extractionReview.lifestyle || rawDoc.lifestyle;
@@ -2420,15 +2486,16 @@ export default function PetRecordScreen() {
         if (lsRes.error) console.log('[apply] pet_lifestyle', lsRes.error.message);
       }
 
-      // 4. visits
+      // 4. visits — skip undated; never invent today
       for (const visit of editableProcedures) {
         if (!visit.title && !visit.event_type && !visit.occurred_on) continue;
+        if (!visit.occurred_on) continue;
         const visitPayload = {
           pet_id: petId,
           record_type: 'visit',
           title: visit.title || 'Visit',
           details: visit.notes || null,
-          record_date: visit.occurred_on || new Date().toISOString().slice(0, 10),
+          record_date: visit.occurred_on,
           source: 'ai_extracted',
           author_id: user.id,
         };
@@ -2440,7 +2507,7 @@ export default function PetRecordScreen() {
         await run(`Visit event "${visit.title || 'Visit'}"`, () => supabase.from('pet_care_events').insert({
           pet_id: petId,
           event_type: 'visit',
-          occurred_on: visit.occurred_on || null,
+          occurred_on: visit.occurred_on,
           title: visit.title || null,
           notes: visit.notes || null,
           recorded_by: user.id,
@@ -2533,8 +2600,8 @@ export default function PetRecordScreen() {
             is_active: status === 'active',
             notes: c.notes || existing.notes,
             onset_date: c.onset_date || existing.onset_date || existing.diagnosed_on,
-            resolved_date: status === 'resolved' ? (c.resolved_date || new Date().toISOString().slice(0, 10)) : existing.resolved_date,
-            resolved_on: status === 'resolved' ? (c.resolved_date || new Date().toISOString().slice(0, 10)) : existing.resolved_on,
+            resolved_date: status === 'resolved' ? (c.resolved_date || existing.resolved_date || null) : existing.resolved_date,
+            resolved_on: status === 'resolved' ? (c.resolved_date || existing.resolved_on || null) : existing.resolved_on,
             source_document_id: sourceDocId,
             source: 'ai_extracted',
             author_id: user.id,
@@ -4648,12 +4715,40 @@ export default function PetRecordScreen() {
                     {extractionReview.lifestyle.parasite_prevention ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Parasite prevention  </Text>{extractionReview.lifestyle.parasite_prevention}</Text> : null}
                   </View>
                 ) : null}
-                {extractionReview.suggestedDob && !pet?.date_of_birth ? (
-                  <View style={styles.confirmCard}>
-                    <Text style={styles.docTitle}>Suggested DOB</Text>
-                    <Text style={styles.confirmLine}>{extractionReview.suggestedDob}{extractionReview.dobEstimated ? ' · estimated from age' : ''}</Text>
-                  </View>
-                ) : null}
+                {(() => {
+                  const ident: any = extractionReview.data?.identity || {};
+                  const sexLabel = ident.sex === 'F' || /female/i.test(ident.sex || '')
+                    ? (ident.spayed_neutered === false ? 'Female (Intact)' : ident.spayed_neutered === true ? 'Female (Spayed)' : 'Female')
+                    : ident.sex === 'M' || /male/i.test(ident.sex || '')
+                      ? (ident.spayed_neutered === false ? 'Male (Intact)' : ident.spayed_neutered === true ? 'Male (Neutered)' : 'Male')
+                      : ident.sex || null;
+                  const hasIdent = ident.patient || ident.owner || ident.date_of_birth || ident.microchip || ident.patient_id || ident.sex || extractionReview.issuingClinic || extractionReview.documentDate || extractionReview.suggestedDob;
+                  if (!hasIdent) return null;
+                  const derivedAge = ident.date_of_birth ? compactAge(ident.date_of_birth, null) : null;
+                  return (
+                    <View style={styles.confirmCard}>
+                      <Text style={styles.docTitle}>Identity</Text>
+                      {ident.patient ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Patient  </Text>{ident.patient}</Text> : null}
+                      {ident.owner ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Owner  </Text>{ident.owner}</Text> : null}
+                      {ident.species ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Species  </Text>{ident.species}</Text> : null}
+                      {ident.breed ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Breed  </Text>{ident.breed}</Text> : null}
+                      {sexLabel ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Sex  </Text>{sexLabel}</Text> : null}
+                      {ident.date_of_birth || extractionReview.suggestedDob ? (
+                        <Text style={styles.confirmLine}>
+                          <Text style={styles.confirmK}>DOB  </Text>
+                          {ident.date_of_birth || extractionReview.suggestedDob}
+                          {derivedAge ? ` · ${derivedAge}` : ''}
+                          {extractionReview.dobEstimated ? ' · estimated from age' : ''}
+                        </Text>
+                      ) : null}
+                      <Text style={styles.confirmLine}><Text style={styles.confirmK}>Microchip  </Text>{ident.microchip || 'None listed'}</Text>
+                      {ident.allergies ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Allergies  </Text>{ident.allergies}</Text> : null}
+                      {ident.patient_id ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Patient ID  </Text>{ident.patient_id}</Text> : null}
+                      {extractionReview.issuingClinic ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Issuing clinic  </Text>{extractionReview.issuingClinic}</Text> : null}
+                      {extractionReview.documentDate ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Document date  </Text>{extractionReview.documentDate}</Text> : null}
+                    </View>
+                  );
+                })()}
                 {editableWeights.length > 0 ? (
                   <View style={styles.confirmCard}>
                     <Text style={styles.docTitle}>Weight history ({editableWeights.length})</Text>

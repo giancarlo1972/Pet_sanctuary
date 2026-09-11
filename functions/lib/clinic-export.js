@@ -56,6 +56,25 @@ export function parseWeightHistory(text) {
   });
 }
 
+export const STATUS_CURRENT_UNKNOWN = 'current (given date unknown)';
+const CLINIC_NAME_WORDS = /^(veterinary|vet|clinic|hospital|animal|care|center|er|emergency)$/i;
+const VET_NAME_RE = /^(Dr\.?\s)?[A-Z][a-z]+(\s[A-Z][a-z'\-]+)+,?\s*(D\.?V\.?M\.?|VMD)?$/;
+
+export function isValidVetName(s) {
+  const name = String(s || '').replace(/\s+/g, ' ').trim();
+  if (!name) return false;
+  if (!VET_NAME_RE.test(name)) return false;
+  const stripped = name.replace(/^Dr\.?\s/i, '').replace(/,?\s*(D\.?V\.?M\.?|VMD)$/i, '').trim();
+  if (stripped.split(/\s+/).some((t) => CLINIC_NAME_WORDS.test(t))) return false;
+  return true;
+}
+
+export function normalizeVetName(s) {
+  if (s == null || s === '') return null;
+  const name = String(s).replace(/\s+/g, ' ').trim();
+  return isValidVetName(name) ? name : null;
+}
+
 export function parseReminders(text) {
   const idx = text.search(/\breminders?\b/i);
   const slice = idx >= 0 ? text.slice(idx, idx + 5000) : text;
@@ -67,7 +86,9 @@ export function parseReminders(text) {
       name: m[1].replace(/\s+/g, ' ').trim(),
       product: m[1].replace(/\s+/g, ' ').trim(),
       given: null,
+      administered_on: null,
       next_due: toIso(m[2]),
+      status: STATUS_CURRENT_UNKNOWN,
       manufacturer: /purevax/i.test(m[1]) ? 'Boehringer Ingelheim (Purevax)' : null,
     });
   }
@@ -76,6 +97,7 @@ export function parseReminders(text) {
 
 export function parseInventoryVaccines(blockText, serviceDate) {
   const vax = [];
+  if (!/inventory item/i.test(blockText) || !/service on/i.test(blockText)) return vax;
   const re = /Inventory Item\s*[—\-:]?\s*(PUREVAX[^,\n]+|FVRCP[^,\n]+|FeLV[^,\n]+|Rabies[^,\n]+)/gi;
   let m;
   while ((m = re.exec(blockText))) {
@@ -85,8 +107,10 @@ export function parseInventoryVaccines(blockText, serviceDate) {
       name,
       product: name,
       manufacturer: /purevax/i.test(name) ? 'Boehringer Ingelheim (Purevax)' : null,
-      given: serviceDate,
+      given: serviceDate || null,
+      administered_on: serviceDate || null,
       next_due: null,
+      status: serviceDate ? 'given' : STATUS_CURRENT_UNKNOWN,
       site,
       clinic: null,
     });
@@ -407,20 +431,17 @@ export function harvestKnownFacts(text) {
       .filter(Boolean);
     const through = line.match(/(?:current|valid)?\s*(?:through|thru|until|expires?(?:\s+on)?)\s+([A-Za-z]{3,9}\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/i);
     const missed = /missed|overdue|incomplete|late/i.test(line);
-    const current = /current|up[- ]to[- ]date/i.test(line);
-    const dueish = /due|expires|valid thru|through|thru|next|reminder|current/i.test(line);
-    const given = missed || (dueish && dates.length < 2 && !/given|administ/i.test(line)) ? null : (dates[0] || null);
-    const next_due = monthEndIso(through?.[1]) || dates[1] || (dueish && !given ? (dates[0] || monthEndIso(through?.[1])) : null);
+    const next_due = monthEndIso(through?.[1]) || ((/due|expires|valid thru|through|thru|next|reminder|current/i.test(line)) ? (dates[0] || monthEndIso(through?.[1])) : null);
     pushVax({
       name: m[1].replace(/\s+/g, ' ').trim(),
       product: m[1].replace(/\s+/g, ' ').trim(),
       brand: /purevax/i.test(line) ? 'PUREVAX' : null,
       lot: (line.match(/\blot\s*[:#]?\s*([A-Z0-9-]+)/i) || [])[1] || null,
-      given,
+      given: null,
       next_due,
       site: (line.match(/\b(SC|SQ|IM|IN)\b[^,\n]{0,40}/i) || [])[0] || null,
-      status: missed ? 'overdue' : (current || (next_due && !given) ? 'current' : (given ? 'given' : null)),
-      notes: missed ? line.trim().slice(0, 160) : (current ? line.trim().slice(0, 160) : null),
+      status: missed ? 'overdue' : (next_due ? STATUS_CURRENT_UNKNOWN : null),
+      notes: missed ? line.trim().slice(0, 160) : (next_due ? line.trim().slice(0, 160) : null),
     });
   }
   if (/\bFVRCP\b/i.test(src) && /missed|overdue|incomplete/i.test(src)) {
@@ -435,7 +456,7 @@ export function harvestKnownFacts(text) {
       product: 'Rabies',
       given: null,
       next_due: monthEndIso(through?.[1]) || null,
-      status: 'current',
+      status: STATUS_CURRENT_UNKNOWN,
       notes: (through?.[0] || 'Rabies current').replace(/\s+/g, ' ').trim().slice(0, 160),
     });
   }
@@ -671,27 +692,25 @@ export function reconcileVaxDates(text, vaccinations) {
       line,
       dates,
       dueish: /due|expires|valid thru|next|reminder|current through/i.test(line),
-      givenish: /given|administ|inventory item|administered|service on/i.test(line),
     });
   }
   const out = (vaccinations || []).map((v) => {
+    const hasGiven = Boolean(v.given || v.administered_on);
+    const statusLc = String(v.status || '').toLowerCase();
+    // Reminders / current-through: never invent administered_on from a due date.
+    if (!hasGiven) {
+      if (statusLc === 'overdue') return { ...v, given: null, administered_on: null };
+      if (v.next_due || statusLc.includes('unknown') || statusLc === 'current') {
+        return { ...v, given: null, administered_on: null, status: STATUS_CURRENT_UNKNOWN };
+      }
+      return { ...v, given: null, administered_on: null };
+    }
     const product = String(v.product || v.name || '');
     const key = product.split(/\s+/)[0].toLowerCase();
     const hits = windows.filter((w) => w.name.toLowerCase().includes(key) || product.toLowerCase().includes(w.name.split(/\s+/)[0].toLowerCase()));
-    if (!hits.length) return v;
-    const givenDates = hits.filter((h) => h.givenish && !h.dueish).flatMap((h) => h.dates);
     const noteDates = hits.flatMap((h) => h.dates);
-    const preferred = givenDates[0] || null;
-    if (preferred && v.given && preferred !== v.given) {
-      mismatches.push({ kind: 'vaccine_date', mention: `${product} structured ${v.given} but note has ${preferred}` });
-      return { ...v, given: preferred, administered_on: preferred, date: preferred };
-    }
-    if (!v.given && preferred && String(v.status || '').toLowerCase() !== 'current' && String(v.status || '').toLowerCase() !== 'overdue') {
-      return { ...v, given: preferred, administered_on: preferred, date: preferred };
-    }
-    if (v.given && noteDates.length && !noteDates.includes(v.given) && preferred) {
-      mismatches.push({ kind: 'vaccine_date', mention: `${product} structured ${v.given} but note has ${noteDates.join(', ')}` });
-      return { ...v, given: preferred, administered_on: preferred, date: preferred };
+    if (v.given && noteDates.length && !noteDates.includes(v.given) && !isoInText(v.given, src)) {
+      mismatches.push({ kind: 'vaccine_date', mention: `${product} structured ${v.given} but note has ${noteDates.join(', ') || 'no matching date'}` });
     }
     return v;
   });
@@ -720,17 +739,38 @@ Plan: follow-up vaccination in 3 weeks, fecal pending
 `;
 
 export function detectVet(src) {
-  const text = String(src || '').slice(0, 8000);
-  const vets = [];
-  const vetRe = /\b([A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+){0,2})[ \t]*,?[ \t]*(DVM|VMD)\b/g;
-  let vm;
-  while ((vm = vetRe.exec(text))) {
-    if (/veterinary|hospital|practice|laborator|reference/i.test(vm[1])) continue;
-    vets.push(`${vm[1]} ${vm[2]}`);
+  const text = String(src || '');
+  const found = [];
+  // D.V.M. / DVM / VMD — walk 2–4 Capitalized tokens before the credential.
+  // Split on all whitespace so "Veterinary\nJonathan Leshanski DVM" still yields
+  // Jonathan Leshanski; longest-first then shorter drops clinic-name words.
+  const dvmRe = /(?:\bD\.V\.M\.?|\bDVM\b|\bVMD\b)/gi;
+  let m;
+  while ((m = dvmRe.exec(text))) {
+    const before = text.slice(Math.max(0, m.index - 80), m.index);
+    const tokens = before.trim().split(/\s+/).filter(Boolean);
+    const names = [];
+    for (let i = tokens.length - 1; i >= 0 && names.length < 4; i--) {
+      const t = tokens[i].replace(/[,:]+$/g, '');
+      if (!/^[A-Z][a-z'\-]+$/.test(t)) break;
+      names.unshift(t);
+    }
+    const cred = /vmd/i.test(m[0]) ? 'VMD' : 'DVM';
+    for (let n = names.length; n >= 2; n--) {
+      found.push(`${names.slice(names.length - n).join(' ')} ${cred}`);
+    }
   }
-  const dr = text.match(/\bDr\.?[ \t]+([A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+)?)/);
-  if (dr) vets.push(`Dr. ${dr[1]}`);
-  return vets[0] || null;
+  // Dr. Firstname Lastname stays on one line so "Dr. Jane Doe\nTemp 101" does not swallow Temp.
+  const drRe = /\bDr\.?[ \t]+([A-Z][a-z]+(?:[ \t]+[A-Z][a-z'\-]+)+)/g;
+  while ((m = drRe.exec(text))) {
+    const cap = m[1].replace(/[ \t]+/g, ' ').replace(/[ \t]+(D\.?V\.?M\.?|VMD)\b/i, '').trim();
+    found.push(`Dr. ${cap}`);
+  }
+  for (const c of found) {
+    const n = normalizeVetName(c);
+    if (n) return n;
+  }
+  return null;
 }
 
 /** IDEXX / reference-lab cover sheet: practice + Ordered by + collected date. */
@@ -888,31 +928,31 @@ export function segment(text) {
 export function inheritSegmentHeader(rows, seg) {
   const date = seg?.date || null;
   const clinic = seg?.clinic || null;
-  const vet = seg?.vet || null;
+  const vet = normalizeVetName(seg?.vet);
   for (const l of rows.labs || []) {
     if (date && !l.collected_on) l.collected_on = date;
     if (clinic && !l.clinic) l.clinic = clinic;
-    if (vet && !l.vet) l.vet = vet;
+    l.vet = normalizeVetName(l.vet) || vet || null;
   }
   for (const w of rows.weights || []) {
     if (date && !w.measured_on) w.measured_on = date;
   }
   for (const v of rows.vaccinations || []) {
     if (clinic && !v.clinic) v.clinic = clinic;
-    if (vet && !v.vet) v.vet = vet;
-    if (date && !v.given && !v.administered_on && !v.next_due && /given|administ|inventory item/i.test(String(v.notes || v.product || ''))) {
-      v.given = date;
-      v.administered_on = date;
+    v.vet = normalizeVetName(v.vet) || vet || null;
+    if (v.next_due && !v.given && !v.administered_on && String(v.status || '').toLowerCase() !== 'overdue') {
+      v.status = STATUS_CURRENT_UNKNOWN;
     }
   }
   for (const vis of rows.visits || []) {
     if (date && !vis.date) vis.date = date;
     if (clinic && !vis.clinic) vis.clinic = clinic;
-    if (vet && !vis.vet) vis.vet = vet;
+    vis.vet = normalizeVetName(vis.vet) || vet || null;
   }
   for (const e of rows.exams || []) {
     if (date && !e.visit_date) e.visit_date = date;
     if (clinic && !e.clinic) e.clinic = clinic;
+    e.vet = normalizeVetName(e.vet) || vet || null;
   }
   return rows;
 }
@@ -968,6 +1008,8 @@ export function parseSegmentCode(seg) {
       });
     }
     harvested.vaccinations.forEach((v) => {
+      const hasFact = v.given || v.administered_on || v.next_due || String(v.status || '').toLowerCase() === 'overdue';
+      if (!hasFact) return;
       if (!rows.vaccinations.some((x) => String(x.name).toLowerCase() === String(v.name).toLowerCase() && (x.given || '') === (v.given || '') && (x.next_due || '') === (v.next_due || ''))) {
         rows.vaccinations.push(v);
       }

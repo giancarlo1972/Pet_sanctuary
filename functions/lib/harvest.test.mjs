@@ -13,6 +13,12 @@ import {
   parseSegmentCode,
   pipelineCode,
   verify,
+  detectVet,
+  normalizeVetName,
+  isValidVetName,
+  parseReminders,
+  parseInventoryVaccines,
+  STATUS_CURRENT_UNKNOWN,
 } from './clinic-export.js';
 
 describe('Aurora visit harvest', () => {
@@ -35,7 +41,7 @@ describe('Aurora visit harvest', () => {
     const rabies = raw.vaccinations.find((v) => /rabies/i.test(v.name));
     const fvrcp = raw.vaccinations.find((v) => /fvrcp/i.test(v.name));
     assert.ok(rabies);
-    assert.equal(rabies.status, 'current');
+    assert.equal(rabies.status, STATUS_CURRENT_UNKNOWN);
     assert.equal(rabies.next_due, '2026-09-30');
     assert.equal(rabies.given, null);
     assert.ok(fvrcp);
@@ -102,6 +108,8 @@ describe('pipelineCode — Sep 2 2026 Aurora fixture', () => {
     const fvrcp = out.vaccinations.find((v) => /fvrcp/i.test(v.name));
     assert.ok(rabies, JSON.stringify(out.vaccinations));
     assert.equal(rabies.next_due, '2026-09-30');
+    assert.equal(rabies.given, null);
+    assert.equal(rabies.status, STATUS_CURRENT_UNKNOWN);
     assert.ok(fvrcp);
     assert.equal(fvrcp.status, 'overdue');
     assert.equal(out.visits.length, 1);
@@ -225,5 +233,87 @@ ALT 190 H 12-130
     assert.match(String(alt.clinic), /Bond Vet/i);
     assert.doesNotMatch(String(alt.vet || ''), /Leshanski/i);
     assert.equal(alt.collected_on, '2026-08-07');
+  });
+
+  it('Reminders table is next_due only; inventory given is 8/7', () => {
+    const reminderSeg = segs.find((s) => s.type === 'reminders');
+    const reminderRows = parseSegmentCode(reminderSeg).vaccinations;
+    assert.ok(reminderRows.length >= 2, JSON.stringify(reminderRows));
+    for (const v of reminderRows) {
+      assert.equal(v.given, null, JSON.stringify(v));
+      assert.equal(v.administered_on, null);
+      assert.ok(v.next_due, JSON.stringify(v));
+      assert.equal(v.status, STATUS_CURRENT_UNKNOWN);
+    }
+    const rabiesDue = reminderRows.find((v) => /rabies/i.test(v.name));
+    assert.equal(rabiesDue.next_due, '2026-08-12');
+    const given = out.vaccinations.find((v) => /rabies/i.test(v.name) && (v.given === '2026-08-07' || v.administered_on === '2026-08-07'));
+    assert.ok(given, JSON.stringify(out.vaccinations));
+    assert.equal(given.status, 'given');
+    const dueOnly = out.vaccinations.find((v) => /rabies/i.test(v.name) && v.next_due === '2026-08-12');
+    assert.ok(dueOnly, JSON.stringify(out.vaccinations));
+    assert.equal(dueOnly.given, null);
+    assert.equal(dueOnly.administered_on, null);
+    assert.equal(dueOnly.status, STATUS_CURRENT_UNKNOWN);
+  });
+});
+
+describe('vet-name extraction', () => {
+  it('accepts Jonathan Leshanski DVM and Dr. Jonathan Leshanski', () => {
+    assert.equal(normalizeVetName('Jonathan Leshanski DVM'), 'Jonathan Leshanski DVM');
+    assert.equal(normalizeVetName('Dr. Jonathan Leshanski'), 'Dr. Jonathan Leshanski');
+    assert.equal(isValidVetName('Dr Jonathan Leshanski, DVM'), true);
+    assert.equal(detectVet('Jonathan Leshanski DVM'), 'Jonathan Leshanski DVM');
+    assert.equal(detectVet('Dr. Jonathan Leshanski'), 'Dr. Jonathan Leshanski');
+  });
+
+  it('rejects clinic-name words and the Veterinary-prefixed leak', () => {
+    assert.equal(normalizeVetName('Veterinary Jonathan Leshanski DVM'), null);
+    assert.equal(normalizeVetName('Bond Vet'), null);
+    assert.equal(normalizeVetName('At Home Veterinary'), null);
+    assert.equal(normalizeVetName('Veterinary'), null);
+    assert.equal(normalizeVetName('Animal Care Center'), null);
+    assert.equal(normalizeVetName('Emergency Clinic'), null);
+    assert.equal(detectVet("Bond Vet Hell's Kitchen"), null);
+  });
+
+  it('drops Veterinary from a newline-split At Home block', () => {
+    const block = `Service on 9/2/2026
+At Home Veterinary
+Jonathan Leshanski DVM
+Temp 101.2 F`;
+    assert.equal(detectVet(block), 'Jonathan Leshanski DVM');
+    assert.doesNotMatch(detectVet(block) || '', /Veterinary/i);
+    const prefixed = detectVet('Veterinary Jonathan Leshanski DVM');
+    assert.equal(prefixed, 'Jonathan Leshanski DVM');
+  });
+});
+
+describe('given vs due', () => {
+  it('parseReminders never sets administered_on', () => {
+    const rows = parseReminders('Reminders\nRabies 8/12/2026\nFVRCP 11/7/2026');
+    assert.equal(rows.length, 2);
+    for (const v of rows) {
+      assert.equal(v.given, null);
+      assert.equal(v.administered_on, null);
+      assert.ok(v.next_due);
+      assert.equal(v.status, STATUS_CURRENT_UNKNOWN);
+    }
+  });
+
+  it('inventory given only from Service on + Inventory Item', () => {
+    const given = parseInventoryVaccines(
+      `Service on 8/7/2026\nBond Vet Hell's Kitchen\nInventory Item PUREVAX Rabies Feline 3 year\nGiven 8/7/2026`,
+      '2026-08-07',
+    );
+    assert.equal(given.length, 1);
+    assert.match(given[0].name, /PUREVAX Rabies/i);
+    assert.equal(given[0].given, '2026-08-07');
+    assert.equal(given[0].administered_on, '2026-08-07');
+    assert.equal(given[0].status, 'given');
+    const noService = parseInventoryVaccines('Inventory Item PUREVAX Rabies Feline 3 year', '2026-08-07');
+    assert.equal(noService.length, 0);
+    const noItem = parseInventoryVaccines('Service on 8/7/2026\nPUREVAX Rabies Feline 3 year', '2026-08-07');
+    assert.equal(noItem.length, 0);
   });
 });

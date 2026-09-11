@@ -10,6 +10,8 @@ import {
   inheritVisitDate,
   latestVisit,
   itemsTrulyUndated,
+  normalizeVetName,
+  STATUS_CURRENT_UNKNOWN,
   segment,
   classifySegment,
   TABLE_TYPES,
@@ -459,16 +461,24 @@ function trendLines(labs) {
 }
 
 function normalizeVax(v) {
-  const status = String(v?.status || '').toLowerCase() || null;
-  const given = v?.administered_on || v?.given || v?.given_on || v?.date_given || null;
-  const due = v?.next_due || v?.next_due_on || v?.valid_until || v?.expires_on || null;
-  let date = given || null;
-  let next_due = due || null;
-  if (date && next_due && String(date) > String(next_due) && status !== 'current' && status !== 'overdue') {
+  const rawStatus = String(v?.status || '').trim();
+  const statusLc = rawStatus.toLowerCase();
+  let date = v?.administered_on || v?.given || v?.given_on || v?.date_given || null;
+  let next_due = v?.next_due || v?.next_due_on || v?.valid_until || v?.expires_on || null;
+  if (statusLc === 'overdue' || statusLc.includes('unknown') || statusLc === 'current') {
+    date = null;
+  } else if (!date && next_due) {
+    date = null;
+  }
+  if (date && next_due && String(date) > String(next_due) && statusLc !== 'overdue' && !statusLc.includes('unknown')) {
     const t = date; date = next_due; next_due = t;
   }
-  if (!date && !next_due && v?.date && status !== 'current' && status !== 'overdue') date = v.date;
   const product = v?.product || v?.name || v?.vaccine || '';
+  let status = rawStatus || null;
+  if (statusLc === 'overdue') status = 'overdue';
+  else if (date) status = 'given';
+  else if (next_due) status = STATUS_CURRENT_UNKNOWN;
+  else if (statusLc.includes('unknown')) status = STATUS_CURRENT_UNKNOWN;
   return {
     brand: v?.brand || v?.product || null,
     name: v?.name || v?.vaccine || v?.product || '',
@@ -484,8 +494,8 @@ function normalizeVax(v) {
     site: v?.site || v?.injection_site || v?.route_site || null,
     reactions: v?.reactions || null,
     clinic: v?.clinic || v?.clinic_name || null,
-    vet: v?.vet || v?.vet_name || v?.veterinarian || v?.doctor || v?.provider || null,
-    status: status || (date ? 'given' : (next_due ? 'current' : null)),
+    vet: normalizeVetName(v?.vet || v?.vet_name || v?.veterinarian || v?.doctor || null),
+    status,
     notes: v?.notes || v?.note || null,
   };
 }
@@ -511,7 +521,7 @@ function normalizeVisit(v) {
   return {
     date: v.date || v.visit_date || v.occurred_on || null,
     clinic: v.clinic || v.clinic_name || null,
-    vet: v.vet || v.vet_name || v.veterinarian || null,
+    vet: normalizeVetName(v.vet || v.vet_name || v.veterinarian || null),
     reason: v.reason || v.title || null,
     findings: v.findings || null,
     plan: v.plan || null,

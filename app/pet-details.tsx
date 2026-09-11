@@ -20,6 +20,8 @@ import {
   Check,
   PawPrint,
   Lock,
+  Phone,
+  Mail,
 } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
@@ -215,6 +217,7 @@ function publicChips(pet: PetRecord): string[] {
   const push = (s?: string | null) => {
     const v = String(s || '').trim();
     if (!v) return;
+    if (/^vaccinated$/i.test(v)) return;
     if (out.some((x) => x.toLowerCase() === v.toLowerCase())) return;
     out.push(v);
   };
@@ -223,7 +226,6 @@ function publicChips(pet: PetRecord): string[] {
   const g = String(pet.gender || '').toLowerCase();
   if (g.startsWith('f')) push('Female');
   else if (g.startsWith('m')) push('Male');
-  if (pet.vaccinated || inferred.vaccinated) push('Vaccinated');
   (pet.personality || []).forEach(push);
   inferred.chips.forEach(push);
   return out;
@@ -337,9 +339,9 @@ export default function PetDetailsScreen() {
           good_with_kids: false,
           good_with_dogs: false,
           good_with_cats: false,
-          vaccinated: !!a.vaccinated || inferred.vaccinated,
-          spayed_neutered: !!a.spayed_neutered || inferred.spayed,
-          microchipped: !!a.microchipped || inferred.microchipped,
+          vaccinated: !!a.vaccinated,
+          spayed_neutered: !!a.spayed_neutered,
+          microchipped: !!a.microchipped,
           dewormed: !!a.dewormed,
           felv_fiv_negative: !!a.felv_fiv_negative,
           shelter_id: null,
@@ -644,10 +646,12 @@ export default function PetDetailsScreen() {
 
   const HealthTile = ({ label, done }: { label: string; done: boolean }) => (
     <View style={[styles.healthTile, done && styles.healthTileOn]}>
-      <View style={[styles.healthCheck, done && styles.healthCheckDone]}>
-        {done ? <Check color={Colors.teal} size={16} strokeWidth={2.6} /> : null}
-      </View>
-      <Text style={[styles.healthLabel, done && { color: Colors.tealDark }]} numberOfLines={2}>{label}</Text>
+      {done ? (
+        <Check color={Colors.teal} size={16} strokeWidth={2.6} />
+      ) : (
+        <Text style={styles.healthDash}>—</Text>
+      )}
+      <Text style={[styles.healthLabel, done && styles.healthLabelOn]} numberOfLines={2}>{label}</Text>
     </View>
   );
 
@@ -717,13 +721,23 @@ export default function PetDetailsScreen() {
                 <Text style={styles.description}>{inferListing(pet.description).about}</Text>
               ) : null}
               {phone ? (
-                <TouchableOpacity onPress={() => Linking.openURL('tel:' + phone.replace(/[^\d+]/g, ''))}>
-                  <Text style={styles.contactLink}>Call {phone}</Text>
+                <TouchableOpacity
+                  style={styles.contactBtn}
+                  onPress={() => Linking.openURL('tel:' + phone.replace(/[^\d+]/g, ''))}
+                  activeOpacity={0.85}
+                >
+                  <Phone color={Colors.coral} size={18} />
+                  <Text style={styles.contactBtnText} numberOfLines={1}>Call {phone}</Text>
                 </TouchableOpacity>
               ) : null}
               {email ? (
-                <TouchableOpacity onPress={() => Linking.openURL(`mailto:${email}?subject=${encodeURIComponent('Adoption inquiry: ' + pet.name)}`)}>
-                  <Text style={styles.contactLink}>Email {email}</Text>
+                <TouchableOpacity
+                  style={styles.contactBtn}
+                  onPress={() => Linking.openURL(`mailto:${email}?subject=${encodeURIComponent('Adoption inquiry: ' + pet.name)}`)}
+                  activeOpacity={0.85}
+                >
+                  <Mail color={Colors.coral} size={18} />
+                  <Text style={styles.contactBtnText} numberOfLines={1}>Email {email}</Text>
                 </TouchableOpacity>
               ) : null}
 
@@ -842,7 +856,13 @@ const styles = StyleSheet.create({
   traitText: {
     fontSize: 13, fontFamily: Fonts.semibold, fontWeight: '600', color: '#26265E',
   },
-  contactLink: { color: Colors.coral, fontFamily: Fonts.bold, fontSize: 14 },
+  contactBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    height: 48, borderRadius: 14, borderWidth: 1.5, borderColor: Colors.coral, backgroundColor: Colors.white,
+  },
+  contactBtnText: {
+    fontSize: 14, fontFamily: Fonts.bold, fontWeight: '700', color: Colors.coral, flexShrink: 1,
+  },
   chipCard: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 10,
     backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: '#EEF0F4',
@@ -859,17 +879,16 @@ const styles = StyleSheet.create({
 
   healthRow: { flexDirection: 'row', gap: 10 },
   healthTile: {
-    flex: 1, backgroundColor: '#E4F3F1', borderRadius: 14, padding: 14, alignItems: 'center', gap: 8,
+    flex: 1, backgroundColor: '#F1F2F8', borderRadius: 14, paddingVertical: 14, paddingHorizontal: 8, alignItems: 'center', gap: 6,
   },
   healthTileOn: { backgroundColor: '#E4F3F1' },
-  healthCheck: {
-    width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(46,158,150,.18)',
-    justifyContent: 'center', alignItems: 'center',
+  healthDash: {
+    fontSize: 16, fontFamily: Fonts.bold, fontWeight: '700', color: '#9AA1AC', lineHeight: 20,
   },
-  healthCheckDone: { backgroundColor: 'transparent' },
   healthLabel: {
-    fontSize: 11, fontFamily: Fonts.semibold, color: Colors.tealDark, textAlign: 'center',
+    fontSize: 11, fontFamily: Fonts.semibold, color: '#6B7280', textAlign: 'center',
   },
+  healthLabelOn: { color: Colors.tealDark },
 
   // Identity & Records card
   identityCard: {

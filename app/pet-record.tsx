@@ -607,7 +607,7 @@ function detectedContentKinds(parsed: any): string[] {
   if ((parsed.weight && parsed.weight.value != null) || (Array.isArray(parsed.weights) && parsed.weights.length)) k.push('weight');
   if (Array.isArray(parsed.medications) && parsed.medications.length) k.push('medications');
   if (Array.isArray(parsed.diagnostics) && parsed.diagnostics.length) k.push('imaging');
-  if (parsed.kind === 'insurance' || parsed.insurance || (Array.isArray(parsed.claims) && parsed.claims.length)) k.push('insurance');
+  if (parsed.insurance && (parsed.insurance.provider || parsed.insurance.policy_number || parsed.insurance.plan)) k.push('insurance');
   return k.length ? k : [];
 }
 
@@ -833,6 +833,8 @@ export default function PetRecordScreen() {
   const [diet, setDiet] = useState<PetDiet | null>(null);
   const [photos, setPhotos] = useState<PetPhoto[]>([]);
   const [documents, setDocuments] = useState<PetDocument[]>([]);
+  const [policies, setPolicies] = useState<any[]>([]);
+  const [insClaims, setInsClaims] = useState<any[]>([]);
   const [breeds, setBreeds] = useState<BreedOption[]>([]);
   const [colors, setColors] = useState<ColorOption[]>([]);
   const [weightUnit, setWeightUnit] = useState<'kg' | 'lb'>('lb');
@@ -1161,7 +1163,7 @@ export default function PetRecordScreen() {
       const { data: c2 } = await supabase.from('pet_colors').select('id, name, sort_order');
       setColors((c2 as ColorOption[]) || []);
     }
-    const [wRes, labRes, devRes, aiRes, deviceRes, chipRes, examRes, medsRes, diagRes, vitRes] = await Promise.all([
+    const [wRes, labRes, devRes, aiRes, deviceRes, chipRes, examRes, medsRes, diagRes, vitRes, polRes, claimRes] = await Promise.all([
       supabase.from('weight_entries').select('weight_lb, measured_on, source, created_at, author_id').eq('pet_id', petId).order('measured_on', { ascending: false }).limit(40),
       supabase.from('lab_results').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(400),
       supabase.from('device_readings').select('*').eq('pet_id', petId).order('recorded_at', { ascending: false }).limit(80),
@@ -1172,6 +1174,8 @@ export default function PetRecordScreen() {
       supabase.from('medications_given').select('*').eq('pet_id', petId).order('administered_on', { ascending: false }).limit(40),
       supabase.from('pet_diagnostics').select('*').eq('pet_id', petId).order('taken_on', { ascending: false }).limit(40),
       supabase.from('pet_vitals').select('*').eq('pet_id', petId).order('recorded_at', { ascending: true }).limit(200),
+      supabase.from('insurance_policies').select('*').eq('pet_id', petId).order('created_at', { ascending: false }),
+      supabase.from('insurance_claims').select('*').eq('pet_id', petId).order('created_at', { ascending: false }),
     ]);
     setWeightEntries(normalizeWeightRows(wRes.data || [], petData.name, petId));
     let labs = (labRes.data as any[]) || [];
@@ -1198,6 +1202,8 @@ export default function PetRecordScreen() {
     if (!medsRes.error) setMedsGiven((medsRes.data as any[]) || []);
     if (!diagRes.error) setDiagnostics((diagRes.data as any[]) || []);
     if (!vitRes.error) setVitalRows((vitRes.data as any[]) || []);
+    setPolicies(polRes.error ? [] : ((polRes.data as any[]) || []));
+    setInsClaims(claimRes.error ? [] : ((claimRes.data as any[]) || []));
     if (chipRes.error) {
       const retry = await supabase.from('pet_identifiers').select('microchip_number').eq('pet_id', petId).maybeSingle();
       if (retry.error) setChipDenied(true);
@@ -2800,10 +2806,16 @@ export default function PetRecordScreen() {
     ? (vaxDues.some((t) => t < nowMs) ? 'over' : vaxDues.some((t) => t - nowMs < 30 * 864e5) ? 'due' : 'ok')
     : pendingDocs.length > 0 ? 'due' : 'unknown';
   const thruIso = currentVax.map((v) => v.next_due_on).filter(Boolean).sort()[0];
-  const thruLabel = thruIso ? formatDate(String(thruIso)) : null;
+  const thruCompact = (() => {
+    if (!thruIso) return null;
+    const p = parseLocalParts(String(thruIso));
+    if (!p) return `thru ${formatDate(String(thruIso))}`;
+    const mon = new Date(p.y, p.m - 1, p.d).toLocaleString('en-US', { month: 'short' });
+    return `thru ${mon} ${p.y}`;
+  })();
   const vaxSub = vaxTone === 'over' ? 'Overdue'
-    : vaxCount === 0 ? (pendingDocs.length > 0 ? 'Review docs' : 'No record')
-    : thruLabel ? `Valid thru ${thruLabel}`
+    : vaxCount === 0 ? (pendingDocs.length > 0 ? 'Review docs' : 'Not on file')
+    : thruCompact ? thruCompact
     : vaxTone === 'due' ? 'Due soon' : 'Up to date';
   const felvFiv = labRows.filter((l) => /felv|fiv/i.test(String(l.analyte || l.name || '')));
   const examBcs = petExams.find((e) => e?.vitals?.bcs != null)?.vitals?.bcs;
@@ -2849,7 +2861,7 @@ export default function PetRecordScreen() {
   const activityTone: 'ok' | 'due' | 'over' | 'unknown' = petDevices.length === 0 && visits7 === 0 ? 'unknown'
     : (visits7 === 0 || (visitsPrev > 0 && visits7 < visitsPrev * 0.7)) ? 'due'
     : 'ok';
-  const activitySub = activityTone === 'unknown' ? 'No device' : activityTone === 'due' ? 'Low activity' : `${visits7} visits / 7d`;
+  const activitySub = activityTone === 'unknown' ? 'Not on file' : activityTone === 'due' ? 'Low activity' : `${visits7} visits / 7d`;
   const ownerNotes = documents.flatMap((d) => {
     const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary : {};
     const notes = Array.isArray((ai as any).owner_notes) ? (ai as any).owner_notes : [];
@@ -2977,7 +2989,7 @@ export default function PetRecordScreen() {
       const onset = onsetDates[0] || null;
       const yearMo = onset ? formatDate(onset).replace(/^(\w+) \d+, (\d+)$/, '$1 $2') : '';
       episode = {
-        title: `Hepatic lipidosis episode · ${yearMo || 'Sep 2023'} · ${status === 'resolved' ? 'Resolved' : status === 'monitoring' ? 'Monitoring' : 'Active'}`,
+        title: `Hepatic lipidosis episode · ${yearMo || 'Sep 2023'}`,
         status,
         onset,
         resolved: resolvedDates[resolvedDates.length - 1] || (parent?.resolved_date || parent?.resolved_on) || null,
@@ -3165,9 +3177,9 @@ export default function PetRecordScreen() {
           <DashboardPanel
             tiles={[
               { label: 'Vaccinated', value: vaxSub },
-              { label: 'Spayed', value: pet.spayed_neutered ? 'Yes' : '—' },
-              { label: 'Weight', value: latestLb != null ? `${formatLb(latestLb)} lb` : '—' },
-              { label: 'Activity', value: activitySub || '—' },
+              { label: 'Spayed', value: pet.spayed_neutered === true ? 'Yes' : 'Not on file' },
+              { label: 'Weight', value: latestLb != null ? `${formatLb(latestLb)}\u00a0lb` : 'Not on file' },
+              { label: 'Activity', value: activitySub || 'Not on file' },
             ]}
           />
         ) : null}
@@ -3182,26 +3194,69 @@ export default function PetRecordScreen() {
                   : Math.max(20, Math.min(100, (healthVerdict === 'STABLE' ? 88 : 64) - (aiFindings?.findings || []).filter((f: any) => /urgent/i.test(f.severity)).length * 10)),
                 hint: healthVerdict,
               },
-              { label: 'Weight', value: latestLb != null ? `${latestLb} lb` : '—', hint: targetLb != null ? `target ${targetLb} lb` : undefined },
-              { label: 'BCS', value: bcsVal != null ? `${bcsVal} /9` : '—' },
+              { label: 'Weight', value: latestLb != null ? `${latestLb}\u00a0lb` : 'Not on file', hint: targetLb != null ? `target ${targetLb} lb` : undefined },
+              { label: 'BCS', value: bcsVal != null ? `${bcsVal} /9` : 'Not on file' },
               { label: 'Main risk', value: (bcsVal != null && bcsVal >= 8) ? 'Overweight' : (activeConditions[0]?.name || 'None flagged') },
             ]}
-            footer={(conditionGroups.episode || conditions.some((c) => condLifecycle(c) === 'resolved')) ? (
-              <Text style={{ fontFamily: Fonts.medium, fontSize: 11, color: '#9AA1AC' }}>
-                Past conditions · {[
-                  ...(conditionGroups.episode ? [conditionGroups.episode.title] : []),
-                  ...conditions.filter((c) => condLifecycle(c) === 'resolved').map((c) => c.name),
-                ].filter(Boolean).slice(0, 4).join(' · ')}
-              </Text>
-            ) : null}
+            footer={(() => {
+              const chips: { key: string; label: string; status: string }[] = [];
+              if (conditionGroups.episode) {
+                const st = conditionGroups.episode.status;
+                chips.push({
+                  key: 'episode',
+                  label: conditionGroups.episode.title,
+                  status: st === 'resolved' ? 'Resolved' : st === 'monitoring' ? 'Monitoring' : 'Active',
+                });
+              }
+              conditions.filter((c) => condLifecycle(c) === 'resolved').forEach((c) => {
+                const name = String(c.name || '').trim();
+                if (!name || /^(resolved|active|monitoring)$/i.test(name)) return;
+                if (conditionGroups.episode?.items.some((x) => x.id === c.id)) return;
+                if (isHepaticParent(name) || isHepaticSymptom(name)) return;
+                chips.push({ key: c.id, label: name, status: 'Resolved' });
+              });
+              if (!chips.length) return null;
+              return (
+                <View style={{ gap: 8 }}>
+                  <Text style={{ fontFamily: Fonts.semibold, fontSize: 10.5, color: '#B9BCE0' }}>Past conditions</Text>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                    {chips.slice(0, 6).map((c) => (
+                      <View
+                        key={c.key}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 6,
+                          backgroundColor: 'rgba(255,255,255,.10)',
+                          borderRadius: 999,
+                          paddingHorizontal: 10,
+                          paddingVertical: 5,
+                          maxWidth: '100%',
+                        }}
+                      >
+                        <Text style={{ fontFamily: Fonts.semibold, fontSize: 11, color: '#fff', flexShrink: 1 }} numberOfLines={1}>{c.label}</Text>
+                        <View style={{
+                          backgroundColor: c.status === 'Active' ? 'rgba(46,158,150,.45)' : c.status === 'Monitoring' ? 'rgba(233,127,46,.4)' : 'rgba(255,255,255,.16)',
+                          borderRadius: 999,
+                          paddingHorizontal: 7,
+                          paddingVertical: 2,
+                        }}>
+                          <Text style={{ fontFamily: Fonts.bold, fontSize: 10, color: '#fff' }}>{c.status}</Text>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              );
+            })()}
           />
         ) : null}
 
         {tab === 'lifestyle' ? (
           <DashboardPanel
             tiles={[
-              { label: 'Age', value: compactAge(pet.date_of_birth, pet.age_text) || '—' },
-              { label: 'Weight', value: latestLb != null ? `${formatLb(latestLb)} lb` : '—' },
+              { label: 'Age', value: compactAge(pet.date_of_birth, pet.age_text) || 'Not on file' },
+              { label: 'Weight', value: latestLb != null ? `${formatLb(latestLb)}\u00a0lb` : 'Not on file' },
               { label: 'Traits', value: petTraitChips(pet).length },
             ]}
           />
@@ -3210,12 +3265,8 @@ export default function PetRecordScreen() {
         {tab === 'insurance' ? (
           <DashboardPanel
             tiles={[
-              { label: 'Policy', value: documents.some((d) => docAccordionKeys(d).includes('insurance')) ? 'On file' : 'None' },
-              { label: 'Claims', value: (() => {
-                const policy = documents.find((d) => docAccordionKeys(d).includes('insurance') || /insur|policy|declaration/i.test(String(d.title || d.kind || '')));
-                const ai = policy && policy.ai_summary && typeof policy.ai_summary === 'object' ? policy.ai_summary as any : {};
-                return Array.isArray(ai.claims) ? ai.claims.length : 0;
-              })() },
+              { label: 'Policy', value: policies.length ? (policies.find((p) => p.status === 'active')?.provider || policies[0]?.provider || 'On file') : 'None' },
+              { label: 'Claims', value: insClaims.length },
             ]}
           />
         ) : null}
@@ -3797,25 +3848,20 @@ export default function PetRecordScreen() {
         {tab === 'insurance' && (
           <View style={styles.tabContent}>
             {(() => {
-              const policyDocs = documents.filter((d) => docAccordionKeys(d).includes('insurance') || /insur|policy|declaration/i.test(String(d.title || d.kind || '')));
-              const policy = policyDocs[0];
-              const ai = policy && policy.ai_summary && typeof policy.ai_summary === 'object' ? policy.ai_summary as any : {};
-              const claims: any[] = Array.isArray(ai.claims) ? ai.claims : [];
-              const carrier = ai.carrier || ai.insurer || ai.company || null;
-              const plan = ai.plan || ai.product || ai.coverage_type || null;
-              const policyNo = ai.policy_number || ai.policy_no || ai.policy || null;
+              const policy = policies.find((p) => p.status === 'active') || policies[0] || null;
+              const claims = insClaims;
               return (
                 <>
                   {policy ? (
                     <View style={[styles.infoCard, { backgroundColor: Colors.navy, borderColor: Colors.navy, padding: 16, paddingTop: 16 }]}>
                       <Text style={[styles.healthKicker, { marginTop: 0 }]}>PET INSURANCE</Text>
                       <Text style={{ fontFamily: Fonts.extrabold, fontSize: 17, color: Colors.white, marginTop: 8 }}>
-                        {carrier || plan || policy.title || 'Policy on file'}
+                        {policy.provider || 'Policy on file'}
                       </Text>
-                      {plan && carrier ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>{plan}</Text> : null}
-                      {policyNo ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>Policy {policyNo}</Text> : null}
-                      {ai.deductible ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>Deductible {ai.deductible}</Text> : null}
-                      {policy.taken_on ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>Uploaded {formatDate(policy.taken_on)}</Text> : null}
+                      {policy.plan ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>{policy.plan}</Text> : null}
+                      {policy.policy_number ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>Policy {policy.policy_number}</Text> : null}
+                      {policy.deductible ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>Deductible {policy.deductible}</Text> : null}
+                      {policy.effective_from ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>Effective {formatDate(policy.effective_from)}</Text> : null}
                     </View>
                   ) : (
                     <View style={[styles.infoCard, { backgroundColor: Colors.navy, borderColor: Colors.navy, padding: 16, paddingTop: 16 }]}>
@@ -3853,7 +3899,7 @@ export default function PetRecordScreen() {
                     <Card key={i}>
                       <Text style={styles.docTitle}>{c.title || c.reason || 'Claim'}</Text>
                       <Text style={styles.docClinic}>
-                        {[c.status, c.amount, c.date ? formatDate(String(c.date)) : null].filter(Boolean).join(' · ')}
+                        {[c.status, c.invoice_amount != null ? `$${c.invoice_amount}` : c.amount, c.service_date ? formatDate(String(c.service_date)) : (c.date ? formatDate(String(c.date)) : null)].filter(Boolean).join(' · ')}
                       </Text>
                     </Card>
                   ))}

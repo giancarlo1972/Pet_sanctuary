@@ -322,10 +322,13 @@ export default function CommunityScreen() {
         data = retry.data as typeof data;
         error = retry.error;
       }
+      if (error) {
+        console.warn('[community] orgs query', error.message);
+        data = [];
+      }
       const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
       console.log('[community] orgs query', ms, 'ms');
-      if (error || !data) return;
-      let rows = data.map(mapOrgRow);
+      let rows = (data || []).map(mapOrgRow);
       try {
         const rg = await fetch('/api/rescuegroups?state=NY').then((r) => r.json());
         const have = new Set(rows.map((r) => String(r.name || '').toLowerCase()));

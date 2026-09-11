@@ -61,7 +61,7 @@ function detectedContentKinds(out) {
   if ((out.weight && out.weight.value != null) || (Array.isArray(out.weights) && out.weights.length)) k.push('weight');
   if (Array.isArray(out.medications) && out.medications.length) k.push('medications');
   if (Array.isArray(out.diagnostics) && out.diagnostics.length) k.push('imaging');
-  if (out.kind === 'insurance' || out.insurance || (Array.isArray(out.claims) && out.claims.length)) k.push('insurance');
+  if (out.insurance && (out.insurance.provider || out.insurance.policy_number || out.insurance.plan)) k.push('insurance');
   return k;
 }
 

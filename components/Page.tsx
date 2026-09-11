@@ -37,6 +37,6 @@ const s = StyleSheet.create({
   fill: { flex: 1, width: '100%' },
   scroll: { flexGrow: 1, alignItems: 'center', paddingBottom: 48 },
   frame: { flex: 1, width: '100%', alignItems: 'center' },
-  col: { width: '100%', paddingHorizontal: 16, gap: 14 },
+  col: { width: '100%', maxWidth: '100%', paddingHorizontal: 12, gap: 14, overflow: 'visible' },
   colFill: { flex: 1 },
 });

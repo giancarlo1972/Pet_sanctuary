@@ -1,14 +1,17 @@
 # Rescue Army smoke (run before every push)
 
-Sign in as `giancarlo.pereira@gmail.com` on the **local** static build
-(`npx expo export --platform web` served from `dist/`). Record PASS/FAIL
-and the value seen. **Any FAIL blocks the push.**
+**Any FAIL blocks the push.**
 
-Set `SMOKE_PASSWORD` in the environment for the signed-in checks (6–11).
-Never commit it.
+## Who runs what
 
-Set `SMOKE_PASSWORD` in the environment for the signed-in checks (6–11).
-Never commit it.
+Grok runs **1–5 (public)** and **12** against the local `dist/` export.
+It cannot sign in as `giancarlo.pereira@gmail.com` — no password in this
+environment.
+
+**You** run **4 (signed-out submit)** after the matching migration is
+applied, plus **6–11** signed in on hub-preview. Reply with PASS/FAIL
+and the value seen, one line each. Grok pushes only after those lines
+are PASS.
 
 ## Checks
 
@@ -30,6 +33,9 @@ Never commit it.
 Schema, RLS, and policy changes go through **migrations only**.
 
 - Add a file under `supabase/migrations/YYYYMMDDHHMMSS_*.sql`.
-- Never hand-paste SQL in the dashboard, chat, or a one-off script.
-- After adding the file, paste it once for the human to run in the Supabase SQL editor.
-- Hand-pasted policy edits are what drifted `pets` SELECT into recursion with `pet_relationships`.
+- Never hand-paste SQL in the dashboard, chat, or a one-off script —
+  except the one-time paste of that file so you can run it.
+- After adding the file, paste it once for the human to run in the
+  Supabase SQL editor.
+- Hand-pasted policy edits are what drifted `pets` SELECT into
+  recursion with `pet_relationships`.

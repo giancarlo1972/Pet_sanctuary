@@ -40,30 +40,56 @@ const ALL_CONTENT_KINDS = ['vaccinations', 'labs', 'exam_visit', 'weight', 'medi
 
 function normalizeKinds(raw) {
   const arr = (Array.isArray(raw) ? raw : String(raw || '').split(',')).map((k) => String(k).trim()).filter(Boolean);
-  const filtered = arr.filter((k) => ALL_CONTENT_KINDS.includes(k));
-  return filtered.length ? filtered : ALL_CONTENT_KINDS.slice();
+  return arr.filter((k) => ALL_CONTENT_KINDS.includes(k));
+}
+
+function requestedKinds(raw) {
+  const filtered = normalizeKinds(raw);
+  if (!filtered.length || filtered.length >= ALL_CONTENT_KINDS.length) return [];
+  return filtered;
+}
+
+function detectedContentKinds(out) {
+  const k = [];
+  if (Array.isArray(out.vaccinations) && out.vaccinations.length) k.push('vaccinations');
+  if (Array.isArray(out.labs) && out.labs.length) k.push('labs');
+  if (
+    (Array.isArray(out.visits) && out.visits.length)
+    || (Array.isArray(out.exams) && out.exams.length)
+    || (Array.isArray(out.conditions) && out.conditions.length)
+  ) k.push('exam_visit');
+  if ((out.weight && out.weight.value != null) || (Array.isArray(out.weights) && out.weights.length)) k.push('weight');
+  if (Array.isArray(out.medications) && out.medications.length) k.push('medications');
+  if (Array.isArray(out.diagnostics) && out.diagnostics.length) k.push('imaging');
+  if (out.kind === 'insurance' || out.insurance || (Array.isArray(out.claims) && out.claims.length)) k.push('insurance');
+  return k;
 }
 
 function applyKinds(out, kinds) {
-  const k = new Set(normalizeKinds(kinds));
-  if (!k.has('vaccinations')) out.vaccinations = [];
-  if (!k.has('labs')) out.labs = [];
-  if (!k.has('exam_visit')) {
-    out.visits = [];
-    out.exams = [];
-    out.conditions = [];
-    out.owner_notes = [];
+  const requested = requestedKinds(kinds);
+  const detected = detectedContentKinds(out);
+  const use = requested.length ? requested : (detected.length ? detected : ['other']);
+  if (requested.length) {
+    const k = new Set(requested);
+    if (!k.has('vaccinations')) out.vaccinations = [];
+    if (!k.has('labs')) out.labs = [];
+    if (!k.has('exam_visit')) {
+      out.visits = [];
+      out.exams = [];
+      out.conditions = [];
+      out.owner_notes = [];
+    }
+    if (!k.has('weight')) {
+      out.weight = null;
+      out.weights = [];
+      out.vitals_series = [];
+    }
+    if (!k.has('medications')) out.medications = [];
+    if (!k.has('imaging')) out.diagnostics = [];
   }
-  if (!k.has('weight')) {
-    out.weight = null;
-    out.weights = [];
-    out.vitals_series = [];
-  }
-  if (!k.has('medications')) out.medications = [];
-  if (!k.has('imaging')) out.diagnostics = [];
   if (!Array.isArray(out.undated)) out.undated = [];
   if (!Array.isArray(out.mentioned_but_missing)) out.mentioned_but_missing = [];
-  out.content_kinds = [...k];
+  out.content_kinds = use;
   return out;
 }
 
@@ -838,6 +864,10 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
 async function updateDoc(env, documentId, patch) {
   const { url, key } = getSupabase(env);
   if (!url || !key || !documentId) return;
+  const body = { ...patch };
+  if (body.ai_summary && Array.isArray(body.ai_summary.content_kinds) && body.content_kinds == null) {
+    body.content_kinds = body.ai_summary.content_kinds;
+  }
   const resp = await fetch(`${url}/rest/v1/pet_documents?id=eq.${documentId}`, {
     method: 'PATCH',
     headers: {
@@ -846,9 +876,9 @@ async function updateDoc(env, documentId, patch) {
       'Content-Type': 'application/json',
       Prefer: 'return=minimal',
     },
-    body: JSON.stringify(patch),
+    body: JSON.stringify(body),
   });
-  console.log('[parse-pet-document] patch', documentId, resp.status, Object.keys(patch).join(','));
+  console.log('[parse-pet-document] patch', documentId, resp.status, Object.keys(body).join(','));
 }
 
 export async function onRequestPost(context) {
@@ -862,13 +892,13 @@ export async function onRequestPost(context) {
     const pageCountIn = Number(body.pageCount) || 0;
     const forceScan = Boolean(body.forceScan);
     const incomingImages = Array.isArray(body.images) ? body.images.filter(Boolean) : [];
-    let kinds = normalizeKinds(body.kinds || body.content_kinds);
-    if (documentId && sb.url && sb.key && !(Array.isArray(body.kinds) && body.kinds.length) && !(Array.isArray(body.content_kinds) && body.content_kinds.length)) {
+    let kinds = requestedKinds(body.kinds || body.content_kinds);
+    if (documentId && sb.url && sb.key && !kinds.length) {
       try {
         const row = await fetch(`${sb.url}/rest/v1/pet_documents?id=eq.${documentId}&select=content_kinds`, {
           headers: { apikey: sb.key, Authorization: `Bearer ${sb.key}` },
         }).then((r) => r.json());
-        if (row?.[0]?.content_kinds) kinds = normalizeKinds(row[0].content_kinds);
+        if (row?.[0]?.content_kinds) kinds = requestedKinds(row[0].content_kinds);
       } catch (e) {
         console.log('[parse-pet-document] kinds row skip', String(e));
       }

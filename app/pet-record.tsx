@@ -579,6 +579,45 @@ function kindFromContent(kinds: string[]) {
   return 'medical_record';
 }
 
+function isOwnerRel(rel?: string | null) {
+  const r = String(rel || '').toLowerCase();
+  return r === 'owner' || r === 'own';
+}
+
+function findOwnerRel<T extends { user_id?: any; relationship?: any; started_on?: any; ended_on?: any }>(
+  rels: T[],
+  ownerId?: string | null,
+) {
+  const live = rels.filter((r) => !r.ended_on && isOwnerRel(r.relationship));
+  const mine = ownerId ? live.filter((r) => r.user_id === ownerId) : live;
+  const pool = mine.length ? mine : live;
+  return pool.find((r) => r.started_on) || pool[0] || null;
+}
+
+function detectedContentKinds(parsed: any): string[] {
+  if (!parsed || typeof parsed !== 'object') return [];
+  const k: string[] = [];
+  if (Array.isArray(parsed.vaccinations) && parsed.vaccinations.length) k.push('vaccinations');
+  if (Array.isArray(parsed.labs) && parsed.labs.length) k.push('labs');
+  if (
+    (Array.isArray(parsed.visits) && parsed.visits.length)
+    || (Array.isArray(parsed.exams) && parsed.exams.length)
+    || (Array.isArray(parsed.conditions) && parsed.conditions.length)
+  ) k.push('exam_visit');
+  if ((parsed.weight && parsed.weight.value != null) || (Array.isArray(parsed.weights) && parsed.weights.length)) k.push('weight');
+  if (Array.isArray(parsed.medications) && parsed.medications.length) k.push('medications');
+  if (Array.isArray(parsed.diagnostics) && parsed.diagnostics.length) k.push('imaging');
+  if (parsed.kind === 'insurance' || parsed.insurance || (Array.isArray(parsed.claims) && parsed.claims.length)) k.push('insurance');
+  return k.length ? k : [];
+}
+
+function explicitKinds(kinds?: string[] | null): string[] | undefined {
+  if (!kinds?.length) return undefined;
+  const known = kinds.filter((k) => (ALL_CONTENT_KIND_KEYS as readonly string[]).includes(k));
+  if (!known.length || known.length >= ALL_CONTENT_KIND_KEYS.length) return undefined;
+  return known;
+}
+
 const LB_PER_KG = 2.20462;
 
 function kgToLb(kg: number): number {
@@ -857,7 +896,7 @@ export default function PetRecordScreen() {
   const [docModalVisible, setDocModalVisible] = useState(false);
   const [docForm, setDocForm] = useState({
     kind: 'medical_record', title: '', taken_on: '', clinic: '', notes: '',
-    content_kinds: ALL_CONTENT_KIND_KEYS.slice(),
+    content_kinds: [] as string[],
   });
   const [docFile, setDocFile] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [savingDoc, setSavingDoc] = useState(false);
@@ -1459,9 +1498,7 @@ export default function PetRecordScreen() {
     setDetailsSpayed(Boolean(pet?.spayed_neutered));
     setDetailsCoat(pet?.coat || pet?.ai_traits?.coat || inferCoat(pet?.breed_primary || pet?.breed, pet?.breed_notes) || '');
     setDetailsTraits(pet ? petTraitChips(pet) : []);
-    const ownerRel = (relationships || []).find((r) =>
-      !r.ended_on && /owner/i.test(r.relationship || '') && (!pet?.owner_id || r.user_id === pet.owner_id)
-    ) || (relationships || []).find((r) => !r.ended_on && /owner/i.test(r.relationship || ''));
+    const ownerRel = findOwnerRel(relationships || [], pet?.owner_id);
     setDetailsSince((ownerRel?.started_on || '').slice(0, 10));
     setDetailsSheetVisible(true);
   };
@@ -1492,22 +1529,19 @@ export default function PetRecordScreen() {
       personality: detailsTraits,
     }).eq('id', petId);
     if (!error && detailsSince) {
-      const ownerRel = (relationships || []).find((r) =>
-        !r.ended_on && /owner/i.test(r.relationship || '') && (!pet?.owner_id || r.user_id === pet.owner_id)
-      ) || (relationships || []).find((r) => !r.ended_on && /owner/i.test(r.relationship || ''));
+      const ownerRel = findOwnerRel(relationships || [], pet?.owner_id);
       const since = detailsSince.slice(0, 10);
       if (ownerRel?.id) {
         const { error: relErr } = await supabase.from('pet_relationships').update({ started_on: since }).eq('id', ownerRel.id);
         if (relErr) showBanner(relErr.message || 'Saved details, but With you since did not persist.');
-      } else if (pet?.owner_id) {
-        const { error: relErr } = await supabase.from('pet_relationships').insert({
-          pet_id: petId, user_id: pet.owner_id, relationship: 'owner', started_on: since, source: 'owner',
-        });
-        if (relErr) {
-          await supabase.from('pet_relationships').insert({
-            pet_id: petId, user_id: pet.owner_id, relationship: 'owner', started_on: since,
-          });
-        }
+      } else if (pet?.owner_id || user?.id) {
+        const uid = pet?.owner_id || user?.id;
+        const row = { pet_id: petId, user_id: uid, relationship: 'owner', started_on: since };
+        const first = await supabase.from('pet_relationships').insert({ ...row, source: 'owner' });
+        const relErr = first.error
+          ? (await supabase.from('pet_relationships').insert(row)).error
+          : null;
+        if (relErr) showBanner(relErr.message || 'Saved details, but With you since did not persist.');
       }
     }
     setSavingDetails(false);
@@ -1635,7 +1669,7 @@ export default function PetRecordScreen() {
   const openAddDoc = () => {
     setDocForm({
       kind: 'medical_record', title: '', taken_on: '', clinic: '', notes: '',
-      content_kinds: ALL_CONTENT_KIND_KEYS.slice(),
+      content_kinds: [],
     });
     setDocFile(null);
     setDocError(null);
@@ -1766,7 +1800,7 @@ export default function PetRecordScreen() {
       const storedPath = up.data?.path || dest;
       console.log('[upload]', { bucket: 'pet-documents', path: storedPath, size, error: null });
       const title = docForm.title.trim() || originalName;
-      const kinds = (docForm.content_kinds.length ? docForm.content_kinds : ALL_CONTENT_KIND_KEYS).slice();
+      const kinds = explicitKinds(docForm.content_kinds) || [];
       const row: Record<string, unknown> = {
         pet_id: petId,
         kind: kindFromContent(kinds),
@@ -2000,17 +2034,17 @@ export default function PetRecordScreen() {
     setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'processing' } : d));
     try {
       let path = extra?.path;
-      let kinds = extra?.kinds;
+      let kinds = explicitKinds(extra?.kinds);
       if (!path || !kinds) {
         const { data: row } = await supabase.from('pet_documents').select('file_path, storage_path, content_kinds').eq('id', documentId).maybeSingle();
         path = path || row?.file_path || row?.storage_path;
-        kinds = kinds || (Array.isArray(row?.content_kinds) ? row.content_kinds : undefined);
+        kinds = kinds || explicitKinds(Array.isArray(row?.content_kinds) ? row.content_kinds : undefined);
       }
       const payload: Record<string, unknown> = {
         document_id: documentId,
         path,
         mimeType: extra?.mimeType,
-        kinds: kinds?.length ? kinds : ALL_CONTENT_KIND_KEYS,
+        kinds: explicitKinds(kinds),
       };
       let extractedText = extra?.extractedText;
       let pageCount = extra?.pageCount || 0;
@@ -2081,14 +2115,16 @@ export default function PetRecordScreen() {
       }
       const title = result.title || null;
       const status = Array.isArray(result.mentioned_but_missing) && result.mentioned_but_missing.length ? 'partial' : 'ready';
+      const kindsOut = explicitKinds(result.content_kinds) || detectedContentKinds(result);
       await supabase.from('pet_documents').update({
         ai_status: status,
-        ai_summary: { ...result, schemaVersion: 2 },
+        ai_summary: { ...result, schemaVersion: 2, content_kinds: kindsOut },
         title: title || undefined,
         clinic: result.clinic || undefined,
         taken_on: result.date || undefined,
+        content_kinds: kindsOut.length ? kindsOut : undefined,
       }).eq('id', documentId);
-      setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: status, ai_summary: result, title: title || d.title, clinic: result.clinic || d.clinic } : d));
+      setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: status, ai_summary: result, title: title || d.title, clinic: result.clinic || d.clinic, content_kinds: kindsOut.length ? kindsOut : d.content_kinds } : d));
       if (!silent) openConfirmFromParse(documentId, result);
     } catch (err: any) {
       console.error('[parse-pet-document] extraction error:', err);
@@ -2664,7 +2700,7 @@ export default function PetRecordScreen() {
     const title = doc.title || ai.title || ai.document_title || 'Untitled';
     const date = doc.taken_on || ai.date || ai.taken_on || null;
     const clinic = doc.clinic || ai.clinic || ai.clinic_name || null;
-    const kinds = (doc.content_kinds && doc.content_kinds.length ? doc.content_kinds : ALL_CONTENT_KIND_KEYS);
+    const kinds = explicitKinds(doc.content_kinds) || [];
     const status = doc.ai_status || (ai.error ? 'failed' : null);
     const reason = ai.reason || (status === 'missing_file' ? 'no_file' : null);
     const failLabel = reason === 'no_file' || status === 'missing_file'
@@ -2819,12 +2855,7 @@ export default function PetRecordScreen() {
     const notes = Array.isArray((ai as any).owner_notes) ? (ai as any).owner_notes : [];
     return notes.filter((n: any) => n && n.text).map((n: any) => ({ text: String(n.text), date: n.date || d.taken_on || null }));
   }).slice(0, 3);
-  const ownerRel = (() => {
-    const pool = relationships.filter((r) => /owner|guardian|adopter/i.test(r.relationship || ''));
-    const mine = pet.owner_id ? pool.filter((r) => r.user_id === pet.owner_id) : pool;
-    const use = (mine.length ? mine : pool).slice().sort((a, b) => String(a.started_on || '9999').localeCompare(String(b.started_on || '9999')));
-    return use.find((r) => r.started_on) || use[0] || currentRels.find((r) => /owner/i.test(r.relationship || '')) || null;
-  })();
+  const ownerRel = findOwnerRel(relationships, pet.owner_id);
   const ownerSince = ownerRel?.started_on || null;
   const withYouLabel = ownerSince ? formatDate(ownerSince) : '—';
   const speciesLabel = (() => {
@@ -4379,6 +4410,9 @@ export default function PetRecordScreen() {
                 <Text style={styles.filePickText}>{docFile ? ((docFile as any).name || 'File selected') : 'Choose file...'}</Text>
               </TouchableOpacity>
               <Text style={styles.modalLabel}>What’s in this file</Text>
+              <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: Colors.textSecondary, marginBottom: 8 }}>
+                Leave unchecked — AI tags only what it finds. Don’t select everything.
+              </Text>
               <View style={styles.pillRow}>
                 {CONTENT_KINDS.map((ck) => {
                   const on = docForm.content_kinds.includes(ck.key);
@@ -4389,7 +4423,7 @@ export default function PetRecordScreen() {
                       onPress={() => setDocForm((p) => {
                         const has = p.content_kinds.includes(ck.key);
                         const next = has ? p.content_kinds.filter((k) => k !== ck.key) : [...p.content_kinds, ck.key];
-                        return { ...p, content_kinds: next.length ? next : [ck.key] };
+                        return { ...p, content_kinds: next };
                       })}
                       activeOpacity={0.85}
                     >

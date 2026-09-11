@@ -373,7 +373,7 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
   const year = since ? new Date(since).getFullYear() : null;
   const action = dashAction(tab);
 
-  const petCount = pets.filter((r) => !r.ended_on).length;
+  const petCount = pets.filter((r) => !r.ended_on && petBucket(r) === 'own').length;
   const volunteerEntries = apps.filter((a) => a.application_type === 'volunteer').length
     + (duty?.services?.length || 0)
     + (volOn && !(duty?.services?.length) ? 1 : 0);

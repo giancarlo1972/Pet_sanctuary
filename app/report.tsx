@@ -445,7 +445,7 @@ export default function NewReportScreen() {
       });
       console.log('[reports.insert] payload', JSON.stringify(payload));
       lastPayload = { status: payload.status, severity: payload.severity, user_id: payload.user_id };
-      const { data, error } = await supabase.from('reports').insert(payload).select('id').single();
+      const { data, error } = await supabase.rpc('insert_report', { p: payload });
       if (error) {
         console.log('[reports.insert] error', error.message, error.code, error.details, {
           status: payload.status,
@@ -454,7 +454,9 @@ export default function NewReportScreen() {
         });
         throw error;
       }
-      setSubmittedId(data.id);
+      const newId = typeof data === 'string' ? data : (data as { id?: string } | null)?.id;
+      if (!newId) throw new Error('insert_report returned no id');
+      setSubmittedId(newId);
       if (lat != null && lng != null) {
         try {
           const { data: orgs } = await supabase

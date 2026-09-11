@@ -90,6 +90,8 @@ function mapPet(a) {
   const adopted = /adopted|unavailable|removed/i.test(status);
   const location = (a.animalLocationCitystate || '').trim() || null;
   const given = coordsOf(a.animalLocationLatitude, a.animalLocationLongitude);
+  const desc = decode(a.animalDescriptionPlain);
+  const t = desc.toLowerCase();
   return {
     id: 'rg-a-' + a.animalID,
     name: a.animalName,
@@ -98,7 +100,7 @@ function mapPet(a) {
     gender: a.animalSex || null,
     dob: a.animalBirthdate || null,
     age_text: ageFromDob(a.animalBirthdate) || a.animalAgeString || a.animalGeneralAge || null,
-    description: decode(a.animalDescriptionPlain),
+    description: desc,
     photo_url: photoFrom(a),
     main_photo_url: photoFrom(a),
     location,
@@ -109,8 +111,23 @@ function mapPet(a) {
     vaccinated: yes(a.animalUptodate) || yes(a.animalShotsCurrent),
     spayed_neutered: yes(a.animalAltered),
     microchipped: yes(a.animalMicrochipped),
+    dewormed: yes(a.animalDewormed) || /\bdewormed\b/.test(t),
+    felv_fiv_negative: yes(a.animalFelvFivNegative) || /\bfelv\/fiv negative\b|\bfelv\b.*negative/.test(t),
     needs_foster: yes(a.animalNeedsFoster),
     listing_url: a.animalUrl || null,
+    listing_phone: a.animalContactPhone || a.animalOrgPhone || null,
+    listing_email: a.animalContactEmail || a.animalOrgEmail || null,
+    org_name: a.animalOrgName || null,
+    size: a.animalSize || null,
+    coat: a.animalCoatLength || a.animalColor || null,
+    house_trained: a.animalHousetrained || null,
+    special_needs: a.animalSpecialneedsDescription || (yes(a.animalSpecialneeds) ? 'Yes' : null),
+    adoption_fee: a.animalAdoptionFee || null,
+    color: a.animalColor || null,
+    energy: a.animalEnergyLevel || a.animalActivityLevel || null,
+    good_with_kids: a.animalOKWithKids || a.animalGoodWithKids || null,
+    good_with_dogs: a.animalOKWithDogs || a.animalGoodWithDogs || null,
+    good_with_cats: a.animalOKWithCats || a.animalGoodWithCats || null,
     availability: adopted ? 'none' : 'both',
   };
 }
@@ -137,8 +154,12 @@ export async function onRequestGet(context) {
     'animalID','animalName','animalBreed','animalSpecies','animalSex','animalGeneralAge','animalBirthdate','animalAgeString',
     'animalDescriptionPlain','animalThumbnailUrl','animalPictures','animalLocationCitystate',
     'animalLocationLatitude','animalLocationLongitude',
-    'animalStatus','animalAltered','animalMicrochipped','animalNeedsFoster','animalOrgID',
-    'animalUptodate','animalShotsCurrent','animalUrl',
+    'animalStatus','animalAltered','animalMicrochipped','animalNeedsFoster','animalOrgID','animalOrgName',
+    'animalUptodate','animalShotsCurrent','animalUrl','animalDewormed','animalFelvFivNegative',
+    'animalSize','animalColor','animalCoatLength','animalHousetrained','animalSpecialneeds','animalSpecialneedsDescription',
+    'animalAdoptionFee','animalEnergyLevel','animalActivityLevel',
+    'animalOKWithKids','animalOKWithDogs','animalOKWithCats','animalGoodWithKids','animalGoodWithDogs','animalGoodWithCats',
+    'animalContactPhone','animalContactEmail','animalOrgPhone','animalOrgEmail',
   ];
 
   async function rg(filters, limit) {

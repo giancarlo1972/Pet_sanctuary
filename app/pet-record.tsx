@@ -344,6 +344,9 @@ interface ExtractedVaccination {
   vet_name: string | null;
   vet_license: string | null;
   clinic_name: string | null;
+  status?: string | null;
+  notes?: string | null;
+  brand?: string | null;
 }
 
 interface ExtractedLabResult {
@@ -354,6 +357,7 @@ interface ExtractedLabResult {
   ref_low: number | null;
   ref_high: number | null;
   flag: string | null;
+  collected_on?: string | null;
 }
 
 interface ExtractedLabPanel {
@@ -378,6 +382,7 @@ interface ExtractedProcedure {
   title: string | null;
   notes: string | null;
   cost_cents: number | null;
+  clinic_name?: string | null;
 }
 
 interface ExtractedIdentity {
@@ -687,14 +692,15 @@ function parseAnyDate(v: any): string | null {
 }
 
 function mapVaxRow(v: any) {
+  const status = String(v.status || '').toLowerCase();
   const given = parseAnyDate(v.given || v.administered_on || v.administered_date || v.given_on || v.date_given);
   const due = parseAnyDate(v.next_due || v.next_due_on || v.valid_until || v.expires_on || v.due_date);
   const dateField = parseAnyDate(v.date);
   if (given && due) return given <= due ? { given, due } : { given: due, due: given };
   if (given) return { given, due: due || null };
   if (due && !given) return { given: null, due };
-  if (dateField) return { given: dateField, due: null };
-  return { given: null, due: null };
+  if (dateField && status !== 'current' && status !== 'overdue') return { given: dateField, due: null };
+  return { given: null, due: due || null };
 }
 
 function ConfidenceDot({ level }: { level: 'high' | 'med' | 'low' | 'none' }) {
@@ -874,6 +880,9 @@ export default function PetRecordScreen() {
     mentionedButMissing?: { kind: string; mention: string }[];
     undated?: { kind: string; summary: string }[];
     aiStatus?: string | null;
+    lifestyle?: { diet?: string | null; food_brand?: string | null; food_product?: string | null; food_type?: string | null; parasite_prevention?: string | null; source?: string | null } | null;
+    suggestedDob?: string | null;
+    dobEstimated?: boolean;
   } | null>(null);
   const parsedAttempted = useRef<Set<string>>(new Set());
   const [editableVax, setEditableVax] = useState<ExtractedVaccination[]>([]);
@@ -1888,6 +1897,8 @@ export default function PetRecordScreen() {
         vet_license: v.vet_license || v.license || v.vet_license_no || null,
         clinic_name: v.clinic || v.clinic_name || parsed.clinic || null,
         reactions: v.reactions || null,
+        status: v.status || null,
+        notes: v.notes || null,
       };
     });
     const labs = (parsed.labs || []).flatMap((l: any) => {
@@ -1924,10 +1935,11 @@ export default function PetRecordScreen() {
     });
     const visits = (parsed.visits || []).map((v: any) => ({
       event_type: 'visit',
-      occurred_on: v.date || null,
+      occurred_on: v.date || parsed.date || null,
       title: v.reason || v.clinic || 'Visit',
-      notes: v.summary || null,
+      notes: v.summary || [v.findings, v.plan].filter(Boolean).join(' · ') || null,
       cost_cents: null,
+      clinic_name: v.clinic || parsed.clinic || null,
     }));
     const vaxDuplicates = new Set<number>();
     vax.forEach((v: any, i: number) => {
@@ -1974,6 +1986,9 @@ export default function PetRecordScreen() {
       mentionedButMissing: Array.isArray(parsed.mentioned_but_missing) ? parsed.mentioned_but_missing : [],
       undated: Array.isArray(parsed.undated) ? parsed.undated : [],
       aiStatus: parsed.mentioned_but_missing?.length ? 'partial' : 'ready',
+      lifestyle: parsed.lifestyle || null,
+      suggestedDob: parsed.identity?.date_of_birth || null,
+      dobEstimated: Boolean(parsed.identity?.date_of_birth_estimated),
     });
   };
 
@@ -2148,22 +2163,22 @@ export default function PetRecordScreen() {
             console.log('[apply] reminder → next_due', type, v.next_due_on, 'on', current.id);
             const res = await supabase.from('pet_vaccinations').update({ next_due_on: v.next_due_on }).eq('id', current.id);
             if (res.error) errors.push(`Reminder ${type}: ${res.error.message}`);
+            continue;
           }
-          continue;
         }
-        if (!v.administered_on) continue;
-        const key = `${type}|${v.administered_on}`;
-        if (seenDose.has(key) || existingVaxKeys.has(key)) continue;
+        if (!v.administered_on && String(v.status || '') !== 'current' && String(v.status || '') !== 'overdue' && !v.next_due_on && !v.notes) continue;
+        const key = `${type}|${v.administered_on || v.status || v.next_due_on || 'open'}`;
+        if (seenDose.has(key) || (v.administered_on && existingVaxKeys.has(key))) continue;
         seenDose.add(key);
-        const nextDue = addYearsLocal(v.administered_on, years) || v.next_due_on || null;
-        const payload = {
+        const nextDue = v.administered_on ? (addYearsLocal(v.administered_on, years) || v.next_due_on || null) : (v.next_due_on || null);
+        const payload: any = {
           pet_id: petId,
           vaccine: productName,
           vaccine_type: type,
           duration_years: years,
-          administered_on: v.administered_on,
+          administered_on: v.administered_on || null,
           next_due_on: nextDue,
-          manufacturer: matched.row?.manufacturer || v.manufacturer || null,
+          manufacturer: matched.row?.manufacturer || v.manufacturer || v.brand || null,
           lot_number: v.lot_number || null,
           vet_name: v.vet_name || null,
           vet_clinic: v.clinic_name || null,
@@ -2171,16 +2186,26 @@ export default function PetRecordScreen() {
           author_id: user.id,
           source: 'ai_extracted',
           superseded: false,
+          notes: v.notes || (v.status && v.status !== 'given' ? `status:${v.status}` : null),
         };
         console.log('[apply] vax payload', payload);
-        const res = await supabase.from('pet_vaccinations').insert(payload).select('id').maybeSingle();
+        let res = await supabase.from('pet_vaccinations').insert(payload).select('id').maybeSingle();
+        if (res.error) {
+          const slim = { ...payload };
+          delete slim.notes;
+          delete slim.vaccine_type;
+          delete slim.duration_years;
+          res = await supabase.from('pet_vaccinations').insert(slim).select('id').maybeSingle();
+        }
         console.log('[apply] vax result', res.error || res.data);
         if (res.error) { errors.push(`Vaccination "${productName}": ${res.error.message}`); continue; }
         applied.vaccinations++;
-        existingVaxKeys.add(key);
-        const older = vaccinations.filter((e) => vaccineType(e.vaccine) === type && String(e.administered_on || '') < String(v.administered_on));
-        if (older.length) {
-          await supabase.from('pet_vaccinations').update({ superseded: true }).in('id', older.map((e) => e.id));
+        if (v.administered_on) existingVaxKeys.add(key);
+        if (v.administered_on) {
+          const older = vaccinations.filter((e) => vaccineType(e.vaccine) === type && String(e.administered_on || '') < String(v.administered_on));
+          if (older.length) {
+            await supabase.from('pet_vaccinations').update({ superseded: true }).in('id', older.map((e) => e.id));
+          }
         }
       }
 
@@ -2277,6 +2302,46 @@ export default function PetRecordScreen() {
           }
           await run('Pet weight', () => supabase.from('pets').update(petPatch).eq('id', petId));
         }
+      }
+
+      const identApply: any = extractionReview.data?.identity || rawDoc.identity || {};
+      if (!pet?.date_of_birth && (identApply.date_of_birth || extractionReview.suggestedDob)) {
+        const dob = parseAnyDate(identApply.date_of_birth || extractionReview.suggestedDob);
+        if (dob) await run('Suggested DOB', () => supabase.from('pets').update({ date_of_birth: dob }).eq('id', petId));
+      }
+
+      const life = extractionReview.lifestyle || rawDoc.lifestyle;
+      if (life && (life.food_brand || life.food_product || life.diet || life.parasite_prevention)) {
+        const dietPayload: any = {
+          pet_id: petId,
+          food_brand: life.food_brand || null,
+          food_product: life.food_product || null,
+          food_type: life.food_type || null,
+          feeding_notes: life.parasite_prevention ? `Parasite prevention: ${life.parasite_prevention}` : (life.diet || null),
+          source: 'ai_extracted',
+        };
+        const lifeRow = {
+          pet_id: petId,
+          diet: life.diet || [life.food_brand, life.food_product, life.food_type].filter(Boolean).join(' ') || null,
+          food_brand: life.food_brand || null,
+          food_product: life.food_product || null,
+          food_type: life.food_type || null,
+          parasite_prevention: life.parasite_prevention || null,
+          source: 'ai_extracted',
+          confirmed: true,
+        };
+        let dietRes = diet?.pet_id
+          ? await supabase.from('pet_diet').update(dietPayload).eq('pet_id', petId)
+          : await supabase.from('pet_diet').insert(dietPayload);
+        if (dietRes.error) {
+          const slim = { pet_id: petId, food_brand: dietPayload.food_brand, food_product: dietPayload.food_product, food_type: dietPayload.food_type, feeding_notes: dietPayload.feeding_notes };
+          dietRes = diet?.pet_id
+            ? await supabase.from('pet_diet').update(slim).eq('pet_id', petId)
+            : await supabase.from('pet_diet').insert(slim);
+        }
+        if (dietRes.error) errors.push(`Diet: ${dietRes.error.message}`);
+        const lsRes = await supabase.from('pet_lifestyle').upsert(lifeRow, { onConflict: 'pet_id' });
+        if (lsRes.error) console.log('[apply] pet_lifestyle', lsRes.error.message);
       }
 
       // 4. visits
@@ -4426,6 +4491,7 @@ export default function PetRecordScreen() {
                 <Text style={styles.modalTitle}>Review extraction</Text>
                 <Text style={styles.extractionSummary}>
                   {editableVax.length} vaccine{editableVax.length !== 1 ? 's' : ''} · {extractionReview.visitsCount} visit{extractionReview.visitsCount !== 1 ? 's' : ''} · {extractionReview.labsCount} lab{extractionReview.labsCount !== 1 ? 's' : ''} · {editableWeights.length} weight{editableWeights.length !== 1 ? 's' : ''}
+                  {extractionReview.lifestyle ? ' · 1 diet' : ''}
                   {extractionReview.pageCount ? ` · ${extractionReview.pageCount} pages` : ''}
                 </Text>
               </View>
@@ -4447,7 +4513,7 @@ export default function PetRecordScreen() {
                   </View>
                 ) : null}
                 {(() => {
-                  const zeroItems = editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) === 0;
+                  const zeroItems = editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) + (extractionReview.lifestyle ? 1 : 0) === 0;
                   if (!zeroItems) return null;
                   return (
                     <View style={styles.confirmCard}>
@@ -4458,6 +4524,22 @@ export default function PetRecordScreen() {
                     </View>
                   );
                 })()}
+                {extractionReview.lifestyle ? (
+                  <View style={styles.confirmCard}>
+                    <Text style={styles.docTitle}>Food · AI extracted</Text>
+                    {extractionReview.lifestyle.food_brand ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Brand  </Text>{extractionReview.lifestyle.food_brand}</Text> : null}
+                    {extractionReview.lifestyle.food_product ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Product  </Text>{extractionReview.lifestyle.food_product}</Text> : null}
+                    {extractionReview.lifestyle.food_type ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Diet  </Text>{extractionReview.lifestyle.food_type}</Text> : null}
+                    {extractionReview.lifestyle.diet && !extractionReview.lifestyle.food_brand ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Diet  </Text>{extractionReview.lifestyle.diet}</Text> : null}
+                    {extractionReview.lifestyle.parasite_prevention ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Parasite prevention  </Text>{extractionReview.lifestyle.parasite_prevention}</Text> : null}
+                  </View>
+                ) : null}
+                {extractionReview.suggestedDob && !pet?.date_of_birth ? (
+                  <View style={styles.confirmCard}>
+                    <Text style={styles.docTitle}>Suggested DOB</Text>
+                    <Text style={styles.confirmLine}>{extractionReview.suggestedDob}{extractionReview.dobEstimated ? ' · estimated from age' : ''}</Text>
+                  </View>
+                ) : null}
                 {editableWeights.length > 0 ? (
                   <View style={styles.confirmCard}>
                     <Text style={styles.docTitle}>Weight history ({editableWeights.length})</Text>
@@ -4474,7 +4556,7 @@ export default function PetRecordScreen() {
                       <View style={styles.ovCardHead}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
                           <ConfidenceDot level={matched.confidence} />
-                          <Text style={styles.docTitle}>{matched.row?.name || vax.vaccine || 'Vaccine'}{!vax.administered_on && vax.next_due_on ? ' · reminder' : ''}</Text>
+                          <Text style={styles.docTitle}>{matched.row?.name || vax.vaccine || 'Vaccine'}{vax.status && vax.status !== 'given' ? ` · ${vax.status}` : (!vax.administered_on && vax.next_due_on ? ' · reminder' : '')}</Text>
                         </View>
                         <TouchableOpacity onPress={() => setConfirmEdit((s) => { const n = new Set(s); n.has(`vax-${i}`) ? n.delete(`vax-${i}`) : n.add(`vax-${i}`); return n; })}>
                           <Text style={styles.linkTxt}>{editing ? 'Done' : 'Edit'}</Text>
@@ -4509,8 +4591,10 @@ export default function PetRecordScreen() {
                         </>
                       ) : (
                         <>
-                          {vax.administered_on ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Given  </Text>{vax.administered_on}</Text> : <DateField label="Given" value={vax.administered_on} onChange={(val) => setEditableVax((prev) => prev.map((v, idx) => idx === i ? { ...v, administered_on: val } : v))} />}
+                          {vax.administered_on ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Given  </Text>{vax.administered_on}</Text> : <Text style={styles.confirmLine}><Text style={styles.confirmK}>Given  </Text>not on file</Text>}
                           {vax.next_due_on ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Next due  </Text>{vax.next_due_on}</Text> : null}
+                          {vax.status ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Status  </Text>{vax.status}</Text> : null}
+                          {vax.notes ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Note  </Text>{vax.notes}</Text> : null}
                           {vax.manufacturer ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Manufacturer  </Text>{vax.manufacturer}</Text> : null}
                           {vax.lot_number ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Lot  </Text>{vax.lot_number}</Text> : null}
                         </>
@@ -4545,7 +4629,7 @@ export default function PetRecordScreen() {
                         <>
                           {shown ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Result  </Text>{shown}</Text> : null}
                           {result.flag ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Flag  </Text>{result.flag}</Text> : null}
-                          {panel.collected_on ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Collected  </Text>{panel.collected_on}</Text> : null}
+                          {(result.collected_on || panel.collected_on) ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Collected  </Text>{result.collected_on || panel.collected_on}</Text> : null}
                         </>
                       )}
                     </View>
@@ -4583,6 +4667,7 @@ export default function PetRecordScreen() {
                       ) : (
                         <>
                           {proc.occurred_on ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Date  </Text>{proc.occurred_on}</Text> : null}
+                          {proc.clinic_name ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Clinic  </Text>{proc.clinic_name}</Text> : null}
                           {proc.notes ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Clinical summary  </Text>{proc.notes}</Text> : null}
                         </>
                       )}
@@ -4591,7 +4676,7 @@ export default function PetRecordScreen() {
                 })}
               </ScrollView>
               <View style={styles.confirmFooter}>
-                {editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) === 0 ? (
+                {editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) + (extractionReview.lifestyle ? 1 : 0) === 0 ? (
                   <>
                     <TouchableOpacity
                       style={styles.aiShareBtn}

@@ -11,6 +11,9 @@ import {
   parseFlowsheet,
   parseMedsTable,
   harvestKnownFacts,
+  reconcileVaxDates,
+  inheritVisitDate,
+  itemsTrulyUndated,
 } from '../lib/clinic-export.js';
 
 function decodedBytes(b64) {
@@ -65,12 +68,14 @@ function applyKinds(out, kinds) {
 }
 
 const SCHEMA_PARTS = {
-  vaccinations: `"vaccinations": [{"name": "", "product": null, "manufacturer": null, "lot": null, "dose": null, "given": "YYYY-MM-DD date administered — never the due date", "next_due": "YYYY-MM-DD or null", "vet": null, "clinic": null, "reactions": null}]`,
+  vaccinations: `"vaccinations": [{"name": "", "product": null, "manufacturer": null, "lot": null, "dose": null, "given": "YYYY-MM-DD or null", "next_due": "YYYY-MM-DD or null", "status": "given|current|overdue|null", "notes": null, "vet": null, "clinic": null, "reactions": null}]`,
   labs: `"labs": [{"analyte": "", "value": "", "unit": null, "flag": "normal|high|low|abnormal|unknown", "collected_on": null, "ref_low": null, "ref_high": null, "group": "hematology|chemistry|endocrinology|urinalysis"}]`,
-  exam_visit: `"visits": [{"clinic": null, "date": "YYYY-MM-DD or null", "reason": null, "summary": null}],
+  exam_visit: `"visits": [{"clinic": null, "date": "YYYY-MM-DD or null", "reason": null, "findings": null, "plan": null, "summary": null}],
   "exams": [{"visit_date": "YYYY-MM-DD", "clinic": null, "vitals": {"temp_f": null, "hr": null, "rr": null, "bcs": null, "pain": null, "hydration": null}, "systems": [{"name": "Cardiovascular", "status": "normal|abnormal", "note": null}]}],
   "conditions": [{"name": "", "kind": "condition|allergy", "status": "active|resolved|monitoring", "onset_date": "YYYY-MM-DD or null", "resolved_date": "YYYY-MM-DD or null", "notes": null}],
-  "owner_notes": [{"text": "behavioral or lifestyle guidance for the owner", "date": "YYYY-MM-DD or null"}]`,
+  "owner_notes": [{"text": "behavioral or lifestyle guidance for the owner", "date": "YYYY-MM-DD or null"}],
+  "lifestyle": {"diet": null, "food_brand": null, "food_product": null, "food_type": "dry|wet|canned|null", "parasite_prevention": null},
+  "identity": {"date_of_birth": "YYYY-MM-DD or estimated from age", "age_years": null, "microchip": null, "sex": null}`,
   weight: `"weight": {"value": null, "unit": "lb|kg", "measured_on": null},
   "vitals_series": [{"at": "YYYY-MM-DDTHH:MM or YYYY-MM-DD", "temp_f": null, "hr": null, "rr": null, "weight_lb": null, "bcs": null}]`,
   medications: `"medications": [{"name": "", "dose": null, "route": null, "given_on": null, "status": "active|completed"}]`,
@@ -80,9 +85,9 @@ const SCHEMA_PARTS = {
 };
 
 const RULE_PARTS = {
-  vaccinations: '- vaccinations: list EVERY vaccine administered at this visit AND every vaccine listed as current. Field "given" = date administered. Field "next_due" = next due only if a SECOND later date is printed. Always include manufacturer, lot, and vet when printed.',
-  labs: '- labs[].value MUST be a string or a number. Qualitative PCR stays as that string. Include urinalysis, PCV, Total Solids, CK, Triglycerides, Spec fPL. Set group. Include ref_low/ref_high when printed.',
-  exam_visit: '- exams: one per physical exam. systems MUST cover 12: Oral-Nasal-Throat, Ears, Eyes, Cardiovascular, Respiratory, Abdominal, Genitourinary, Musculoskeletal, Integument, Lymphatics, Neurological, Rectal.\n- conditions: one row per distinct issue; do not duplicate names.\n- owner_notes: behavioral/lifestyle guidance for the owner. Empty array if none.',
+  vaccinations: '- vaccinations: EVERY vaccine mentioned, including current/overdue with no given-date. A vaccine without a given-date is still a vaccine. "Rabies current through September 2026" → status=current, next_due=2026-09-30, administered_on=null. "second FVRCP booster missed" → status=overdue + note.',
+  labs: '- labs: EVERY numeric or qualitative result, including prose ("creatinine 1.5, BUN 19", "T4 1.7 µg/dL", "1+ protein", "FeLV/FIV negative"). collected_on defaults to the visit/document date — never undated because the number and date were in different sentences.',
+  exam_visit: '- The document itself is a visit. Always emit visits[] with clinic + date from the header, reason, findings, plan.\n- exams: one per physical exam. systems MUST cover 12: Oral-Nasal-Throat, Ears, Eyes, Cardiovascular, Respiratory, Abdominal, Genitourinary, Musculoskeletal, Integument, Lymphatics, Neurological, Rectal.\n- conditions: one row per distinct issue.\n- owner_notes: behavioral/lifestyle guidance.\n- lifestyle: diet brand/product/type (Purina Pro Plan dry) and parasite prevention — these become the Food card.\n- identity: Age 1.2 y → date_of_birth estimated from the visit date when DOB is not printed.',
   weight: '- weight: return the printed {value, unit} as-is (do not convert).\n- vitals_series: EVERY timestamped vital from flowsheets plus exam vitals.',
   medications: '- medications: every drug administered or prescribed (name, dose, route PO/SC/IV, date, active vs completed).',
   imaging: '- diagnostics: imaging (x-ray, ultrasound) and PCR/Idexx panels with the printed result text.',
@@ -102,7 +107,7 @@ function buildPrompt(kinds) {
   const rules = [
     `Only extract these sections: ${k.join(', ')}. Omit every other clinical array (return [] / null).`,
     '- ai_note: 3–5 lines covering findings and flags. Do not diagnose.',
-    '- Never invent dates. Empty arrays if unreadable.',
+    '- Inherit the visit/document date onto every lab, weight, and visit item. undated[] ONLY for facts with truly no inferable date.',
     ...k.map((key) => RULE_PARTS[key]).filter(Boolean),
   ];
   return `Extract structured veterinary data from this document.
@@ -140,6 +145,8 @@ const EXTRACTION_SCHEMA = {
           lot: NULLABLE_STR,
           administered_on: NULLABLE_STR,
           next_due: NULLABLE_STR,
+          status: NULLABLE_STR,
+          notes: NULLABLE_STR,
           site: NULLABLE_STR,
           manufacturer: NULLABLE_STR,
           dose: NULLABLE_STR,
@@ -218,6 +225,7 @@ const EXTRACTION_SCHEMA = {
     vitals_series: { type: 'array', items: { type: 'object', additionalProperties: true } },
     owner_notes: { type: 'array', items: { type: 'object', additionalProperties: true } },
     identity: { type: 'object', additionalProperties: true },
+    lifestyle: { type: 'object', additionalProperties: true },
     kind: NULLABLE_STR,
   },
   required: ['ai_note', 'vaccinations', 'labs', 'weights', 'visits', 'undated'],
@@ -245,7 +253,7 @@ const GAP_SCHEMA = {
 
 const RECORD_TOOL = {
   name: 'record_extraction',
-  description: 'Store every vaccine, lab, weight, and visit printed in the veterinary document. Every number, date, vaccine, and lab the notes mention MUST appear in the arrays. Facts without a date go in undated[] AND still in the typed array.',
+  description: 'Store every vaccine, lab, weight, visit, and lifestyle fact printed in the document. A vaccine without a given-date is still a vaccine. Labs in prose count. The report itself is a visit. Inherit the visit date onto undated items in that visit. undated[] only when no date can be inferred.',
   input_schema: EXTRACTION_SCHEMA,
 };
 
@@ -355,14 +363,15 @@ function trendLines(labs) {
 }
 
 function normalizeVax(v) {
+  const status = String(v?.status || '').toLowerCase() || null;
   const given = v?.administered_on || v?.given || v?.given_on || v?.date_given || null;
   const due = v?.next_due || v?.next_due_on || v?.valid_until || v?.expires_on || null;
   let date = given || null;
   let next_due = due || null;
-  if (date && next_due && String(date) > String(next_due)) {
+  if (date && next_due && String(date) > String(next_due) && status !== 'current' && status !== 'overdue') {
     const t = date; date = next_due; next_due = t;
   }
-  if (!date && !next_due && v?.date) date = v.date;
+  if (!date && !next_due && v?.date && status !== 'current' && status !== 'overdue') date = v.date;
   const product = v?.product || v?.name || v?.vaccine || '';
   return {
     brand: v?.brand || v?.product || null,
@@ -380,6 +389,8 @@ function normalizeVax(v) {
     reactions: v?.reactions || null,
     clinic: v?.clinic || v?.clinic_name || null,
     vet: v?.vet || v?.vet_name || v?.veterinarian || v?.doctor || v?.provider || null,
+    status: status || (date ? 'given' : (next_due ? 'current' : null)),
+    notes: v?.notes || v?.note || null,
   };
 }
 
@@ -413,29 +424,7 @@ function normalizeVisit(v) {
 }
 
 function collectUndated(parsed) {
-  const undated = Array.isArray(parsed.undated) ? parsed.undated.filter((x) => x && x.summary) : [];
-  const push = (kind, summary, raw) => {
-    if (!summary) return;
-    if (undated.some((u) => u.kind === kind && u.summary === summary)) return;
-    undated.push({ kind, summary, raw: raw || null });
-  };
-  for (const v of parsed.vaccinations || []) {
-    if (v && (v.name || v.product) && !v.administered_on && !v.given && !v.next_due) {
-      push('vaccine', v.product || v.name, JSON.stringify(v));
-    }
-  }
-  for (const w of parsed.weights || []) {
-    if (w && w.value != null && !w.measured_on) push('weight', `${w.value} ${w.unit || 'lb'}`, JSON.stringify(w));
-  }
-  for (const vis of parsed.visits || []) {
-    if (vis && (vis.reason || vis.clinic || vis.findings) && !vis.date) {
-      push('visit', vis.reason || vis.clinic || vis.findings, JSON.stringify(vis));
-    }
-  }
-  for (const l of parsed.labs || []) {
-    if (l && l.analyte && !l.collected_on) push('lab', `${l.analyte} ${l.value ?? ''}`.trim(), JSON.stringify(l));
-  }
-  return undated;
+  return itemsTrulyUndated(parsed);
 }
 
 function mergeParsedArrays(base, extra) {
@@ -450,6 +439,10 @@ function mergeParsedArrays(base, extra) {
   else if (extra?.ai_note && out.ai_note && !String(out.ai_note).includes(String(extra.ai_note).slice(0, 40))) {
     out.ai_note = `${out.ai_note}\n${extra.ai_note}`;
   }
+  if (!out.lifestyle && extra?.lifestyle) out.lifestyle = extra.lifestyle;
+  if (!out.identity && extra?.identity) out.identity = extra.identity;
+  if (!out.date && extra?.date) out.date = extra.date;
+  if (!out.clinic && extra?.clinic) out.clinic = extra.clinic;
   return out;
 }
 
@@ -547,6 +540,8 @@ function shapeParsed(parsed) {
   const visits = (Array.isArray(parsed.visits) ? parsed.visits : []).map(normalizeVisit).filter(Boolean);
   const shaped = {
     ...parsed,
+    date: parsed.date || visits.find((v) => v.date)?.date || null,
+    clinic: parsed.clinic || visits.find((v) => v.clinic)?.clinic || null,
     vaccinations,
     labs,
     weights,
@@ -557,7 +552,10 @@ function shapeParsed(parsed) {
     diagnostics: Array.isArray(parsed.diagnostics) ? parsed.diagnostics : [],
     vitals_series: Array.isArray(parsed.vitals_series) ? parsed.vitals_series : [],
     owner_notes: Array.isArray(parsed.owner_notes) ? parsed.owner_notes.filter((n) => n && n.text) : [],
+    lifestyle: parsed.lifestyle || null,
+    identity: parsed.identity || null,
   };
+  inheritVisitDate(shaped, shaped.date);
   shaped.undated = collectUndated(shaped);
   const trends = trendLines(labs);
   if (trends.length) {
@@ -730,7 +728,7 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
   const dedupeVax = [];
   const seenV = new Set();
   for (const v of vax) {
-    const k = `${(v.name || '').toLowerCase()}|${v.given || v.next_due || ''}`;
+    const k = `${(v.name || '').toLowerCase()}|${v.given || ''}|${v.next_due || ''}|${v.status || ''}`;
     if (!v.name || seenV.has(k)) continue;
     seenV.add(k);
     dedupeVax.push(v);
@@ -743,9 +741,11 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
     seenL.add(k);
     dedupeLabs.push(l);
   }
+  const rec = reconcileVaxDates(text, dedupeVax);
+  const reconciledVax = rec.vaccinations.map(normalizeVax);
   const latestW = weights.slice().sort((a, b) => String(b.measured_on).localeCompare(String(a.measured_on)))[0] || null;
   let shaped = shapeParsed({
-    vaccinations: dedupeVax,
+    vaccinations: reconciledVax,
     labs: dedupeLabs,
     weights,
     visits,
@@ -753,6 +753,10 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
     conditions,
     medications: parseMedsTable(text),
     vitals_series: parseFlowsheet(text),
+    lifestyle: harvested.lifestyle || null,
+    identity: harvested.identity || header,
+    date: harvested.date || visits[0]?.date || null,
+    clinic: harvested.clinic || visits[0]?.clinic || null,
     ai_note: `${blocks.length} visits · ${weights.length} weights · ${dedupeVax.length} vaccines · ${dedupeLabs.length} labs`,
     undated: [],
   });
@@ -807,7 +811,8 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
     vitals_series: shaped.vitals_series,
     diagnostics: shaped.diagnostics,
     weight: latestW,
-    identity: header,
+    identity: shaped.identity || harvested.identity || header,
+    lifestyle: shaped.lifestyle || harvested.lifestyle || null,
     page_count: pageCount,
     char_count: charCount,
     progress: { page_count: pageCount, char_count: charCount, visits_total: blocks.length, visits_parsed: blocks.length, stage: 'done' },
@@ -994,7 +999,7 @@ export async function onRequestPost(context) {
         console.log('[parse-pet-document] prior labs skip', String(e));
       }
     }
-    content.push({ type: 'text', text: `${prompt}\nCall record_extraction. Every value the notes mention must appear in the schema arrays. Undated facts go to undated[] AND the typed array.` });
+    content.push({ type: 'text', text: `${prompt}\nCall record_extraction. Labs in prose count. A vaccine without a given-date is still a vaccine. The report itself is a visit. Inherit the visit date. Lifestyle (diet, parasite prevention) and age→DOB go in lifestyle/identity.` });
 
     let lastErr = 'Claude did not respond.';
     for (const model of MODELS) {
@@ -1013,6 +1018,10 @@ export async function onRequestPost(context) {
           labs: harvested.labs.map(normalizeLab),
           weights: harvested.weights.map(normalizeWeight).filter(Boolean),
           visits: harvested.visits.map(normalizeVisit).filter(Boolean),
+          lifestyle: harvested.lifestyle,
+          identity: harvested.identity,
+          date: harvested.date,
+          clinic: harvested.clinic,
           undated: [],
         }));
       }
@@ -1070,6 +1079,8 @@ export async function onRequestPost(context) {
         vitals_series: shaped.vitals_series,
         ai_note: shaped.ai_note || null,
         owner_notes: shaped.owner_notes,
+        identity: shaped.identity || extracted.parsed.identity || null,
+        lifestyle: shaped.lifestyle || extracted.parsed.lifestyle || null,
         undated: shaped.undated,
         mentioned_but_missing,
         parse_log: logLine,
@@ -1097,6 +1108,10 @@ export async function onRequestPost(context) {
         labs: harvested.labs.concat(parseLabTables(extractedText)),
         weights: harvested.weights.concat(parseWeightHistory(extractedText)),
         visits: harvested.visits,
+        lifestyle: harvested.lifestyle,
+        identity: harvested.identity,
+        date: harvested.date,
+        clinic: harvested.clinic,
         undated: [],
       });
       const logLine = logExtraction({
@@ -1118,6 +1133,10 @@ export async function onRequestPost(context) {
         labs: shaped.labs,
         weights: shaped.weights,
         visits: shaped.visits,
+        identity: shaped.identity,
+        lifestyle: shaped.lifestyle,
+        date: shaped.date,
+        clinic: shaped.clinic,
         undated: shaped.undated,
         mentioned_but_missing: [{ kind: 'model', mention: lastErr }],
         parse_log: logLine,

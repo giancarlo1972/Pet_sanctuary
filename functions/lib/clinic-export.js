@@ -714,3 +714,457 @@ Parasite prevention: none
 Findings: intermittent vomiting, otherwise BAR
 Plan: follow-up vaccination in 3 weeks, fecal pending
 `;
+
+export function detectVet(src) {
+  const text = String(src || '').slice(0, 8000);
+  const vets = [];
+  const vetRe = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s*,?\s*(DVM|VMD)\b/g;
+  let vm;
+  while ((vm = vetRe.exec(text))) vets.push(`${vm[1]} ${vm[2]}`);
+  const dr = text.match(/\bDr\.?\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/);
+  if (dr) vets.push(`Dr. ${dr[1]}`);
+  return vets[0] || null;
+}
+
+export const SEGMENT_TYPES = ['visit', 'vitals', 'labs', 'vaccines', 'weights', 'reminders', 'identity', 'narrative'];
+export const TABLE_TYPES = new Set(['weights', 'reminders', 'labs']);
+
+const SEGMENT_MARKERS = [
+  { re: /Service on\s+(\d{1,2}\/\d{1,2}\/\d{2,4})/gi, type: 'visit', dateGroup: 1 },
+  { re: /(?:^|\n)\s*Patient Information\b/gi, type: 'identity' },
+  { re: /(?:^|\n)\s*Weight History\b/gi, type: 'weights' },
+  { re: /(?:^|\n)\s*Reminders?\b/gi, type: 'reminders' },
+  // IDEXX / panel tables only — not inline "Urinalysis: 1+ protein" in a visit note.
+  { re: /(?:^|\n)\s*(?:IDEXX(?:\s+Reference(?:\s+Laboratories)?)?|TEST RESULTS?|Chemistry Panel|CBC(?:\s+with(?:\s+diff(?:erential)?)?)?|Reference (?:Value|Range)s?)\b/gim, type: 'labs' },
+];
+
+export function classifySegment(seg) {
+  const head = String(seg?.text || '').slice(0, 280);
+  if (/weight\s+history/i.test(head)) return 'weights';
+  if (/(?:^|\n)\s*reminders?\b/i.test(head) && !/service on/i.test(head)) return 'reminders';
+  if (/(?:^|\n)\s*(?:IDEXX|TEST RESULTS?|REFERENCE VALUES?|Reference Ranges?|Chemistry Panel)\b/i.test(head)) return 'labs';
+  if (/patient information/i.test(head)) return 'identity';
+  if (/service on/i.test(head)) return 'visit';
+  if (/inventory item/i.test(head) && /purevax|fvrcp|rabies|felv/i.test(seg.text || '')) return 'vaccines';
+  if (/(?:^|\n)\s*(?:vaccines?|immunizations?)\b/i.test(head) && !/visit report|service on|reason:/i.test(head)) return 'vaccines';
+  if (/physical exam|\bTPR\b|\bBCS\b/i.test(head) && String(seg.text || '').length < 1800) return 'vitals';
+  if (seg?.type && SEGMENT_TYPES.includes(seg.type)) return seg.type;
+  if (/visit report|reason:|findings:|plan:/i.test(head)) return 'visit';
+  return 'narrative';
+}
+
+export function segment(text) {
+  const src = String(text || '');
+  const hits = [];
+  for (const marker of SEGMENT_MARKERS) {
+    const re = new RegExp(marker.re.source, marker.re.flags);
+    let m;
+    while ((m = re.exec(src))) {
+      hits.push({
+        index: m.index,
+        type: marker.type,
+        date: marker.dateGroup ? toIso(m[marker.dateGroup]) : null,
+      });
+    }
+  }
+  hits.sort((a, b) => a.index - b.index);
+  const collapsed = [];
+  for (const h of hits) {
+    const last = collapsed[collapsed.length - 1];
+    if (last && h.index - last.index < 28) continue;
+    collapsed.push(h);
+  }
+  if (!collapsed.length) {
+    const one = {
+      type: classifySegment({ text: src }),
+      clinic: detectClinic(src),
+      vet: detectVet(src),
+      date: detectVisitDate(src),
+      text: src,
+      start: 0,
+    };
+    one.type = classifySegment(one);
+    return [one];
+  }
+  const segs = [];
+  if (collapsed[0].index > 50) {
+    const pre = src.slice(0, collapsed[0].index);
+    segs.push({
+      type: 'identity',
+      clinic: detectClinic(pre),
+      vet: detectVet(pre),
+      date: detectVisitDate(pre),
+      text: pre,
+      start: 0,
+    });
+  }
+  for (let i = 0; i < collapsed.length; i++) {
+    const h = collapsed[i];
+    const end = i + 1 < collapsed.length ? collapsed[i + 1].index : src.length;
+    const body = src.slice(h.index, end);
+    segs.push({
+      type: h.type,
+      clinic: detectClinic(body),
+      vet: detectVet(body),
+      date: h.date || detectVisitDate(body),
+      text: body,
+      start: h.index,
+    });
+  }
+  let visitHeader = { clinic: null, vet: null, date: null };
+  for (const s of segs) {
+    s.type = classifySegment(s);
+    const isVisitBoundary = s.type === 'visit' || /service on/i.test(s.text.slice(0, 40));
+    if (isVisitBoundary) {
+      visitHeader = {
+        clinic: s.clinic || null,
+        vet: s.vet || null,
+        date: s.date || null,
+      };
+      s.clinic = visitHeader.clinic;
+      s.vet = visitHeader.vet;
+      s.date = visitHeader.date;
+    } else {
+      if (!s.clinic) s.clinic = visitHeader.clinic;
+      if (!s.vet) s.vet = visitHeader.vet;
+      if (!s.date) s.date = visitHeader.date;
+    }
+  }
+  return segs;
+}
+
+export function inheritSegmentHeader(rows, seg) {
+  const date = seg?.date || null;
+  const clinic = seg?.clinic || null;
+  const vet = seg?.vet || null;
+  for (const l of rows.labs || []) {
+    if (date && !l.collected_on) l.collected_on = date;
+  }
+  for (const w of rows.weights || []) {
+    if (date && !w.measured_on) w.measured_on = date;
+  }
+  for (const v of rows.vaccinations || []) {
+    if (clinic && !v.clinic) v.clinic = clinic;
+    if (vet && !v.vet) v.vet = vet;
+    if (date && !v.given && !v.administered_on && !v.next_due && /given|administ|inventory item/i.test(String(v.notes || v.product || ''))) {
+      v.given = date;
+      v.administered_on = date;
+    }
+  }
+  for (const vis of rows.visits || []) {
+    if (date && !vis.date) vis.date = date;
+    if (clinic && !vis.clinic) vis.clinic = clinic;
+    if (vet && !vis.vet) vis.vet = vet;
+  }
+  for (const e of rows.exams || []) {
+    if (date && !e.visit_date) e.visit_date = date;
+    if (clinic && !e.clinic) e.clinic = clinic;
+  }
+  return rows;
+}
+
+function emptyRows() {
+  return {
+    vaccinations: [],
+    labs: [],
+    weights: [],
+    visits: [],
+    exams: [],
+    conditions: [],
+    medications: [],
+    vitals_series: [],
+    owner_notes: [],
+    identity: null,
+    lifestyle: null,
+  };
+}
+
+export function parseSegmentCode(seg) {
+  const rows = emptyRows();
+  const t = seg.text || '';
+  const type = classifySegment(seg);
+  if (type === 'weights' || /weight\s+history/i.test(t.slice(0, 80))) {
+    rows.weights = parseWeightHistory(t);
+  }
+  if (type === 'reminders' || (/\breminders?\b/i.test(t.slice(0, 80)) && type !== 'visit')) {
+    rows.vaccinations = parseReminders(t);
+  }
+  if (type === 'labs' || /(?:^|\n)\s*(?:IDEXX|TEST RESULTS?|REFERENCE VALUES?)/i.test(t)) {
+    rows.labs = parseLabTables(t);
+  }
+  if (type === 'identity') {
+    rows.identity = harvestIdentity(t, seg.date);
+  }
+  if (type === 'vaccines' || /inventory item/i.test(t)) {
+    parseInventoryVaccines(t, seg.date).forEach((v) => rows.vaccinations.push(v));
+  }
+  if (type === 'vitals' || type === 'visit') {
+    const ex = parseExam(t, seg.date, seg.clinic);
+    if (ex) rows.exams.push(ex);
+    parseFlowsheet(t).forEach((x) => rows.vitals_series.push(x));
+  }
+  const harvestTypes = new Set(['visit', 'narrative', 'identity', 'vaccines', 'labs']);
+  if (harvestTypes.has(type)) {
+    const harvested = harvestKnownFacts(t);
+    if (type !== 'vaccines') {
+      harvested.labs.forEach((l) => {
+        if (!rows.labs.some((x) => String(x.analyte).toLowerCase() === String(l.analyte).toLowerCase() && String(x.value) === String(l.value))) {
+          rows.labs.push(l);
+        }
+      });
+    }
+    harvested.vaccinations.forEach((v) => {
+      if (!rows.vaccinations.some((x) => String(x.name).toLowerCase() === String(v.name).toLowerCase() && (x.given || '') === (v.given || '') && (x.next_due || '') === (v.next_due || ''))) {
+        rows.vaccinations.push(v);
+      }
+    });
+    if (type === 'visit' || type === 'narrative' || type === 'identity') {
+      harvested.weights.forEach((w) => {
+        if (!rows.weights.some((x) => x.measured_on === w.measured_on && x.value === w.value)) rows.weights.push(w);
+      });
+      harvested.visits.forEach((v) => rows.visits.push(v));
+      if (harvested.lifestyle) rows.lifestyle = harvested.lifestyle;
+      if (harvested.identity) rows.identity = { ...(rows.identity || {}), ...harvested.identity };
+      parseInventoryVaccines(t, seg.date).forEach((v) => {
+        if (!rows.vaccinations.some((x) => String(x.name).toLowerCase() === String(v.name).toLowerCase() && (x.given || '') === (v.given || ''))) {
+          rows.vaccinations.push(v);
+        }
+      });
+      parseLabTables(t).forEach((l) => {
+        if (!rows.labs.some((x) => String(x.analyte).toLowerCase() === String(l.analyte).toLowerCase() && String(x.value) === String(l.value))) {
+          rows.labs.push({ ...l, collected_on: l.collected_on || seg.date });
+        }
+      });
+      parseConditions(t).forEach((c) => rows.conditions.push(c));
+      parseMedsTable(t).forEach((m) => rows.medications.push(m));
+    }
+  }
+  if (type === 'visit' && !rows.visits.length) {
+    rows.visits.push({
+      date: seg.date,
+      clinic: seg.clinic,
+      vet: seg.vet,
+      reason: detectReason(t),
+      findings: null,
+      plan: null,
+      summary: t.slice(0, 400),
+    });
+  }
+  return inheritSegmentHeader(rows, seg);
+}
+
+function isoInText(iso, text) {
+  if (!iso || !text) return false;
+  const src = String(text);
+  if (src.includes(iso)) return true;
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return src.includes(String(iso));
+  const y = m[1];
+  const mo = parseInt(m[2], 10);
+  const d = parseInt(m[3], 10);
+  const slash = `${mo}/${d}/${y}`;
+  const slash0 = `${String(mo).padStart(2, '0')}/${String(d).padStart(2, '0')}/${y}`;
+  if (src.includes(slash) || src.includes(slash0)) return true;
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const name = months[mo - 1];
+  if (name && new RegExp(`${name}\\s+${d},?\\s+${y}`, 'i').test(src)) return true;
+  if (name && new RegExp(`${name.slice(0, 3)}\\.?\\s+${d},?\\s+${y}`, 'i').test(src)) return true;
+  // Inferred month-end ("Rabies current through September 2026" → 2026-09-30).
+  const last = new Date(Number(y), mo, 0).getDate();
+  if (d === last && name && new RegExp(`\\b${name}\\s+${y}\\b`, 'i').test(src)) return true;
+  if (d === last && name && new RegExp(`\\b${name.slice(0, 3)}\\.?\\s+${y}\\b`, 'i').test(src)) return true;
+  return false;
+}
+
+export function numbersInText(text) {
+  const src = String(text || '');
+  const dates = [];
+  const dateRe = /\b(\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\b/g;
+  let m;
+  while ((m = dateRe.exec(src))) {
+    const iso = toIso(m[1]) || monthEndIso(m[1]);
+    if (iso) dates.push(iso);
+  }
+  const nums = [];
+  const numRe = /\b(\d+\.\d+|\d+)\b/g;
+  while ((m = numRe.exec(src))) {
+    const raw = m[1];
+    const start = m.index;
+    const before = src.slice(Math.max(0, start - 8), start);
+    if (/page\s*$/i.test(before)) continue;
+    if (raw.length >= 9) continue;
+    if (/^\d{4}$/.test(raw) && +raw >= 1990 && +raw <= 2035) continue;
+    const n = parseFloat(raw);
+    if (!Number.isFinite(n)) continue;
+    if (n === 0) continue;
+    nums.push(raw);
+  }
+  return { dates, nums };
+}
+
+function rowBlob(rows) {
+  const parts = [];
+  const walk = (v) => {
+    if (v == null) return;
+    if (typeof v === 'object') Object.values(v).forEach(walk);
+    else parts.push(String(v));
+  };
+  walk(rows);
+  return parts.join(' | ').toLowerCase();
+}
+
+export function verify(seg, rows) {
+  const text = String(seg?.text || '');
+  const { dates, nums } = numbersInText(text);
+  const blob = rowBlob(rows);
+  const missing = [];
+  for (const d of dates) {
+    if (blob.includes(d)) continue;
+    if (isoInText(d, blob)) continue;
+    missing.push({ kind: 'date', mention: d });
+  }
+  for (const n of nums) {
+    if (blob.includes(String(n).toLowerCase())) continue;
+    const f = parseFloat(n);
+    if (Number.isFinite(f)) {
+      const rounded = String(Math.round(f * 10) / 10);
+      if (blob.includes(rounded)) continue;
+    }
+    missing.push({ kind: 'number', mention: n });
+  }
+  const ungrounded = [];
+  const rejectDate = (kind, iso) => {
+    if (!iso) return;
+    if (isoInText(iso, text)) return;
+    ungrounded.push({ kind, mention: `${kind} ${iso} not in segment` });
+  };
+  const rejectNum = (kind, val) => {
+    if (val == null || val === '') return;
+    const s = String(val);
+    const found = (s.match(/\d+(?:\.\d+)?/g) || []);
+    for (const n of found) {
+      if (text.includes(n) || text.includes(n.replace(/\.0$/, ''))) continue;
+      ungrounded.push({ kind, mention: `${kind} ${s} not in segment` });
+    }
+  };
+  for (const l of rows.labs || []) {
+    rejectNum('lab', l.value);
+    rejectDate('lab_date', l.collected_on);
+  }
+  for (const w of rows.weights || []) {
+    rejectNum('weight', w.value);
+    rejectDate('weight_date', w.measured_on);
+  }
+  for (const v of rows.vaccinations || []) {
+    rejectDate('vax_given', v.given || v.administered_on);
+    rejectDate('vax_due', v.next_due);
+  }
+  return {
+    ok: missing.length === 0 && ungrounded.length === 0,
+    missing,
+    ungrounded,
+  };
+}
+
+export function dropUngrounded(rows, ungrounded) {
+  if (!ungrounded?.length) return rows;
+  const dropGiven = new Set(ungrounded.filter((u) => u.kind === 'vax_given').map((u) => u.mention));
+  const out = { ...rows };
+  if (dropGiven.size) {
+    out.vaccinations = (rows.vaccinations || []).map((v) => {
+      const iso = v.given || v.administered_on;
+      if (iso && ungrounded.some((u) => u.kind === 'vax_given' && u.mention.includes(iso))) {
+        return { ...v, given: null, administered_on: null, date: v.next_due ? v.date : null };
+      }
+      return v;
+    });
+  }
+  out.labs = (rows.labs || []).filter((l) => !ungrounded.some((u) => u.kind === 'lab' && String(u.mention).includes(String(l.value))));
+  out.weights = (rows.weights || []).filter((w) => !ungrounded.some((u) => u.kind === 'weight' && String(u.mention).includes(String(w.value))));
+  return out;
+}
+
+export function mergeRowSets(parts) {
+  const out = emptyRows();
+  for (const p of parts) {
+    if (!p) continue;
+    for (const k of ['vaccinations', 'labs', 'weights', 'visits', 'exams', 'conditions', 'medications', 'vitals_series', 'owner_notes']) {
+      if (Array.isArray(p[k])) out[k].push(...p[k]);
+    }
+    if (p.identity) out.identity = { ...(out.identity || {}), ...p.identity };
+    if (p.lifestyle) out.lifestyle = out.lifestyle || p.lifestyle;
+  }
+  return out;
+}
+
+export function pipelineCode(text) {
+  const segs = segment(text);
+  const stats = [];
+  const parts = segs.map((seg) => {
+    const rows = parseSegmentCode(seg);
+    const rec = reconcileVaxDates(seg.text, rows.vaccinations);
+    rows.vaccinations = rec.vaccinations;
+    const check = verify(seg, rows);
+    const repaired = check.ungrounded.length ? dropUngrounded(rows, check.ungrounded) : rows;
+    stats.push({
+      type: seg.type,
+      clinic: seg.clinic,
+      date: seg.date,
+      chars: (seg.text || '').length,
+      extracted: {
+        vax: (repaired.vaccinations || []).length,
+        labs: (repaired.labs || []).length,
+        weights: (repaired.weights || []).length,
+        visits: (repaired.visits || []).length,
+      },
+      missing: check.missing.length,
+      ungrounded: check.ungrounded.length,
+      mode: 'code',
+    });
+    repaired.mentioned_but_missing = check.missing;
+    return repaired;
+  });
+  const merged = mergeRowSets(parts);
+  const harvested = harvestKnownFacts(text);
+  if (harvested.lifestyle && !merged.lifestyle) merged.lifestyle = harvested.lifestyle;
+  if (harvested.identity) merged.identity = { ...(merged.identity || {}), ...harvested.identity };
+  // Safety net for single-visit prose (e.g. Aurora) if a greedy split hid vaccines/labs.
+  if (!merged.vaccinations.length && harvested.vaccinations.length) merged.vaccinations = harvested.vaccinations;
+  if (!merged.visits.length && harvested.visits.length) merged.visits = harvested.visits;
+  if (!merged.labs.length && harvested.labs.length) merged.labs = harvested.labs;
+  inheritVisitDate(merged, merged.visits[0]?.date || segs[0]?.date || harvested.date);
+  merged.undated = itemsTrulyUndated(merged);
+  merged.segment_stats = stats;
+  merged.mentioned_but_missing = parts.flatMap((p) => p.mentioned_but_missing || []);
+  merged.date = merged.visits[0]?.date || harvested.date || segs[0]?.date || null;
+  merged.clinic = merged.visits[0]?.clinic || harvested.clinic || segs[0]?.clinic || null;
+  return merged;
+}
+
+export const GINA_CLINIC_FIXTURE = `Patient Information
+Gina  Female  Spayed  Date of Birth 6/15/2020
+Microchip 981020000000001
+
+Weight History
+8/7/2026 18.48 lb
+5/2/2026 18.2 lb
+9/6/2023 12.1 lb
+
+Reminders
+Rabies 8/12/2026
+FVRCP 11/7/2026
+
+Service on 8/7/2026
+Bond Vet Hell's Kitchen
+Jonathan Leshanski DVM
+Inventory Item PUREVAX Rabies Feline 3 year
+Given 8/7/2026 lot 12345 SC over right hind
+ALT 190
+Assessment: doing well
+
+Service on 5/2/2026
+At Home Veterinary
+weight 8.2 lb
+Vomiting overnight
+`;
+

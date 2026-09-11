@@ -1,19 +1,22 @@
 import {
   splitServiceBlocks,
-  parseWeightHistory,
-  parseReminders,
-  parseInventoryVaccines,
-  parseLabTables,
   parsePatientHeader,
-  parseConditions,
-  batchBlocks,
-  parseExam,
   parseFlowsheet,
   parseMedsTable,
+  parseLabTables,
+  parseWeightHistory,
   harvestKnownFacts,
   reconcileVaxDates,
   inheritVisitDate,
   itemsTrulyUndated,
+  segment,
+  classifySegment,
+  TABLE_TYPES,
+  parseSegmentCode,
+  inheritSegmentHeader,
+  verify,
+  dropUngrounded,
+  mergeRowSets,
 } from '../lib/clinic-export.js';
 
 function decodedBytes(b64) {
@@ -145,7 +148,9 @@ Rules:
 ${rules.join('\n')}`;
 }
 
-const MODELS = ['claude-haiku-4-5', 'claude-3-5-haiku-latest', 'claude-3-5-sonnet-20241022'];
+const HAIKU = 'claude-haiku-4-5';
+const SONNET = 'claude-sonnet-4-5';
+const MODELS = [SONNET, HAIKU, 'claude-3-5-sonnet-20241022'];
 const SYSTEM = 'Respond with a single JSON object only, no markdown, no commentary';
 
 const NULLABLE_STR = { type: ['string', 'null'] };
@@ -282,6 +287,66 @@ const RECORD_TOOL = {
   description: 'Store every vaccine, lab, weight, visit, and lifestyle fact printed in the document. A vaccine without a given-date is still a vaccine. Labs in prose count. The report itself is a visit. Inherit the visit date onto undated items in that visit. undated[] only when no date can be inferred.',
   input_schema: EXTRACTION_SCHEMA,
 };
+
+const CLASSIFY_TOOL = {
+  name: 'classify_segment',
+  description: 'Classify a clinic-export segment into one type.',
+  input_schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      type: { type: 'string', enum: ['visit', 'vitals', 'labs', 'vaccines', 'weights', 'reminders', 'identity', 'narrative'] },
+    },
+    required: ['type'],
+  },
+};
+
+function typeTool(name, description, properties, required) {
+  return {
+    name,
+    description,
+    input_schema: {
+      type: 'object',
+      additionalProperties: true,
+      properties,
+      required,
+    },
+  };
+}
+
+const TYPE_TOOLS = {
+  visit: typeTool('extract_visit', 'Extract this visit only. Header clinic/vet/date are already known — copy them onto every row. Do not invent other clinics.', {
+    visits: EXTRACTION_SCHEMA.properties.visits,
+    vaccinations: EXTRACTION_SCHEMA.properties.vaccinations,
+    labs: EXTRACTION_SCHEMA.properties.labs,
+    exams: EXTRACTION_SCHEMA.properties.exams,
+    conditions: EXTRACTION_SCHEMA.properties.conditions,
+    owner_notes: EXTRACTION_SCHEMA.properties.owner_notes,
+    lifestyle: EXTRACTION_SCHEMA.properties.lifestyle,
+    ai_note: { type: 'string' },
+  }, ['visits']),
+  vaccines: typeTool('extract_vaccines', 'Extract vaccines from this segment only.', {
+    vaccinations: EXTRACTION_SCHEMA.properties.vaccinations,
+  }, ['vaccinations']),
+  vitals: typeTool('extract_vitals', 'Extract vitals and exam systems from this segment only.', {
+    exams: EXTRACTION_SCHEMA.properties.exams,
+    vitals_series: EXTRACTION_SCHEMA.properties.vitals_series,
+  }, ['exams']),
+  narrative: typeTool('extract_narrative', 'Extract conditions, owner notes, and lifestyle from prose.', {
+    conditions: EXTRACTION_SCHEMA.properties.conditions,
+    owner_notes: EXTRACTION_SCHEMA.properties.owner_notes,
+    lifestyle: EXTRACTION_SCHEMA.properties.lifestyle,
+    visits: EXTRACTION_SCHEMA.properties.visits,
+  }, ['conditions']),
+  identity: typeTool('extract_identity', 'Extract identity fields from the patient header.', {
+    identity: EXTRACTION_SCHEMA.properties.identity,
+  }, ['identity']),
+};
+
+function logSegment(stat) {
+  console.log('[parse-pet-document] segment', stat);
+  return stat;
+}
 
 const GAP_TOOL = {
   name: 'list_gaps',
@@ -658,175 +723,216 @@ function extractPdfTextNaive(bytes) {
   return { text, pageCount, charCount: text.length };
 }
 
-const VISIT_PROMPT = `This is one or more veterinary visit blocks from a clinic export. Return JSON only:
-{"visits":[{"clinic":null,"date":"YYYY-MM-DD","reason":null,"summary":null}],"vaccinations":[{"name":"","product":null,"manufacturer":null,"lot":null,"given":"YYYY-MM-DD","next_due":null,"vet":null,"clinic":null}],"labs":[{"analyte":"","value":"","unit":null,"flag":"normal|high|low|abnormal","ref_low":null,"ref_high":null,"collected_on":null}],"conditions":[{"name":"","kind":"condition|allergy|medication","status":"active|resolved|monitoring","notes":null}],"owner_notes":[{"text":"","date":null}],"ai_note":""}
-Use given for administered date. Inventory Item PUREVAX lines are vaccines given that service date. Lab tables: keep H/L flags and reference ranges.`;
+async function classifyWithHaiku(key, seg) {
+  const local = classifySegment(seg);
+  if (TABLE_TYPES.has(local) || local === 'visit' || local === 'identity' || local === 'vaccines') return local;
+  try {
+    const { resp, json, text, toolInput } = await callClaude(
+      key,
+      HAIKU,
+      [{ type: 'text', text: `Classify this clinic-record segment. Types: visit, vitals, labs, vaccines, weights, reminders, identity, narrative.\n\n${String(seg.text || '').slice(0, 1200)}` }],
+      null,
+      { tools: [CLASSIFY_TOOL], tool_choice: { type: 'tool', name: 'classify_segment' }, max_tokens: 200 },
+    );
+    if (!resp.ok) return local;
+    const parsed = parseModelResult(text, toolInput);
+    const t = parsed?.type;
+    if (t && ['visit', 'vitals', 'labs', 'vaccines', 'weights', 'reminders', 'identity', 'narrative'].includes(t)) return t;
+  } catch (e) {
+    console.log('[parse-pet-document] classify skip', String(e));
+  }
+  return local;
+}
+
+async function extractSegmentSonnet(key, seg, type, repairNote) {
+  const tool = TYPE_TOOLS[type];
+  if (!tool) return null;
+  const header = `Segment type=${type}. Clinic=${seg.clinic || 'unknown'}. Vet=${seg.vet || 'unknown'}. Date=${seg.date || 'unknown'}. Copy these header fields onto every row. Do not use a clinic from another visit.\n`;
+  const prompt = `${header}${repairNote ? `\nPrevious pass errors — fix only these:\n${repairNote}\n` : ''}\n---\n${String(seg.text || '').slice(0, 6000)}`;
+  const extracted = await extractStructuredWithTool(key, SONNET, tool, prompt);
+  return extracted;
+}
+
+async function extractStructuredWithTool(key, model, tool, prompt) {
+  const { resp, json, text, toolInput } = await callClaude(
+    key,
+    model,
+    [{ type: 'text', text: prompt }],
+    null,
+    { tools: [tool], tool_choice: { type: 'tool', name: tool.name }, max_tokens: 4000 },
+  );
+  if (!resp.ok) return { ok: false, error: json?.error?.message || 'model error', parsed: null };
+  try {
+    return { ok: true, parsed: parseModelResult(text, toolInput), error: null };
+  } catch (e) {
+    return { ok: false, error: e.message || 'JSON parse failed', parsed: null };
+  }
+}
 
 async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
   const charCount = text.length;
-  const blocks = splitServiceBlocks(text);
-  console.log('[parse-pet-document] clinic export', { pageCount, charCount, visits: blocks.length });
+  const segs = segment(text);
+  console.log('[parse-pet-document] pipeline start', { pageCount, charCount, segments: segs.length });
   if (documentId) {
     await updateDoc(env, documentId, {
       ai_status: 'processing',
       ai_summary: {
-        schemaVersion: 2,
-        progress: { page_count: pageCount, char_count: charCount, visits_total: blocks.length, visits_parsed: 0, stage: 'header' },
+        schemaVersion: 3,
+        progress: { page_count: pageCount, char_count: charCount, visits_total: segs.length, visits_parsed: 0, stage: 'segment' },
       },
     });
   }
-  const header = parsePatientHeader(text);
-  const weights = parseWeightHistory(text);
-  const reminderVax = parseReminders(text).map(normalizeVax);
-  const conditions = parseConditions(text);
-  let labs = parseLabTables(text).map(normalizeLab);
-  const visits = [];
-  const vax = [...reminderVax];
-  const exams = [];
-  const harvested = harvestKnownFacts(text);
-  harvested.vaccinations.forEach((v) => vax.push(normalizeVax(v)));
-  harvested.labs.forEach((l) => labs.push(normalizeLab(l)));
-  harvested.weights.forEach((w) => {
-    const nw = normalizeWeight(w);
-    if (nw && !weights.some((x) => x.measured_on === nw.measured_on && x.value === nw.value)) weights.push(nw);
-  });
-  harvested.visits.forEach((v) => {
-    const nv = normalizeVisit(v);
-    if (nv) visits.push(nv);
-  });
-  blocks.forEach((b, i) => {
-    visits.push({ clinic: null, date: b.date, reason: 'Visit', summary: b.text.slice(0, 1200) });
-    parseInventoryVaccines(b.text, b.date).forEach((v) => vax.push(normalizeVax(v)));
-    parseLabTables(b.text).forEach((l) => labs.push(normalizeLab({ ...l, collected_on: l.collected_on || b.date })));
-    const ex = parseExam(b.text, b.date, null);
-    if (ex) exams.push(ex);
-    if (documentId && i % 8 === 0) {
-      updateDoc(env, documentId, {
-        ai_status: 'processing',
-        ai_summary: {
-          schemaVersion: 2,
-          progress: { page_count: pageCount, char_count: charCount, visits_total: blocks.length, visits_parsed: i + 1, stage: 'visits' },
-        },
-      }).catch(() => {});
+
+  const stats = [];
+  const parts = [];
+  for (let i = 0; i < segs.length; i++) {
+    const seg = segs[i];
+    let type = classifySegment(seg);
+    if (!TABLE_TYPES.has(type) && type === 'narrative') {
+      type = await classifyWithHaiku(key, seg);
     }
-  });
-  for (const r of reminderVax) {
-    const hit = vax.find((v) => v.name && r.name && v.name.toLowerCase().includes(r.name.split(' ')[0].toLowerCase()) && v.given && !v.next_due);
-    if (hit) hit.next_due = r.next_due;
-  }
-  const batches = batchBlocks(blocks, 16000).slice(0, 3);
-  for (let bi = 0; bi < batches.length; bi++) {
-    const chunk = batches[bi].map((b) => `--- Service on ${b.date} ---\n${b.text.slice(0, 6000)}`).join('\n\n');
-    try {
-      const extracted = await extractStructured(key, MODELS[0], [{ type: 'text', text: `${VISIT_PROMPT}\n\n${chunk}` }]);
-      if (!extracted.ok) continue;
-      const parsed = shapeParsed(extracted.parsed);
-      (parsed.visits || []).forEach((v) => {
-        const existing = visits.find((x) => x.date === v.date);
-        if (existing && v.summary) existing.summary = v.summary;
-        else if (v.date || v.reason) visits.push(v);
-      });
-      (parsed.vaccinations || []).forEach((v) => vax.push(v));
-      (parsed.labs || []).forEach((l) => labs.push(l));
-      (parsed.conditions || []).forEach((c) => conditions.push(c));
-      (parsed.exams || []).forEach((e) => exams.push(e));
-      (parsed.weights || []).forEach((w) => {
-        if (w && !weights.some((x) => x.measured_on === w.measured_on && x.value === w.value)) weights.push(w);
-      });
-    } catch (e) {
-      console.log('[parse-pet-document] visit batch skip', bi, String(e));
+    seg.type = type;
+
+    let rows = parseSegmentCode(seg);
+    const rec = reconcileVaxDates(seg.text, rows.vaccinations);
+    rows.vaccinations = rec.vaccinations;
+
+    const needsAi = !TABLE_TYPES.has(type) && (type === 'visit' || type === 'narrative' || type === 'vitals' || type === 'identity' || type === 'vaccines');
+    const prose = String(seg.text || '').replace(/Inventory Item[\s\S]{0,80}/gi, '').length > 180;
+
+    if (needsAi && prose && TYPE_TOOLS[type]) {
+      const first = await extractSegmentSonnet(key, seg, type, null);
+      if (first?.ok) {
+        const shaped = shapeParsed(first.parsed);
+        rows = mergeRowSets([rows, inheritSegmentHeader(shaped, seg)]);
+      }
     }
-    if (documentId) {
+
+    let check = verify(seg, rows);
+    if (!check.ok && needsAi && TYPE_TOOLS[type]) {
+      const diff = JSON.stringify({ missing: check.missing.slice(0, 12), ungrounded: check.ungrounded.slice(0, 12) });
+      const retry = await extractSegmentSonnet(key, seg, type, diff);
+      if (retry?.ok) {
+        const shaped = shapeParsed(retry.parsed);
+        rows = mergeRowSets([rows, inheritSegmentHeader(shaped, seg)]);
+        const rec2 = reconcileVaxDates(seg.text, rows.vaccinations);
+        rows.vaccinations = rec2.vaccinations;
+        check = verify(seg, rows);
+      }
+    }
+    if (check.ungrounded.length) rows = dropUngrounded(rows, check.ungrounded);
+    rows.mentioned_but_missing = check.missing;
+    const stat = logSegment({
+      i,
+      type,
+      clinic: seg.clinic,
+      date: seg.date,
+      chars: (seg.text || '').length,
+      mode: TABLE_TYPES.has(type) ? 'code' : 'sonnet',
+      extracted: {
+        vax: (rows.vaccinations || []).length,
+        labs: (rows.labs || []).length,
+        weights: (rows.weights || []).length,
+        visits: (rows.visits || []).length,
+      },
+      missing: check.missing.length,
+      ungrounded: check.ungrounded.length,
+    });
+    stats.push(stat);
+    parts.push(rows);
+
+    if (documentId && (i % 4 === 0 || i === segs.length - 1)) {
       await updateDoc(env, documentId, {
         ai_status: 'processing',
         ai_summary: {
-          schemaVersion: 2,
+          schemaVersion: 3,
           progress: {
-            page_count: pageCount, char_count: charCount,
-            visits_total: blocks.length,
-            visits_parsed: Math.min(blocks.length, (bi + 1) * Math.ceil(blocks.length / Math.max(batches.length, 1))),
-            stage: 'visits',
+            page_count: pageCount,
+            char_count: charCount,
+            visits_total: segs.length,
+            visits_parsed: i + 1,
+            stage: 'segments',
           },
         },
       });
     }
   }
+
+  const merged = mergeRowSets(parts);
+  const header = parsePatientHeader(text);
+  const harvested = harvestKnownFacts(text);
+  if (harvested.lifestyle && !merged.lifestyle) merged.lifestyle = harvested.lifestyle;
+  if (harvested.identity) merged.identity = { ...header, ...(merged.identity || {}), ...harvested.identity };
+  else merged.identity = { ...header, ...(merged.identity || {}) };
+  if (!merged.vaccinations.length && harvested.vaccinations.length) merged.vaccinations = harvested.vaccinations;
+  if (!merged.visits.length && harvested.visits.length) merged.visits = harvested.visits;
+  if (!merged.labs.length && harvested.labs.length) merged.labs = harvested.labs;
+
+  const recAll = reconcileVaxDates(text, merged.vaccinations);
+  merged.vaccinations = recAll.vaccinations;
+  inheritVisitDate(merged, merged.visits[0]?.date || segs[0]?.date || harvested.date);
+
   const dedupeVax = [];
   const seenV = new Set();
-  for (const v of vax) {
-    const k = `${(v.name || '').toLowerCase()}|${v.given || ''}|${v.next_due || ''}|${v.status || ''}`;
-    if (!v.name || seenV.has(k)) continue;
+  for (const v of merged.vaccinations || []) {
+    const nv = normalizeVax(v);
+    const k = `${(nv.name || '').toLowerCase()}|${nv.given || ''}|${nv.next_due || ''}|${nv.status || ''}`;
+    if (!nv.name || seenV.has(k)) continue;
     seenV.add(k);
-    dedupeVax.push(v);
+    dedupeVax.push(nv);
   }
   const dedupeLabs = [];
   const seenL = new Set();
-  for (const l of labs) {
+  for (const l of (merged.labs || []).map(normalizeLab)) {
     const k = `${(l.analyte || '').toLowerCase()}|${l.value}|${l.collected_on || ''}`;
     if (!l.analyte || seenL.has(k)) continue;
     seenL.add(k);
     dedupeLabs.push(l);
   }
-  const rec = reconcileVaxDates(text, dedupeVax);
-  const reconciledVax = rec.vaccinations.map(normalizeVax);
-  const latestW = weights.slice().sort((a, b) => String(b.measured_on).localeCompare(String(a.measured_on)))[0] || null;
+  const weights = (merged.weights || []).map(normalizeWeight).filter(Boolean);
+  const visits = (merged.visits || []).map(normalizeVisit).filter(Boolean);
+
   let shaped = shapeParsed({
-    vaccinations: reconciledVax,
+    vaccinations: dedupeVax,
     labs: dedupeLabs,
     weights,
     visits,
-    exams,
-    conditions,
-    medications: parseMedsTable(text),
-    vitals_series: parseFlowsheet(text),
-    lifestyle: harvested.lifestyle || null,
-    identity: harvested.identity || header,
-    date: harvested.date || visits[0]?.date || null,
-    clinic: harvested.clinic || visits[0]?.clinic || null,
-    ai_note: `${blocks.length} visits · ${weights.length} weights · ${dedupeVax.length} vaccines · ${dedupeLabs.length} labs`,
+    exams: merged.exams,
+    conditions: merged.conditions,
+    medications: merged.medications.length ? merged.medications : parseMedsTable(text),
+    vitals_series: merged.vitals_series.length ? merged.vitals_series : parseFlowsheet(text),
+    lifestyle: merged.lifestyle,
+    identity: merged.identity,
+    date: visits[0]?.date || harvested.date || segs[0]?.date || null,
+    clinic: visits[0]?.clinic || harvested.clinic || segs[0]?.clinic || null,
+    ai_note: `${segs.length} segments · ${weights.length} weights · ${dedupeVax.length} vaccines · ${dedupeLabs.length} labs`,
     undated: [],
   });
-  const excerpt = text.slice(0, 8000);
-  let mentioned_but_missing = await listGaps(key, MODELS[0], `${shaped.ai_note}\n${excerpt}`, {
-    vaccinations: shaped.vaccinations,
-    labs: shaped.labs,
-    weights: shaped.weights,
-    visits: shaped.visits,
-  });
-  if (mentioned_but_missing.length) {
-    const retry = await extractStructured(
-      key,
-      MODELS[0],
-      [{ type: 'text', text: excerpt }],
-      `The first pass missed these facts. Extract them into record_extraction (typed arrays + undated). Missing:\n${JSON.stringify(mentioned_but_missing)}`,
-    );
-    if (retry.ok) shaped = shapeParsed(mergeParsedArrays(shaped, shapeParsed(retry.parsed)));
-    mentioned_but_missing = await listGaps(key, MODELS[0], `${shaped.ai_note}\n${excerpt}`, {
-      vaccinations: shaped.vaccinations,
-      labs: shaped.labs,
-      weights: shaped.weights,
-      visits: shaped.visits,
-    });
-  }
+
+  const mentioned_but_missing = parts.flatMap((p) => p.mentioned_but_missing || []);
   const aiStatus = mentioned_but_missing.length ? 'partial' : 'ready';
+  const latestW = weights.slice().sort((a, b) => String(b.measured_on || '').localeCompare(String(a.measured_on || '')))[0] || null;
   const logLine = logExtraction({
     pages: pageCount,
     chars: charCount,
-    mode: 'text',
+    mode: 'pipeline',
     vaccinations: shaped.vaccinations,
     labs: shaped.labs,
     weights: shaped.weights,
     visits: shaped.visits,
     mentioned_but_missing,
   });
+  logLine.segments = stats;
+  console.log('[parse-pet-document] pipeline done', { segments: stats.length, extracted: logLine.extracted, missing: mentioned_but_missing.length });
+
   const out = {
     parsed: true,
     source: 'ai_extracted',
-    schemaVersion: 2,
+    schemaVersion: 3,
     kind: 'clinic_export',
     title: 'Clinic export',
-    clinic: shaped.visits[0]?.clinic || null,
-    date: shaped.visits[0]?.date || visits[0]?.date || null,
+    clinic: shaped.clinic,
+    date: shaped.date,
     vaccinations: shaped.vaccinations,
     conditions: shaped.conditions,
     medications: shaped.medications,
@@ -837,18 +943,18 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
     vitals_series: shaped.vitals_series,
     diagnostics: shaped.diagnostics,
     weight: latestW,
-    identity: shaped.identity || harvested.identity || header,
-    lifestyle: shaped.lifestyle || harvested.lifestyle || null,
+    identity: shaped.identity,
+    lifestyle: shaped.lifestyle,
     page_count: pageCount,
     char_count: charCount,
-    progress: { page_count: pageCount, char_count: charCount, visits_total: blocks.length, visits_parsed: blocks.length, stage: 'done' },
+    progress: { page_count: pageCount, char_count: charCount, visits_total: segs.length, visits_parsed: segs.length, stage: 'done' },
     ai_note: shaped.ai_note,
     owner_notes: shaped.owner_notes,
     undated: shaped.undated,
     mentioned_but_missing,
+    segment_stats: stats,
     parse_log: logLine,
   };
-  console.log('[parse-pet-document] clinic done', out.ai_note, 'vaccinations[0]', shaped.vaccinations[0]);
   applyKinds(out, kinds);
   if (documentId) {
     await updateDoc(env, documentId, {
@@ -930,7 +1036,7 @@ export async function onRequestPost(context) {
       return fail('model_error', { error: 'AI key missing' });
     }
 
-    if (mode === 'text' && extractedText && (extractedText.length > 2500 || /Service on\s+\d/i.test(extractedText))) {
+    if (mode === 'text' && extractedText && extractedText.trim().length >= 80) {
       return parseClinicExport(env, key, documentId, extractedText, pageCountIn || splitServiceBlocks(extractedText).length, kinds);
     }
 
@@ -946,7 +1052,7 @@ export async function onRequestPost(context) {
           console.log('[parse-pet-document] naive pdf text', naive.charCount, 'pages', naive.pageCount);
           const naivePer = naive.charCount / Math.max(naive.pageCount || pageCountIn || 1, 1);
           console.log('[parse-pet-document]', { pages: naive.pageCount || pageCountIn, chars: naive.charCount, mode: naivePer < 200 ? 'images' : 'text' });
-          if (naive.charCount > 2500 || /Service on\s+\d/i.test(naive.text)) {
+          if (naive.charCount >= 80 && (naivePer >= 200 || naive.charCount > 2500 || /Service on\s+\d/i.test(naive.text) || /Visit report|Patient Information|Weight History/i.test(naive.text))) {
             return parseClinicExport(env, key, documentId, naive.text, naive.pageCount || pageCountIn, kinds);
           }
           if (naivePer >= 200) {

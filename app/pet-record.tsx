@@ -871,6 +871,9 @@ export default function PetRecordScreen() {
     exams?: any[];
     aiNote?: string | null;
     parseMode?: 'text' | 'images' | null;
+    mentionedButMissing?: { kind: string; mention: string }[];
+    undated?: { kind: string; summary: string }[];
+    aiStatus?: string | null;
   } | null>(null);
   const parsedAttempted = useRef<Set<string>>(new Set());
   const [editableVax, setEditableVax] = useState<ExtractedVaccination[]>([]);
@@ -1194,7 +1197,7 @@ export default function PetRecordScreen() {
     for (const d of documents) {
       const st = d.ai_status || 'pending';
       if (parsedAttempted.current.has(d.id)) continue;
-      if (st === 'processing' || st === 'ready' || st === 'confirmed' || st === 'parsed' || st === 'missing_file') continue;
+      if (st === 'processing' || st === 'ready' || st === 'partial' || st === 'confirmed' || st === 'parsed' || st === 'missing_file') continue;
       const ver = d.ai_summary && typeof d.ai_summary === 'object' ? Number((d.ai_summary as any).schemaVersion) || 0 : 0;
       if (ver >= 2) continue;
       if (st !== 'pending' && st !== 'failed') continue;
@@ -1887,7 +1890,7 @@ export default function PetRecordScreen() {
         reactions: v.reactions || null,
       };
     });
-    const labs = (parsed.labs || []).map((l: any) => {
+    const labs = (parsed.labs || []).flatMap((l: any) => {
       const printed = [l.value_text, l.result, l.value]
         .map((x) => (x == null ? '' : String(x).trim()))
         .find((s) => s && s.toLowerCase() !== 'unknown') || '';
@@ -1895,8 +1898,9 @@ export default function PetRecordScreen() {
       let flag = l.flag && String(l.flag).toLowerCase() !== 'unknown' ? l.flag : null;
       const low = printed.toLowerCase();
       if (low === 'detected') flag = 'abnormal';
-      else if (low === 'not detected' || low === 'not-detected' || low === 'undetected') flag = 'normal';
-      return {
+      else if (low === 'not detected' || low === 'not-detected' || low === 'undetected' || low === 'negative') flag = flag || 'normal';
+      else if (low === 'positive') flag = flag || 'abnormal';
+      const row = {
         analyte: l.analyte || l.name || '',
         value_num: numericOnly ? parseFloat(printed) : (typeof l.value === 'number' ? l.value : null),
         value_text: printed || null,
@@ -1904,7 +1908,19 @@ export default function PetRecordScreen() {
         ref_low: l.ref_low ?? null,
         ref_high: l.ref_high ?? null,
         flag,
+        collected_on: l.collected_on || l.date || parsed.date || null,
       };
+      const rows = [row];
+      if (l.prior_value != null && l.prior_date && !l.is_prior) {
+        const priorPrinted = String(l.prior_value);
+        rows.push({
+          ...row,
+          value_text: priorPrinted,
+          value_num: parseFloat(priorPrinted),
+          collected_on: l.prior_date,
+        });
+      }
+      return rows;
     });
     const visits = (parsed.visits || []).map((v: any) => ({
       event_type: 'visit',
@@ -1955,6 +1971,9 @@ export default function PetRecordScreen() {
       exams: parsed.exams || [],
       aiNote: parsed.ai_note || parsed.ai_notes || null,
       parseMode: parsed.parse_mode || null,
+      mentionedButMissing: Array.isArray(parsed.mentioned_but_missing) ? parsed.mentioned_but_missing : [],
+      undated: Array.isArray(parsed.undated) ? parsed.undated : [],
+      aiStatus: parsed.mentioned_but_missing?.length ? 'partial' : 'ready',
     });
   };
 
@@ -2025,6 +2044,18 @@ export default function PetRecordScreen() {
       });
       const result = await resp.json().catch(() => ({ parsed: false, error: 'bad json', reason: 'model_error' }));
       console.log('[parse-pet-document] result.vaccinations', result.vaccinations);
+      console.log('[parse-pet-document]', result.parse_log || {
+        pages: result.page_count,
+        chars: result.char_count,
+        mode: result.parse_mode,
+        extracted: {
+          vax: result.vaccinations?.length || 0,
+          labs: result.labs?.length || 0,
+          weights: result.weights?.length || 0,
+          visits: result.visits?.length || 0,
+        },
+        mentioned_but_missing: result.mentioned_but_missing || [],
+      });
       if (!resp.ok || !result.parsed) {
         const reason = result.reason || (result.error === 'too_large' ? 'too_large' : result.error === 'no_file' || result.labeled?.includes('missing') ? 'no_file' : 'model_error');
         const status = reason === 'no_file' ? 'missing_file' : 'failed';
@@ -2034,14 +2065,15 @@ export default function PetRecordScreen() {
         return;
       }
       const title = result.title || null;
+      const status = Array.isArray(result.mentioned_but_missing) && result.mentioned_but_missing.length ? 'partial' : 'ready';
       await supabase.from('pet_documents').update({
-        ai_status: 'ready',
+        ai_status: status,
         ai_summary: { ...result, schemaVersion: 2 },
         title: title || undefined,
         clinic: result.clinic || undefined,
         taken_on: result.date || undefined,
       }).eq('id', documentId);
-      setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'ready', ai_summary: result, title: title || d.title, clinic: result.clinic || d.clinic } : d));
+      setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: status, ai_summary: result, title: title || d.title, clinic: result.clinic || d.clinic } : d));
       if (!silent) openConfirmFromParse(documentId, result);
     } catch (err: any) {
       console.error('[parse-pet-document] extraction error:', err);
@@ -2556,7 +2588,7 @@ export default function PetRecordScreen() {
     const st = d.ai_status;
     const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
     if (st === 'confirmed' || ai.applied === true) return false;
-    return st === 'ready' || st === 'parsed';
+    return st === 'ready' || st === 'parsed' || st === 'partial';
   });
   const pendingItemCount = (d: PetDocument) => {
     const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
@@ -2579,7 +2611,7 @@ export default function PetRecordScreen() {
           : status === 'failed'
             ? "AI couldn't read this"
             : null;
-    const unreviewed = (status === 'ready' || status === 'parsed') && ai.applied !== true;
+    const unreviewed = (status === 'ready' || status === 'parsed' || status === 'partial') && ai.applied !== true;
     const confirmed = status === 'confirmed' || ai.applied === true;
     const nItems = pendingItemCount(doc);
     const statusLabel = status === 'processing'
@@ -4398,6 +4430,22 @@ export default function PetRecordScreen() {
                 </Text>
               </View>
               <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24, gap: 12 }} showsVerticalScrollIndicator={false}>
+                {extractionReview.mentionedButMissing && extractionReview.mentionedButMissing.length ? (
+                  <View style={styles.confirmCard}>
+                    <Text style={styles.docTitle}>AI noticed but couldn't structure</Text>
+                    {extractionReview.mentionedButMissing.map((g, i) => (
+                      <Text key={`${g.kind}-${i}`} style={styles.confirmLine}>{g.kind}: {g.mention}</Text>
+                    ))}
+                  </View>
+                ) : null}
+                {extractionReview.undated && extractionReview.undated.length ? (
+                  <View style={styles.confirmCard}>
+                    <Text style={styles.docTitle}>Undated ({extractionReview.undated.length})</Text>
+                    {extractionReview.undated.map((u, i) => (
+                      <Text key={`${u.kind}-${i}`} style={styles.confirmLine}>{u.kind} · {u.summary}</Text>
+                    ))}
+                  </View>
+                ) : null}
                 {(() => {
                   const zeroItems = editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) === 0;
                   if (!zeroItems) return null;

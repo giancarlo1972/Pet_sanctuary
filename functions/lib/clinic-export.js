@@ -125,7 +125,12 @@ export function parseLabTables(text) {
       });
     }
   }
-  const prior = /(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(-?[\d.]+|Detected|Not detected)/g;
+  const harvested = harvestKnownFacts(text);
+  for (const l of harvested.labs) {
+    if (!labs.some((x) => String(x.analyte).toLowerCase() === String(l.analyte).toLowerCase() && String(x.value) === String(l.value))) {
+      labs.push(l);
+    }
+  }
   return labs;
 }
 
@@ -272,4 +277,101 @@ export function parseMedsTable(text) {
     return true;
   });
 }
+
+export function harvestKnownFacts(text) {
+  const src = String(text || '');
+  const labs = [];
+  const vaccinations = [];
+  const weights = [];
+  const visits = [];
+
+  const pushLab = (analyte, value, extra = {}) => {
+    if (!analyte || value == null || value === '') return;
+    labs.push({
+      analyte,
+      value: String(value).trim(),
+      unit: extra.unit || null,
+      flag: extra.flag || null,
+      ref_low: extra.ref_low ?? null,
+      ref_high: extra.ref_high ?? null,
+      collected_on: extra.collected_on || null,
+      prior_value: extra.prior_value ?? null,
+      prior_date: extra.prior_date || null,
+      group: extra.group || null,
+    });
+  };
+
+  const t4 = src.match(/\b(?:total\s*)?T4\b[^0-9]{0,24}(\d+(?:\.\d+)?)\s*(µ?g\/dL|ug\/dL|ng\/mL|nmol\/L)?/i);
+  if (t4) pushLab('T4', t4[1], { unit: t4[2] ? t4[2].replace('ug', 'µg') : 'µg/dL', group: 'endocrinology' });
+
+  const felvFiv = src.match(/FeLV\s*\/?\s*FIV[^.\n]{0,48}?\b(negative|positive|not detected|detected)\b/i);
+  if (felvFiv) {
+    const v = /pos/i.test(felvFiv[1]) || /^detected$/i.test(felvFiv[1]) ? 'positive' : 'negative';
+    pushLab('FeLV', v, { flag: v === 'negative' ? 'normal' : 'abnormal', group: 'serology' });
+    pushLab('FIV', v, { flag: v === 'negative' ? 'normal' : 'abnormal', group: 'serology' });
+  } else {
+    const felv = src.match(/\bFeLV\b[^.\n]{0,40}?\b(negative|positive|not detected|detected)\b/i);
+    const fiv = src.match(/\bFIV\b[^.\n]{0,40}?\b(negative|positive|not detected|detected)\b/i);
+    if (felv) {
+      const v = /pos/i.test(felv[1]) || /^detected$/i.test(felv[1]) ? 'positive' : 'negative';
+      pushLab('FeLV', v, { flag: v === 'negative' ? 'normal' : 'abnormal', group: 'serology' });
+    }
+    if (fiv) {
+      const v = /pos/i.test(fiv[1]) || /^detected$/i.test(fiv[1]) ? 'positive' : 'negative';
+      pushLab('FIV', v, { flag: v === 'negative' ? 'normal' : 'abnormal', group: 'serology' });
+    }
+  }
+
+  const protein = src.match(/(?:urinalysis|UA|urine)[^\n]{0,80}?protein[^\n]{0,24}(\d\+|trace|neg(?:ative)?|\+|negative)/i)
+    || src.match(/\bprotein\b[^\n]{0,16}(\d\+)/i);
+  if (protein) {
+    const v = protein[1].toLowerCase().startsWith('neg') ? 'negative' : protein[1];
+    pushLab('Urine protein', v, { flag: /neg|0/.test(v) ? 'normal' : 'abnormal', group: 'urinalysis' });
+  }
+
+  const usg = src.match(/(?:urine\s*)?(?:specific gravity|USG)\s*[:=]?\s*(1\.\d{2,4})/i);
+  if (usg) pushLab('USG', usg[1], { group: 'urinalysis' });
+
+  const fpl = src.match(/spec\s*fPL[^0-9]{0,20}(\d+(?:\.\d+)?)/i);
+  if (fpl) pushLab('Spec fPL', fpl[1], { unit: 'µg/L', group: 'chemistry' });
+
+  let m;
+  const vaxRe = /\b(FVRCP(?:\s*\d[-\s]*year)?|Purevax\s+Rabies(?:\s+Feline)?|Rabies|FeLV vaccine|Bordetella|Feline Leukemia)\b[^\n]{0,80}/gi;
+  while ((m = vaxRe.exec(src))) {
+    const line = m[0];
+    const due = toIso((line.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/) || [])[1]);
+    vaccinations.push({
+      name: m[1].replace(/\s+/g, ' ').trim(),
+      product: m[1].replace(/\s+/g, ' ').trim(),
+      brand: /purevax/i.test(line) ? 'Purevax' : null,
+      lot: (line.match(/\blot\s*[:#]?\s*([A-Z0-9-]+)/i) || [])[1] || null,
+      given: /incomplete|due|series/i.test(line) ? null : due,
+      next_due: due,
+      site: (line.match(/\b(SC|SQ|IM|IN)\b[^,\n]{0,40}/i) || [])[0] || null,
+    });
+  }
+
+  const wRe = /(\d{1,2}\/\d{1,2}\/\d{2,4})?[^\n]{0,12}\b(\d{1,2}(?:\.\d{1,2})?)\s*(lb|lbs|kg)\b/gi;
+  while ((m = wRe.exec(src.slice(0, 12000)))) {
+    const n = parseFloat(m[2]);
+    if (n < 1 || n > 200) continue;
+    weights.push({ value: n, unit: (m[3] || 'lb').toLowerCase().startsWith('kg') ? 'kg' : 'lb', measured_on: toIso(m[1]) });
+  }
+
+  const visitDate = toIso((src.match(/Service on\s+(\d{1,2}\/\d{1,2}\/\d{2,4})/i) || src.match(/\b(\d{1,2}\/\d{1,2}\/\d{2,4})\b/) || [])[1]);
+  const clinic = (src.match(/\b(Bond Vet|VCA|Banfield|BluePearl|ASPCA|Animal Medical)\b[^,\n]{0,40}/i) || [])[0] || null;
+  if (visitDate || /visit|exam|service on/i.test(src.slice(0, 2000))) {
+    visits.push({
+      date: visitDate,
+      clinic,
+      vet: (src.match(/\b(?:DVM|Dr\.?)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?/) || [])[0] || null,
+      reason: (src.match(/reason\s*[:.]\s*([^\n]{4,80})/i) || [])[1] || null,
+      findings: null,
+      plan: null,
+    });
+  }
+
+  return { labs, vaccinations, weights, visits };
+}
+
 

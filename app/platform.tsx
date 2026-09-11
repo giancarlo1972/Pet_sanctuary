@@ -10,8 +10,10 @@ import {
   PawPrint, TriangleAlert, TrendingUp, Users, Building2, LifeBuoy, Search, X,
 } from 'lucide-react-native';
 import AppHeader from '@/components/AppHeader';
+import { FilterChips } from '@/components/Tabs';
 import { Page } from '@/components/Page';
 import { InlineBanner } from '@/components/InlineBanner';
+import { DashboardPanel } from '@/components/DashboardPanel';
 import { Colors } from '@/constants/Colors';
 import { Fonts } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
@@ -36,6 +38,26 @@ function Pill({ label, ok, warn }: { label: string; ok?: boolean; warn?: boolean
   const bg = ok ? Colors.tealBg : warn ? Colors.standardBg : Colors.surface;
   const color = ok ? Colors.tealDark : warn ? Colors.accentDark : Colors.textSecondary;
   return <Text style={[styles.pill, { backgroundColor: bg, color }]}>{label}</Text>;
+}
+
+function PlatformSearchBar({
+  value, onChange, placeholder,
+}: { value: string; onChange: (t: string) => void; placeholder: string }) {
+  return (
+    <View style={styles.search}>
+      <Search color={Colors.textTertiary} size={16} />
+      <TextInput
+        style={styles.searchInput}
+        value={value}
+        onChangeText={onChange}
+        placeholder={placeholder}
+        placeholderTextColor={Colors.textTertiary}
+        autoCorrect={false}
+        autoCapitalize="none"
+      />
+      {value ? <TouchableOpacity onPress={() => onChange('')}><X color={Colors.textTertiary} size={16} /></TouchableOpacity> : null}
+    </View>
+  );
 }
 
 export default function PlatformScreen() {
@@ -228,21 +250,11 @@ export default function PlatformScreen() {
   };
 
   const Filters = ({ options }: { options: string[] }) => (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>
-      {options.map((o) => (
-        <TouchableOpacity key={o} onPress={() => setFilter(o)} style={[styles.filterChip, filter === o && styles.filterOn]}>
-          <Text style={[styles.filterTxt, filter === o && styles.filterTxtOn]}>{o}</Text>
-        </TouchableOpacity>
-      ))}
-    </ScrollView>
-  );
-
-  const SearchBar = ({ placeholder }: { placeholder: string }) => (
-    <View style={styles.search}>
-      <Search color={Colors.textTertiary} size={16} />
-      <TextInput style={styles.searchInput} value={q} onChangeText={setQ} placeholder={placeholder} placeholderTextColor={Colors.textTertiary} />
-      {q ? <TouchableOpacity onPress={() => setQ('')}><X color={Colors.textTertiary} size={16} /></TouchableOpacity> : null}
-    </View>
+    <FilterChips
+      items={options.map((o) => ({ key: o, label: o }))}
+      value={filter}
+      onChange={setFilter}
+    />
   );
 
   return (
@@ -256,18 +268,18 @@ export default function PlatformScreen() {
 
         {section === 'home' ? (
           <>
-            <View style={styles.navyHero}>
-              <Text style={styles.navyTitle}>Platform</Text>
-              <Text style={styles.navySub}>Rescue Army admin · every action is audit-logged</Text>
-              <View style={styles.countRow}>
-                {SECTIONS.map((s) => (
-                  <View key={s.key} style={styles.countCell}>
-                    <Text style={styles.countN}>{counts[s.key as keyof typeof counts] ?? 0}</Text>
-                    <Text style={styles.countL}>{s.label}</Text>
-                  </View>
-                ))}
-              </View>
-            </View>
+            <DashboardPanel
+              header={(
+                <View>
+                  <Text style={styles.navyTitle}>Platform</Text>
+                  <Text style={styles.navySub}>Rescue Army admin · every action is audit-logged</Text>
+                </View>
+              )}
+              tiles={SECTIONS.map((s) => ({
+                label: s.label,
+                value: counts[s.key as keyof typeof counts] ?? 0,
+              }))}
+            />
             <View style={styles.grid}>
               {SECTIONS.map((s) => (
                 <TouchableOpacity key={s.key} style={styles.tile} onPress={() => go(s.key)} activeOpacity={0.85}>
@@ -287,7 +299,7 @@ export default function PlatformScreen() {
 
         {section === 'pets' ? (
           <>
-            <SearchBar placeholder="Search pets" />
+            <PlatformSearchBar value={q} onChange={setQ} placeholder="Search pets" />
             <Filters options={['all', 'private', 'adoptable', 'hidden']} />
             {loading ? <ActivityIndicator color={Colors.coral} /> : null}
             {filteredPets.map((p) => (
@@ -296,7 +308,7 @@ export default function PlatformScreen() {
                   <Text style={styles.name}>{p.name || 'Unnamed'}</Text>
                   <Text style={styles.meta}>{p.species || 'Pet'} · {p.listing_type || 'private'}{p.hidden ? ' · hidden' : ''}</Text>
                 </View>
-                <Pill label={p.status || '—'} ok={p.status === 'available'} />
+                <Pill label={p.listing_type || 'private'} ok={p.listing_type === 'adoptable'} />
               </TouchableOpacity>
             ))}
             {!loading && filteredPets.length === 0 ? <Text style={styles.meta}>No pets match.</Text> : null}
@@ -305,7 +317,7 @@ export default function PlatformScreen() {
 
         {section === 'reports' ? (
           <>
-            <SearchBar placeholder="Search reports" />
+            <PlatformSearchBar value={q} onChange={setQ} placeholder="Search reports" />
             <Filters options={['all', 'active', 'resolved', 'critical', 'urgent', 'standard']} />
             {loading ? <ActivityIndicator color={Colors.coral} /> : null}
             {filteredReports.map((r) => (
@@ -323,7 +335,7 @@ export default function PlatformScreen() {
 
         {section === 'trends' ? (
           <>
-            <SearchBar placeholder="Search needs" />
+            <PlatformSearchBar value={q} onChange={setQ} placeholder="Search needs" />
             <Filters options={['all', 'open', 'pinned', 'expired']} />
             <Text style={styles.kicker}>Community needs</Text>
             {filteredNeeds.map((n) => (
@@ -361,7 +373,7 @@ export default function PlatformScreen() {
 
         {section === 'members' ? (
           <>
-            <SearchBar placeholder="Search email or name" />
+            <PlatformSearchBar value={q} onChange={setQ} placeholder="Search email or name" />
             <Filters options={['all', 'admin', 'blocked']} />
             {filteredMembers.map((m) => (
               <TouchableOpacity key={m.id} style={styles.row} onPress={() => { setSheet({ kind: 'member', row: m }); setEdit(m.email || ''); }}>
@@ -376,7 +388,7 @@ export default function PlatformScreen() {
 
         {section === 'orgs' ? (
           <>
-            <SearchBar placeholder="Search organizations" />
+            <PlatformSearchBar value={q} onChange={setQ} placeholder="Search organizations" />
             <Filters options={['all', 'pending', 'approved', 'suspended', 'rejected']} />
             {filteredOrgs.map((o) => (
               <TouchableOpacity key={o.id} style={styles.row} onPress={() => { setSheet({ kind: 'org', row: o }); setEdit(''); setEdit2(''); }}>
@@ -392,7 +404,7 @@ export default function PlatformScreen() {
 
         {section === 'issues' ? (
           <>
-            <SearchBar placeholder="Search issues" />
+            <PlatformSearchBar value={q} onChange={setQ} placeholder="Search issues" />
             <Filters options={['all', 'bug', 'ticket', 'flag', 'open', 'pending']} />
             {filteredIssues.map((i) => (
               <TouchableOpacity key={`${i.kind}-${i.id}`} style={styles.row} onPress={() => { setSheet({ kind: 'issue', row: i }); setEdit(i.reply || ''); }}>
@@ -770,11 +782,6 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 12, paddingHorizontal: 12, minHeight: 44,
   },
   searchInput: { flex: 1, fontFamily: INTER, fontSize: 14, color: Colors.text, paddingVertical: RNPlatform.OS === 'web' ? 8 : 10 },
-  filters: { gap: 8, paddingVertical: 4 },
-  filterChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999, backgroundColor: Colors.surface, marginRight: 8 },
-  filterOn: { backgroundColor: Colors.navy },
-  filterTxt: { fontFamily: INTERB, fontSize: 12, color: Colors.textSecondary, fontWeight: '700', textTransform: 'capitalize' },
-  filterTxtOn: { color: Colors.white },
   row: {
     flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: Colors.white,
     borderRadius: 14, padding: 12, borderWidth: 1, borderColor: Colors.border, minHeight: 44,

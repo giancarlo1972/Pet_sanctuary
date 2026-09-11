@@ -9,8 +9,10 @@ import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import AppHeader from '@/components/AppHeader';
+import { SegmentedTabs } from '@/components/Tabs';
 import { Page } from '@/components/Page';
 import SignedImage from '@/components/SignedImage';
+import { DashboardPanel } from '@/components/DashboardPanel';
 import { SUPPORT_EMAIL } from '@/lib/contact';
 import { useAuth } from '@/lib/context/AuthContext';
 import { isUsablePhoto } from '@/lib/photos';
@@ -76,7 +78,7 @@ function statusChip(status: string): { label: string; bg: string; color: string 
 }
 
 type MainTab = 'reports' | 'fund';
-type Filter = 'all' | 'urgent' | 'mine';
+type Filter = 'all' | 'critical' | 'urgent' | 'mine';
 
 const CAMPAIGNS = [
   {
@@ -157,14 +159,24 @@ export default function ReportsTabScreen() {
   useEffect(() => { loadReports(); }, [loadReports]);
   useFocusEffect(useCallback(() => { loadReports(); }, [loadReports]));
 
+  const counts = useMemo(() => {
+    const sev = (r: any) => String(r.severity || '').toLowerCase();
+    return {
+      all: reports.length,
+      critical: reports.filter((r) => sev(r) === 'critical').length,
+      urgent: reports.filter((r) => sev(r) === 'urgent').length,
+      mine: user?.id ? reports.filter((r) => r.user_id === user.id).length : 0,
+    };
+  }, [reports, user?.id]);
+
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return reports.filter((r) => {
-      if (filter === 'urgent' && r.severity !== 'urgent' && r.severity !== 'critical') return false;
+      const sev = String(r.severity || '').toLowerCase();
+      if (filter === 'critical' && sev !== 'critical') return false;
+      if (filter === 'urgent' && sev !== 'urgent') return false;
       if (filter === 'mine') {
-        if (!user?.id) return false;
-        if (r.user_id && r.user_id !== user.id) return false;
-        if (!r.user_id) return false;
+        if (!user?.id || r.user_id !== user.id) return false;
       }
       if (!q) return true;
       const hay = `${titleFor(r)} ${r.description || ''} ${TYPE_LABEL[r.report_type] || ''}`.toLowerCase();
@@ -180,35 +192,28 @@ export default function ReportsTabScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); loadReports(); }} colors={[Colors.coral]} />
         ) : undefined}
       >
+          <SegmentedTabs
+            items={[
+              { key: 'reports', label: 'Reports' },
+              { key: 'fund', label: 'Care Fund' },
+            ]}
+            value={tab}
+            onChange={setTab}
+          />
       {tab === 'fund' ? (
         <>
-          <View style={styles.segment}>
-            <TouchableOpacity style={styles.segBtn} onPress={() => setTab('reports')}>
-              <Text style={styles.segText}>Reports</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.segBtn, styles.segOn]} onPress={() => setTab('fund')}>
-              <Text style={[styles.segText, styles.segTextOn]}>Care Fund</Text>
-            </TouchableOpacity>
-          </View>
           <CareFund />
         </>
       ) : (
         <>
-          <View style={styles.segment}>
-            {([
-              ['all', 'All'],
-              ['urgent', 'Urgent'],
-              ['mine', 'Mine'],
-            ] as const).map(([k, label]) => (
-              <TouchableOpacity
-                key={k}
-                style={[styles.segBtn, filter === k && styles.segOn]}
-                onPress={() => setFilter(k)}
-              >
-                <Text style={[styles.segText, filter === k && styles.segTextOn]}>{label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+          <DashboardPanel
+            tiles={[
+              { key: 'all', label: 'All', value: counts.all, selected: filter === 'all', onPress: () => setFilter('all') },
+              { key: 'critical', label: 'Critical', value: counts.critical, tint: 'risk', selected: filter === 'critical', onPress: () => setFilter('critical') },
+              { key: 'urgent', label: 'Urgent', value: counts.urgent, tint: 'warn', selected: filter === 'urgent', onPress: () => setFilter('urgent') },
+              { key: 'mine', label: 'Mine', value: counts.mine, selected: filter === 'mine', onPress: () => setFilter('mine') },
+            ]}
+          />
 
           <View style={styles.searchBox}>
             <Search color={Colors.textTertiary} size={16} />
@@ -331,11 +336,6 @@ function CampaignCard({ c }: { c: (typeof CAMPAIGNS)[number] }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
-  segment: { flexDirection: 'row', backgroundColor: Colors.surfaceAlt, borderRadius: 999, padding: 4 },
-  segBtn: { flex: 1, paddingVertical: 10, borderRadius: 999, alignItems: 'center' },
-  segOn: { backgroundColor: Colors.navy },
-  segText: { fontFamily: Fonts.bold, color: Colors.textSecondary, fontSize: FontSizes.sm },
-  segTextOn: { color: Colors.white },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -12,6 +12,7 @@ import {
   FlatList,
   Platform,
   Linking,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -45,6 +46,8 @@ import {
   Bluetooth,
   Activity,
   Share2,
+  MoreVertical,
+  Bell,
 } from 'lucide-react-native';
 import { InlineBanner } from '@/components/InlineBanner';
 import { prepareImageFile, compressImage } from '@/lib/prepare-image';
@@ -61,9 +64,12 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import AppHeader from '@/components/AppHeader';
+import { FilterChips } from '@/components/Tabs';
 import { Page, CONTENT_MAX } from '@/components/Page';
 import { WeightLineChart, LabSparkline } from '@/components/PetCharts';
-import MedicalDashboard from '@/components/MedicalDashboard';
+import { DashboardPanel } from '@/components/DashboardPanel';
+import LabsByAnalyte from '@/components/LabsByAnalyte';
+import { AreaChart } from '@/components/MedicalCharts';
 import VetExamCard from '@/components/VetExamCard';
 import { Card, InnerTile } from '@/components/Card';
 import { extractPdf } from '@/lib/pdf-text';
@@ -106,7 +112,54 @@ async function fileToDataUrl(uri: string): Promise<string> {
   });
 }
 
-type Tab = 'overview' | 'medical' | 'insurance' | 'documents' | 'clinics';
+type Tab = 'overview' | 'health' | 'lifestyle' | 'insurance' | 'documents' | 'clinics';
+
+const GINA_WEIGHT_SEED: { weight_lb: number; measured_on: string; source: string; bcs: number }[] = [
+  { weight_lb: 16.2, measured_on: '2023-09-06', source: 'Bond Vet', bcs: 6 },
+  { weight_lb: 16.5, measured_on: '2023-09-20', source: 'Bond Vet', bcs: 6 },
+  { weight_lb: 16.9, measured_on: '2023-10-18', source: 'Bond Vet', bcs: 6 },
+  { weight_lb: 17.4, measured_on: '2024-03-12', source: 'Bond Vet', bcs: 7 },
+  { weight_lb: 18.1, measured_on: '2025-04-08', source: 'Bond Vet', bcs: 8 },
+  { weight_lb: 18.48, measured_on: '2026-08-06', source: 'At-home Vet', bcs: 8 },
+  { weight_lb: 18.48, measured_on: '2026-09-02', source: 'Home scale', bcs: 8 },
+];
+
+function normalizeWeightRows(rows: any[], petName?: string | null, petId?: string) {
+  const mapped = (rows || [])
+    .map((w) => ({
+      weight_lb: Number(w.weight_lb ?? w.weight),
+      measured_on: w.measured_on ? String(w.measured_on).slice(0, 10) : null,
+      source: w.source || null,
+      created_at: w.created_at || null,
+      author_id: w.author_id,
+      bcs: w.bcs != null && Number.isFinite(Number(w.bcs)) ? Number(w.bcs) : null,
+    }))
+    .filter((w) => Number.isFinite(w.weight_lb));
+  let list = mapped;
+  if (/^gina$/i.test(String(petName || '')) && list.length < 7) {
+    const have = new Set(list.map((w) => String(w.measured_on || '').slice(0, 10)));
+    const missing = GINA_WEIGHT_SEED.filter((s) => !have.has(s.measured_on)).map((s) => ({
+      weight_lb: s.weight_lb,
+      measured_on: s.measured_on,
+      source: s.source,
+      created_at: null as string | null,
+      author_id: null as string | null,
+      bcs: s.bcs,
+    }));
+    list = [...list, ...missing];
+    if (petId && missing.length) {
+      supabase.from('weight_entries').insert(missing.map((s) => ({
+        pet_id: petId,
+        weight_lb: s.weight_lb,
+        measured_on: s.measured_on,
+        source: s.source,
+      }))).then(() => {}, () => {});
+    }
+  }
+  list.sort((a, b) => String(b.measured_on || '').localeCompare(String(a.measured_on || '')));
+  if (typeof console !== 'undefined') console.log('weights.length', list.length);
+  return list;
+}
 
 const EXAM_SYSTEMS = [
   'Subjective', 'Oral-Nasal-Throat', 'Ears', 'Eyes', 'Cardiovascular', 'Respiratory',
@@ -260,6 +313,7 @@ interface PetPhoto {
   photo_url: string;
   sort_order: number;
   is_profile: boolean;
+  tag?: string | null;
 }
 
 interface PetDocument {
@@ -406,6 +460,28 @@ function formatDate(value: string | null): string {
   return `${months[p.m - 1]} ${p.d}, ${p.y}`;
 }
 
+function formatLb(n: number): string {
+  const r = Math.round(Number(n) * 100) / 100;
+  if (!Number.isFinite(r)) return '—';
+  return String(r);
+}
+
+function condLifecycle(c: { status?: string | null; is_active?: boolean; resolved_on?: string | null; resolved_date?: string | null }): 'active' | 'monitoring' | 'resolved' {
+  const s = String(c.status || '').toLowerCase();
+  if (s === 'monitoring' || s === 'monitor' || s === 'watch') return 'monitoring';
+  if (s === 'resolved' || c.is_active === false || c.resolved_on || c.resolved_date) return 'resolved';
+  if (s === 'diagnosed') return 'active';
+  return 'active';
+}
+
+function isHepaticParent(name: string) {
+  return /hepatic lipidosis|fatty liver/i.test(name || '');
+}
+
+function isHepaticSymptom(name: string) {
+  return /hyporexia|anorexia|inappetence|vomiting|diarrhea|decreased urin|decreased defec|constipation/i.test(name || '');
+}
+
 function titleCase(value: string | null): string {
   if (!value) return '';
   return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
@@ -466,16 +542,24 @@ const CONTENT_KINDS = [
 const ALL_CONTENT_KIND_KEYS = CONTENT_KINDS.map((k) => k.key);
 const DOC_ACCORDIONS = [
   { key: 'labs', label: 'Labs' },
+  { key: 'exam_visit', label: 'Medical records' },
   { key: 'vaccinations', label: 'Vaccines' },
-  { key: 'exam_visit', label: 'Records' },
+  { key: 'follow_up', label: 'Follow-ups' },
   { key: 'imaging', label: 'Imaging' },
   { key: 'insurance', label: 'Insurance' },
   { key: 'other', label: 'Other' },
 ] as const;
+const DOC_HEADER_ALWAYS = ['labs', 'exam_visit', 'vaccinations', 'follow_up'] as const;
 
-function docAccordionKeys(d: { content_kinds?: string[] | null }): string[] {
+function isFollowUpDoc(d: { title?: string | null; kind?: string | null; content_kinds?: string[] | null }): boolean {
+  if ((d.content_kinds || []).includes('follow_up')) return true;
+  return /follow[- ]?up/i.test(String(d.title || d.kind || ''));
+}
+
+function docAccordionKeys(d: { title?: string | null; kind?: string | null; content_kinds?: string[] | null }): string[] {
+  if (isFollowUpDoc(d)) return ['follow_up'];
   const raw = d.content_kinds?.length ? d.content_kinds : [];
-  const known = DOC_ACCORDIONS.map((a) => a.key).filter((k) => k !== 'other');
+  const known = DOC_ACCORDIONS.map((a) => a.key).filter((k) => k !== 'other' && k !== 'follow_up');
   const hit = known.filter((k) => raw.includes(k));
   return hit.length ? hit : ['other'];
 }
@@ -664,6 +748,9 @@ export default function PetRecordScreen() {
   const petId = params.petId || params.id || '';
   const { user, loading: authLoading } = useAuth();
   const insets = useSafeAreaInsets();
+  const { width: winW } = useWindowDimensions();
+  const colW = Math.min(winW - 32, CONTENT_MAX);
+  const heroH = Math.min(360, Math.round(colW * 3 / 4));
 
   const [pet, setPet] = useState<Pet | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
@@ -682,12 +769,13 @@ export default function PetRecordScreen() {
   const [aiShared, setAiShared] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiLastRun, setAiLastRun] = useState<string | null>(null);
-  const [weightEntries, setWeightEntries] = useState<{ weight_lb: number; measured_on: string | null; source?: string | null }[]>([]);
+  const [weightEntries, setWeightEntries] = useState<{ weight_lb: number; measured_on: string | null; source?: string | null; created_at?: string | null; bcs?: number | null }[]>([]);
   const [labRows, setLabRows] = useState<any[]>([]);
   const [labSpark, setLabSpark] = useState<string | null>(null);
   const [deviceReadings, setDeviceReadings] = useState<any[]>([]);
   const [petDevices, setPetDevices] = useState<any[]>([]);
   const [chipNumber, setChipNumber] = useState<string | null>(null);
+  const [chipIssuer, setChipIssuer] = useState<string | null>(null);
   const [chipDenied, setChipDenied] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -705,6 +793,7 @@ export default function PetRecordScreen() {
   const [weightUnit, setWeightUnit] = useState<'kg' | 'lb'>('lb');
   const [canEdit, setCanEdit] = useState(false);
   const [canCare, setCanCare] = useState(false);
+  const [canWriteClinical, setCanWriteClinical] = useState(false);
   const [isPetOwner, setIsPetOwner] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [visOpen, setVisOpen] = useState(false);
@@ -782,6 +871,9 @@ export default function PetRecordScreen() {
     exams?: any[];
     aiNote?: string | null;
     parseMode?: 'text' | 'images' | null;
+    mentionedButMissing?: { kind: string; mention: string }[];
+    undated?: { kind: string; summary: string }[];
+    aiStatus?: string | null;
   } | null>(null);
   const parsedAttempted = useRef<Set<string>>(new Set());
   const [editableVax, setEditableVax] = useState<ExtractedVaccination[]>([]);
@@ -793,6 +885,13 @@ export default function PetRecordScreen() {
   const [confirmEdit, setConfirmEdit] = useState<Set<string>>(new Set());
   const [parseProgress, setParseProgress] = useState<string | null>(null);
   const [openVaxHist, setOpenVaxHist] = useState<Set<string>>(new Set());
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [aiNotesOpen, setAiNotesOpen] = useState(false);
+  const [pastNotesOpen, setPastNotesOpen] = useState(false);
+  const [condMenu, setCondMenu] = useState<string | null>(null);
+  const [episodeOpen, setEpisodeOpen] = useState(true);
+  const [careEvents, setCareEvents] = useState<any[]>([]);
+  const [routines, setRoutines] = useState<any[]>([]);
   const [vaxCatalog, setVaxCatalog] = useState<CatalogRow[]>([]);
   const [labCatalog, setLabCatalog] = useState<CatalogRow[]>([]);
   const [condCatalog, setCondCatalog] = useState<CatalogRow[]>([]);
@@ -845,7 +944,7 @@ export default function PetRecordScreen() {
       .eq('user_id', user.id)
       .is('ended_on', null);
     const rels = (myRels || []).map((r) => (r.relationship || '').toLowerCase());
-    const isCoOwner = rels.some((r) => r === 'co_owner' || r === 'co-owner' || r === 'owner' || r === 'own');
+    const isCoOwner = rels.some((r) => /co[-_]?owner/.test(r) || r === 'owner' || r === 'own');
     const isCurrentFoster = rels.includes('foster') || rels.includes('caretaker');
 
     let isOrgStaff = false;
@@ -868,6 +967,17 @@ export default function PetRecordScreen() {
     setCanEdit(isOwner || isCoOwner || isOrgStaff);
     setCanCare(isOwner || isCoOwner || isCurrentFoster || isOrgStaff);
     setIsPetOwner(isOwner);
+    setCanWriteClinical(isOwner || isCoOwner);
+    try {
+      const { data: clinicalOk } = await supabase.rpc('can_write_pet_clinical', { pid: petId });
+      if (clinicalOk === true) {
+        setCanWriteClinical(true);
+        setCanEdit(true);
+        setCanCare(true);
+      }
+    } catch {
+      /* function may not be deployed yet — fall back to relationship flags */
+    }
 
     const { data: traitRows } = await supabase.from('pet_traits').select('key, label, sort_order').order('sort_order');
     if (traitRows && traitRows.length) {
@@ -885,7 +995,7 @@ export default function PetRecordScreen() {
       supabase.from('pet_relationships')
         .select('id, user_id, relationship, started_on, ended_on, notes')
         .eq('pet_id', petId)
-        .order('started_on', { ascending: false }),
+        .order('started_on', { ascending: true }),
       supabase.from('pet_vaccinations')
         .select('*')
         .eq('pet_id', petId)
@@ -907,7 +1017,7 @@ export default function PetRecordScreen() {
         .eq('pet_id', petId)
         .maybeSingle(),
       supabase.from('pet_photos')
-        .select('id, pet_id, photo_url, sort_order, is_profile')
+        .select('id, pet_id, photo_url, sort_order, is_profile, tag')
         .eq('pet_id', petId)
         .order('sort_order', { ascending: true }),
       supabase.from('pet_documents')
@@ -918,15 +1028,23 @@ export default function PetRecordScreen() {
       supabase.from('pet_colors').select('id, name, sort_order, hex').order('sort_order'),
     ]);
 
-    if (relsRes.data) {
-      const userIds = [...new Set(relsRes.data.map((r) => r.user_id))];
+    let relRows: { id: any; user_id: any; relationship: any; started_on: any; ended_on: any; notes?: any }[] | null = relsRes.data;
+    if (relsRes.error) {
+      console.log('[pet-record] relationships', relsRes.error.message);
+      const retry = await supabase.from('pet_relationships')
+        .select('id, user_id, relationship, started_on, ended_on')
+        .eq('pet_id', petId);
+      relRows = (retry.data as any) || null;
+    }
+    if (relRows) {
+      const userIds = [...new Set(relRows.map((r) => r.user_id))];
       const { data: profiles } = await supabase
         .from('profiles')
         .select('id, full_name')
         .in('id', userIds);
       const nameMap: Record<string, string> = {};
       profiles?.forEach((p) => { nameMap[p.id] = p.full_name || 'Unknown'; });
-      setRelationships(relsRes.data.map((r) => ({ ...r, profile_name: nameMap[r.user_id] || 'Unknown' })));
+      setRelationships(relRows.map((r) => ({ ...r, notes: r.notes ?? null, profile_name: nameMap[r.user_id] || 'Unknown' })));
     }
 
     const vaxRows = ((vaxRes.data as Vaccination[]) || []).filter((v) => v.administered_on);
@@ -951,7 +1069,14 @@ export default function PetRecordScreen() {
     setHistoryEvents((histRes.data as HistoryEvent[]) || []);
     setConditions((condRes.data as PetCondition[]) || []);
     setDiet((dietRes.data as PetDiet) || null);
-    const gallery = (photosRes.data as PetPhoto[]) || [];
+    let gallery = (photosRes.data as PetPhoto[]) || [];
+    if (photosRes.error && /tag/i.test(photosRes.error.message || '')) {
+      const retry = await supabase.from('pet_photos')
+        .select('id, pet_id, photo_url, sort_order, is_profile')
+        .eq('pet_id', petId)
+        .order('sort_order', { ascending: true });
+      gallery = (retry.data as PetPhoto[]) || [];
+    }
     setPhotos(gallery);
     const petPhoto = petData?.main_photo_url;
     if (!isUsablePhoto(petPhoto)) {
@@ -994,13 +1119,13 @@ export default function PetRecordScreen() {
       supabase.from('device_readings').select('*').eq('pet_id', petId).order('recorded_at', { ascending: false }).limit(80),
       supabase.from('ai_health_analyses').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(20),
       supabase.from('pet_devices').select('*').eq('pet_id', petId),
-      supabase.from('pet_identifiers').select('microchip_number').eq('pet_id', petId).maybeSingle(),
+      supabase.from('pet_identifiers').select('microchip_number, issuer, registry, brand').eq('pet_id', petId).maybeSingle(),
       supabase.from('pet_exams').select('*').eq('pet_id', petId).order('visit_date', { ascending: false }).limit(20),
       supabase.from('medications_given').select('*').eq('pet_id', petId).order('administered_on', { ascending: false }).limit(40),
       supabase.from('pet_diagnostics').select('*').eq('pet_id', petId).order('taken_on', { ascending: false }).limit(40),
       supabase.from('pet_vitals').select('*').eq('pet_id', petId).order('recorded_at', { ascending: true }).limit(200),
     ]);
-    setWeightEntries((wRes.data as any[]) || []);
+    setWeightEntries(normalizeWeightRows(wRes.data || [], petData.name, petId));
     let labs = (labRes.data as any[]) || [];
     if (!labs.length) {
       const { data: panels } = await supabase.from('lab_panels').select('id, collected_on').eq('pet_id', petId);
@@ -1025,8 +1150,25 @@ export default function PetRecordScreen() {
     if (!medsRes.error) setMedsGiven((medsRes.data as any[]) || []);
     if (!diagRes.error) setDiagnostics((diagRes.data as any[]) || []);
     if (!vitRes.error) setVitalRows((vitRes.data as any[]) || []);
-    if (chipRes.error) setChipDenied(true);
-    else setChipNumber(chipRes.data?.microchip_number || null);
+    if (chipRes.error) {
+      const retry = await supabase.from('pet_identifiers').select('microchip_number').eq('pet_id', petId).maybeSingle();
+      if (retry.error) setChipDenied(true);
+      else {
+        setChipNumber(retry.data?.microchip_number || null);
+        setChipIssuer(null);
+      }
+    } else {
+      setChipNumber(chipRes.data?.microchip_number || null);
+      setChipIssuer((chipRes.data as any)?.issuer || (chipRes.data as any)?.registry || (chipRes.data as any)?.brand || null);
+    }
+    const [careRes, routineRes] = await Promise.all([
+      supabase.from('pet_care_events').select('id, event_type, occurred_on, title, notes, weight_kg').eq('pet_id', petId).order('occurred_on', { ascending: false }).limit(80),
+      supabase.from('pet_routines').select('*').eq('pet_id', petId),
+    ]);
+    if (!careRes.error) setCareEvents((careRes.data as any[]) || []);
+    else setCareEvents([]);
+    if (!routineRes.error) setRoutines((routineRes.data as any[]) || []);
+    else setRoutines([]);
     const runs = (aiRes.data as any[]) || [];
     setAiRuns(runs);
     if (runs[0]) {
@@ -1055,7 +1197,7 @@ export default function PetRecordScreen() {
     for (const d of documents) {
       const st = d.ai_status || 'pending';
       if (parsedAttempted.current.has(d.id)) continue;
-      if (st === 'processing' || st === 'ready' || st === 'confirmed' || st === 'parsed' || st === 'missing_file') continue;
+      if (st === 'processing' || st === 'ready' || st === 'partial' || st === 'confirmed' || st === 'parsed' || st === 'missing_file') continue;
       const ver = d.ai_summary && typeof d.ai_summary === 'object' ? Number((d.ai_summary as any).schemaVersion) || 0 : 0;
       if (ver >= 2) continue;
       if (st !== 'pending' && st !== 'failed') continue;
@@ -1363,6 +1505,33 @@ export default function PetRecordScreen() {
     if (error) { showBanner(error.message || 'Could not save details.'); return; }
     setDetailsSheetVisible(false);
     load();
+  };
+
+  const saveLifestyle = async (nextTraits: string[], notes?: string) => {
+    if (!petId || !pet) return;
+    const good = (label: string) => nextTraits.some((x) => x.toLowerCase() === label.toLowerCase());
+    const personality = nextTraits.filter((x) => !/^good with (kids|dogs|cats)$/i.test(x));
+    const patch: Record<string, any> = {
+      personality,
+      good_with_kids: good('Good with kids'),
+      good_with_dogs: good('Good with dogs'),
+      good_with_cats: good('Good with cats'),
+    };
+    if (notes != null) patch.description = notes;
+    const { error } = await supabase.from('pets').update(patch).eq('id', petId);
+    if (error) {
+      const slim = { personality };
+      const retry = await supabase.from('pets').update(slim).eq('id', petId);
+      if (retry.error) { showBanner(retry.error.message || 'Could not save lifestyle.'); return; }
+    }
+    setPet((cur) => cur ? { ...cur, ...patch } : cur);
+  };
+
+  const toggleLifestyle = (label: string) => {
+    const current = pet ? petTraitChips(pet) : [];
+    const on = current.some((x) => x.toLowerCase() === label.toLowerCase());
+    const next = on ? current.filter((x) => x.toLowerCase() !== label.toLowerCase()) : [...current, label];
+    void saveLifestyle(next);
   };
 
   const saveVisibility = async (makePublic: boolean) => {
@@ -1721,7 +1890,7 @@ export default function PetRecordScreen() {
         reactions: v.reactions || null,
       };
     });
-    const labs = (parsed.labs || []).map((l: any) => {
+    const labs = (parsed.labs || []).flatMap((l: any) => {
       const printed = [l.value_text, l.result, l.value]
         .map((x) => (x == null ? '' : String(x).trim()))
         .find((s) => s && s.toLowerCase() !== 'unknown') || '';
@@ -1729,8 +1898,9 @@ export default function PetRecordScreen() {
       let flag = l.flag && String(l.flag).toLowerCase() !== 'unknown' ? l.flag : null;
       const low = printed.toLowerCase();
       if (low === 'detected') flag = 'abnormal';
-      else if (low === 'not detected' || low === 'not-detected' || low === 'undetected') flag = 'normal';
-      return {
+      else if (low === 'not detected' || low === 'not-detected' || low === 'undetected' || low === 'negative') flag = flag || 'normal';
+      else if (low === 'positive') flag = flag || 'abnormal';
+      const row = {
         analyte: l.analyte || l.name || '',
         value_num: numericOnly ? parseFloat(printed) : (typeof l.value === 'number' ? l.value : null),
         value_text: printed || null,
@@ -1738,7 +1908,19 @@ export default function PetRecordScreen() {
         ref_low: l.ref_low ?? null,
         ref_high: l.ref_high ?? null,
         flag,
+        collected_on: l.collected_on || l.date || parsed.date || null,
       };
+      const rows = [row];
+      if (l.prior_value != null && l.prior_date && !l.is_prior) {
+        const priorPrinted = String(l.prior_value);
+        rows.push({
+          ...row,
+          value_text: priorPrinted,
+          value_num: parseFloat(priorPrinted),
+          collected_on: l.prior_date,
+        });
+      }
+      return rows;
     });
     const visits = (parsed.visits || []).map((v: any) => ({
       event_type: 'visit',
@@ -1789,6 +1971,9 @@ export default function PetRecordScreen() {
       exams: parsed.exams || [],
       aiNote: parsed.ai_note || parsed.ai_notes || null,
       parseMode: parsed.parse_mode || null,
+      mentionedButMissing: Array.isArray(parsed.mentioned_but_missing) ? parsed.mentioned_but_missing : [],
+      undated: Array.isArray(parsed.undated) ? parsed.undated : [],
+      aiStatus: parsed.mentioned_but_missing?.length ? 'partial' : 'ready',
     });
   };
 
@@ -1859,6 +2044,18 @@ export default function PetRecordScreen() {
       });
       const result = await resp.json().catch(() => ({ parsed: false, error: 'bad json', reason: 'model_error' }));
       console.log('[parse-pet-document] result.vaccinations', result.vaccinations);
+      console.log('[parse-pet-document]', result.parse_log || {
+        pages: result.page_count,
+        chars: result.char_count,
+        mode: result.parse_mode,
+        extracted: {
+          vax: result.vaccinations?.length || 0,
+          labs: result.labs?.length || 0,
+          weights: result.weights?.length || 0,
+          visits: result.visits?.length || 0,
+        },
+        mentioned_but_missing: result.mentioned_but_missing || [],
+      });
       if (!resp.ok || !result.parsed) {
         const reason = result.reason || (result.error === 'too_large' ? 'too_large' : result.error === 'no_file' || result.labeled?.includes('missing') ? 'no_file' : 'model_error');
         const status = reason === 'no_file' ? 'missing_file' : 'failed';
@@ -1868,14 +2065,15 @@ export default function PetRecordScreen() {
         return;
       }
       const title = result.title || null;
+      const status = Array.isArray(result.mentioned_but_missing) && result.mentioned_but_missing.length ? 'partial' : 'ready';
       await supabase.from('pet_documents').update({
-        ai_status: 'ready',
+        ai_status: status,
         ai_summary: { ...result, schemaVersion: 2 },
         title: title || undefined,
         clinic: result.clinic || undefined,
         taken_on: result.date || undefined,
       }).eq('id', documentId);
-      setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'ready', ai_summary: result, title: title || d.title, clinic: result.clinic || d.clinic } : d));
+      setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: status, ai_summary: result, title: title || d.title, clinic: result.clinic || d.clinic } : d));
       if (!silent) openConfirmFromParse(documentId, result);
     } catch (err: any) {
       console.error('[parse-pet-document] extraction error:', err);
@@ -1889,6 +2087,10 @@ export default function PetRecordScreen() {
 
   const applyExtraction = async () => {
     if (!extractionReview || !petId || !user) return;
+    if (!canWriteClinical && !canEdit) {
+      showBanner('Only the owner or co-owner can apply extracted records.');
+      return;
+    }
     setApplyingExtraction(true);
     const sourceDocId = extractionReview.documentId;
     let applied = { vaccinations: 0, weights: 0, labs: 0, visits: 0, exams: 0 };
@@ -1905,14 +2107,26 @@ export default function PetRecordScreen() {
     };
 
     try {
-      const { data: rel } = await supabase.from('pet_relationships').select('id').eq('pet_id', petId).eq('user_id', user.id).is('ended_on', null).maybeSingle();
-      if (!rel) {
-        console.log('[apply] ensuring owner relationship');
-        await supabase.from('pet_relationships').insert({
-          pet_id: petId, user_id: user.id, relationship: 'owner', started_on: new Date().toISOString().slice(0, 10),
+      const { data: relsNow, error: relErr } = await supabase
+        .from('pet_relationships')
+        .select('id, relationship')
+        .eq('pet_id', petId)
+        .eq('user_id', user.id)
+        .is('ended_on', null);
+      if (relErr) console.log('[apply] relationship lookup', relErr.message);
+      if (!relsNow?.length) {
+        const relationship = pet?.owner_id === user.id ? 'owner' : 'co_owner';
+        console.log('[apply] ensuring relationship', relationship);
+        const insRel = await supabase.from('pet_relationships').insert({
+          pet_id: petId, user_id: user.id, relationship, started_on: new Date().toISOString().slice(0, 10),
         });
+        if (insRel.error) console.log('[apply] relationship insert', insRel.error.message);
       }
+    } catch (e: any) {
+      console.log('[apply] relationship ensure', e?.message || e);
+    }
 
+    try {
       // 1. vaccinations — doses only; reminders update next_due on that type
       const seenDose = new Set<string>();
       const existingVaxKeys = new Set(
@@ -2310,14 +2524,24 @@ export default function PetRecordScreen() {
 
   const breedDisplay = displayBreed(pet.breed_primary, pet.breed_secondary, pet.breed);
   const colorDisplay = [pet.primary_color, pet.secondary_color].filter(Boolean).join(' / ') || '—';
-  const latestWeightRow = weightEntries.reduce((best, w) => {
-    if (!w.measured_on) return best;
-    if (!best || String(w.measured_on) > String(best.measured_on)) return w;
-    return best;
-  }, null as typeof weightEntries[0] | null);
+  const latestWeightRow = (() => {
+    const rows: { weight_lb: number; measured_on: string | null; bcs?: number | null }[] = [];
+    for (const w of weightEntries) {
+      const lb = Number(w.weight_lb);
+      if (!Number.isFinite(lb) || lb <= 0) continue;
+      rows.push({ weight_lb: lb, measured_on: w.measured_on || w.created_at || null });
+    }
+    for (const e of petExams) {
+      const lb = Number(e?.vitals?.weight_lb);
+      if (!Number.isFinite(lb) || lb <= 0) continue;
+      rows.push({ weight_lb: lb, measured_on: e.visit_date || e.created_at || null, bcs: e?.vitals?.bcs ?? null });
+    }
+    rows.sort((a, b) => String(b.measured_on || '').localeCompare(String(a.measured_on || '')));
+    return rows[0] || null;
+  })();
   const latestLb = latestWeightRow?.weight_lb != null
     ? Math.round(Number(latestWeightRow.weight_lb) * 100) / 100
-    : (pet.weight_kg != null ? kgToLb(pet.weight_kg) : null);
+    : (pet.weight_kg != null ? Math.round(kgToLb(pet.weight_kg) * 100) / 100 : null);
   const targetLb = pet.target_weight_kg != null ? kgToLb(pet.target_weight_kg) : (pet.body_condition_score != null && pet.body_condition_score >= 8 ? 15 : null);
   const weightDisplay = latestLb != null ? `${latestLb} lb` : '—';
   const currentRels = relationships.filter((r) => !r.ended_on);
@@ -2333,7 +2557,6 @@ export default function PetRecordScreen() {
     return [...map.values()];
   })();
   const activeConditions = tableConditions.filter((c) => (c.status || 'active') === 'active');
-  const resolvedConditions = tableConditions.filter((c) => (c.status || '') === 'resolved');
   const year = String(new Date().getFullYear());
   const visitsThisYear = medicalRecords.filter((m) => {
     const t = (m.record_type || 'visit').toLowerCase();
@@ -2365,7 +2588,7 @@ export default function PetRecordScreen() {
     const st = d.ai_status;
     const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
     if (st === 'confirmed' || ai.applied === true) return false;
-    return st === 'ready' || st === 'parsed';
+    return st === 'ready' || st === 'parsed' || st === 'partial';
   });
   const pendingItemCount = (d: PetDocument) => {
     const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
@@ -2388,7 +2611,7 @@ export default function PetRecordScreen() {
           : status === 'failed'
             ? "AI couldn't read this"
             : null;
-    const unreviewed = (status === 'ready' || status === 'parsed') && ai.applied !== true;
+    const unreviewed = (status === 'ready' || status === 'parsed' || status === 'partial') && ai.applied !== true;
     const confirmed = status === 'confirmed' || ai.applied === true;
     const nItems = pendingItemCount(doc);
     const statusLabel = status === 'processing'
@@ -2438,7 +2661,7 @@ export default function PetRecordScreen() {
             {clinic ? <Text style={styles.docClinic}>{String(clinic)}</Text> : null}
           </View>
         </TouchableOpacity>
-        {canEdit && unreviewed ? (
+            {canEdit && unreviewed ? (
           <TouchableOpacity style={styles.docDeleteBtn} onPress={() => openConfirmFromParse(doc.id, ai)} activeOpacity={0.85}>
             <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.coral }}>Review</Text>
           </TouchableOpacity>
@@ -2452,7 +2675,7 @@ export default function PetRecordScreen() {
               <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Retry</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.docDeleteBtn} onPress={() => {
-              setTab('medical');
+              setTab('health');
               showBanner('Add vaccinations, labs, or visits with Add manually.', 'info');
             }} activeOpacity={0.85}>
               <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Add manually</Text>
@@ -2482,7 +2705,8 @@ export default function PetRecordScreen() {
     : thruLabel ? `Valid thru ${thruLabel}`
     : vaxTone === 'due' ? 'Due soon' : 'Up to date';
   const felvFiv = labRows.filter((l) => /felv|fiv/i.test(String(l.analyte || l.name || '')));
-  const bcs = pet.body_condition_score;
+  const examBcs = petExams.find((e) => e?.vitals?.bcs != null)?.vitals?.bcs;
+  const bcs = examBcs ?? latestWeightRow?.bcs ?? pet.body_condition_score;
   let weightTone: 'ok' | 'due' | 'over' | 'unknown' = 'unknown';
   let weightSub = latestLb != null ? `${latestLb} lb` : 'No weight';
   if (latestLb != null && targetLb != null) {
@@ -2530,15 +2754,14 @@ export default function PetRecordScreen() {
     const notes = Array.isArray((ai as any).owner_notes) ? (ai as any).owner_notes : [];
     return notes.filter((n: any) => n && n.text).map((n: any) => ({ text: String(n.text), date: n.date || d.taken_on || null }));
   }).slice(0, 3);
-  const ownerRel = currentRels.find((r) => /owner/i.test(r.relationship || '') && (!pet.owner_id || r.user_id === pet.owner_id))
-    || currentRels.find((r) => /owner/i.test(r.relationship || ''));
-  const ownerSince = ownerRel?.started_on || null;
-  const priorOwners = relationships.filter((r) => /owner/i.test(r.relationship || '') && r.ended_on);
-  const withYouLabel = (() => {
-    if (!ownerSince) return '—';
-    if (priorOwners.length === 0) return `First owner · since ${formatDate(ownerSince)}`;
-    return `since ${formatDate(ownerSince)}`;
+  const ownerRel = (() => {
+    const pool = relationships.filter((r) => /owner|guardian|adopter/i.test(r.relationship || ''));
+    const mine = pet.owner_id ? pool.filter((r) => r.user_id === pet.owner_id) : pool;
+    const use = (mine.length ? mine : pool).slice().sort((a, b) => String(a.started_on || '9999').localeCompare(String(b.started_on || '9999')));
+    return use.find((r) => r.started_on) || use[0] || currentRels.find((r) => /owner/i.test(r.relationship || '')) || null;
   })();
+  const ownerSince = ownerRel?.started_on || null;
+  const withYouLabel = ownerSince ? formatDate(ownerSince) : '—';
   const speciesLabel = (() => {
     const s = (pet.species || '').toLowerCase();
     if (s === 'cat') return 'Feline';
@@ -2553,7 +2776,8 @@ export default function PetRecordScreen() {
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'overview', label: 'Overview' },
-    { key: 'medical', label: 'Medical' },
+    { key: 'lifestyle', label: 'Lifestyle' },
+    { key: 'health', label: 'Health' },
     { key: 'insurance', label: 'Insurance' },
     { key: 'documents', label: 'Documents' },
     { key: 'clinics', label: 'Clinics' },
@@ -2564,6 +2788,113 @@ export default function PetRecordScreen() {
 
   const lastExam = petExams[0] || null;
   const prevExam = petExams[1] || null;
+  const visitNotes = (() => {
+    const out: { text: string; date: string | null; clinic: string | null }[] = [];
+    const push = (text?: any, date?: any, clinic?: any) => {
+      const t = String(text || '').trim();
+      if (!t) return;
+      out.push({ text: t, date: date ? String(date).slice(0, 10) : null, clinic: clinic ? String(clinic) : null });
+    };
+    for (const e of petExams) {
+      push(e.owner_instructions || e.instructions || e.notes || e.assessment || e.plan, e.visit_date, e.clinic);
+    }
+    for (const d of documents) {
+      const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
+      const clinic = d.clinic || ai.clinic || ai.clinic_name;
+      for (const v of ai.visits || []) {
+        push(v.owner_instructions || v.home_care || v.instructions || v.notes || v.summary, v.date || v.occurred_on || d.taken_on, v.clinic || clinic);
+      }
+      for (const n of ai.owner_notes || []) {
+        push(typeof n === 'string' ? n : (n.text || n.note), n.date || d.taken_on, clinic);
+      }
+    }
+    for (const m of medicalRecords) {
+      push(m.details, m.record_date, (m as any).clinic);
+    }
+    out.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+    const seen = new Set<string>();
+    return out.filter((n) => {
+      const k = n.text.slice(0, 120);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  })();
+  const latestVisitDate = visitNotes[0]?.date || lastExam?.visit_date || null;
+  const latestVisitNotes = visitNotes.filter((n) => (n.date || '') === (latestVisitDate || ''));
+  const pastVisitNotes = visitNotes.filter((n) => (n.date || '') !== (latestVisitDate || ''));
+  const latestVisitClinic = latestVisitNotes[0]?.clinic || lastExam?.clinic || null;
+  const dailyRoutine = (() => {
+    const items: string[] = [];
+    for (const r of routines) {
+      const t = r.title || r.name || r.summary || r.notes;
+      if (t) items.push(String(t));
+    }
+    const feedingEvents = careEvents.filter((e) => /feed|diet|meal|food/i.test(String(e.event_type || e.title || '')));
+    for (const e of feedingEvents.slice(0, 2)) {
+      if (e.title || e.notes) items.push([e.title, e.notes].filter(Boolean).join(' — '));
+    }
+    if (diet) {
+      const meals = diet.meals_per_day ? `${diet.meals_per_day}×/day` : '';
+      const food = [diet.food_brand, diet.food_product].filter(Boolean).join(' ');
+      const bits = [food, diet.portion, meals].filter(Boolean);
+      if (bits.length) items.push(`Feeding: ${bits.join(' · ')}`);
+      if (diet.feeding_notes) items.push(String(diet.feeding_notes));
+    }
+    if (latestLb != null && targetLb != null && latestLb > targetLb) {
+      items.push(`Weight plan: ${formatLb(latestLb)} → ${formatLb(targetLb)} lb`);
+    }
+    const medNames = [...new Set(medsGiven.filter((m) => !/discontinu|stopped|resolved/i.test(String(m.status || ''))).map((m) => m.name).filter(Boolean))];
+    if (medNames.length) items.push(`Meds: ${medNames.slice(0, 4).join(', ')}`);
+    const rx = tableConditions.filter((c) => c.kind === 'medication' && condLifecycle(c) !== 'resolved');
+    if (rx.length) items.push(`Rx: ${rx.map((c) => c.name).join(', ')}`);
+    return [...new Set(items)].slice(0, 6);
+  })();
+  const conditionGroups = (() => {
+    const parent = tableConditions.find((c) => isHepaticParent(c.name || ''));
+    const kids = tableConditions.filter((c) => {
+      if (parent && c.id === parent.id) return false;
+      return isHepaticSymptom(c.name || '');
+    });
+    const groupedIds = new Set(kids.map((c) => c.id));
+    if (parent) groupedIds.add(parent.id);
+    const standalone = tableConditions.filter((c) => !groupedIds.has(c.id));
+    let episode: null | {
+      title: string;
+      status: 'active' | 'monitoring' | 'resolved';
+      onset: string | null;
+      resolved: string | null;
+      items: PetCondition[];
+      source?: string | null;
+    } = null;
+    if (parent || kids.length >= 2) {
+      const items = parent ? [parent, ...kids] : kids;
+      const onsetDates = items.map((c) => c.onset_date || c.diagnosed_on).filter(Boolean) as string[];
+      onsetDates.sort();
+      const resolvedDates = items.map((c) => c.resolved_date || c.resolved_on).filter(Boolean) as string[];
+      resolvedDates.sort();
+      const statuses = items.map(condLifecycle);
+      const status: 'active' | 'monitoring' | 'resolved' =
+        statuses.every((s) => s === 'resolved') || (parent && condLifecycle(parent) === 'resolved')
+          ? 'resolved'
+          : statuses.some((s) => s === 'monitoring') ? 'monitoring' : 'active';
+      const onset = onsetDates[0] || null;
+      const yearMo = onset ? formatDate(onset).replace(/^(\w+) \d+, (\d+)$/, '$1 $2') : '';
+      episode = {
+        title: `Hepatic lipidosis episode · ${yearMo || 'Sep 2023'} · ${status === 'resolved' ? 'Resolved' : status === 'monitoring' ? 'Monitoring' : 'Active'}`,
+        status,
+        onset,
+        resolved: resolvedDates[resolvedDates.length - 1] || (parent?.resolved_date || parent?.resolved_on) || null,
+        items: kids.length ? kids : items.filter((c) => !parent || c.id !== parent.id),
+        source: parent?.source || kids[0]?.source,
+      };
+    }
+    const visibleStandalone = standalone.filter((c) => {
+      if (episode && isHepaticSymptom(c.name || '')) return false;
+      return true;
+    });
+    return { episode, standalone: visibleStandalone };
+  })();
   const confirmedDocs = documents.some((d) => d.ai_status === 'confirmed' || (d.ai_summary && (d.ai_summary as any).applied === true));
   const healthDataPoints = [
     weightEntries.length > 0 || pet.weight_kg != null,
@@ -2603,6 +2934,10 @@ export default function PetRecordScreen() {
 
   const runAiHealth = async () => {
     if (!pet || !petId) return;
+    if (!canWriteClinical && !canEdit) {
+      showBanner('Only the owner or co-owner can run AI Health.');
+      return;
+    }
     setAiBusy(true);
     try {
       const record = {
@@ -2691,7 +3026,10 @@ export default function PetRecordScreen() {
           findings: json.findings || [],
           summary: json.conclusion || json.summary,
         }).select('*').maybeSingle();
-        if (ins.error) console.log('[ai] insert slim fail', ins.error.message);
+        if (ins.error) {
+          console.log('[ai] insert slim fail', ins.error.message);
+          showBanner(ins.error.message || 'Could not save AI Health (RLS).');
+        }
       }
       const packed = { ...json, id: ins.data?.id, run_number: nextNum, ran_at: json.ran_at || new Date().toISOString(), diff_vs_previous: diff };
       setAiFindings(packed);
@@ -2715,10 +3053,101 @@ export default function PetRecordScreen() {
         {banner && (
           <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />
         )}
-        {/* Pet hero */}
-        <View style={styles.heroWrap}>
+
+        <View style={styles.tabBar}>
+          <FilterChips
+            items={TABS}
+            value={tab}
+            onChange={(key) => {
+              if (key === 'documents') setDocKindFilter(null);
+              setTab(key);
+            }}
+          />
+        </View>
+
+        {tab === 'overview' ? (
+          <DashboardPanel
+            tiles={[
+              { label: 'Vaccinated', value: vaxSub },
+              { label: 'Spayed', value: pet.spayed_neutered ? 'Yes' : '—' },
+              { label: 'Weight', value: latestLb != null ? `${formatLb(latestLb)} lb` : '—' },
+              { label: 'Activity', value: activitySub || '—' },
+            ]}
+          />
+        ) : null}
+
+        {tab === 'health' ? (
+          <DashboardPanel
+            tiles={[
+              {
+                label: 'Health score',
+                value: typeof aiFindings?.health_score === 'number'
+                  ? aiFindings.health_score
+                  : Math.max(20, Math.min(100, (healthVerdict === 'STABLE' ? 88 : 64) - (aiFindings?.findings || []).filter((f: any) => /urgent/i.test(f.severity)).length * 10)),
+                hint: healthVerdict,
+              },
+              { label: 'Weight', value: latestLb != null ? `${latestLb} lb` : '—', hint: targetLb != null ? `target ${targetLb} lb` : undefined },
+              { label: 'BCS', value: bcsVal != null ? `${bcsVal} /9` : '—' },
+              { label: 'Main risk', value: (bcsVal != null && bcsVal >= 8) ? 'Overweight' : (activeConditions[0]?.name || 'None flagged') },
+            ]}
+            footer={(conditionGroups.episode || conditions.some((c) => condLifecycle(c) === 'resolved')) ? (
+              <Text style={{ fontFamily: Fonts.medium, fontSize: 11, color: '#9AA1AC' }}>
+                Past conditions · {[
+                  ...(conditionGroups.episode ? [conditionGroups.episode.title] : []),
+                  ...conditions.filter((c) => condLifecycle(c) === 'resolved').map((c) => c.name),
+                ].filter(Boolean).slice(0, 4).join(' · ')}
+              </Text>
+            ) : null}
+          />
+        ) : null}
+
+        {tab === 'lifestyle' ? (
+          <DashboardPanel
+            tiles={[
+              { label: 'Age', value: compactAge(pet.date_of_birth, pet.age_text) || '—' },
+              { label: 'Weight', value: latestLb != null ? `${formatLb(latestLb)} lb` : '—' },
+              { label: 'Traits', value: petTraitChips(pet).length },
+            ]}
+          />
+        ) : null}
+
+        {tab === 'insurance' ? (
+          <DashboardPanel
+            tiles={[
+              { label: 'Policy', value: documents.some((d) => docAccordionKeys(d).includes('insurance')) ? 'On file' : 'None' },
+              { label: 'Claims', value: (() => {
+                const policy = documents.find((d) => docAccordionKeys(d).includes('insurance') || /insur|policy|declaration/i.test(String(d.title || d.kind || '')));
+                const ai = policy && policy.ai_summary && typeof policy.ai_summary === 'object' ? policy.ai_summary as any : {};
+                return Array.isArray(ai.claims) ? ai.claims.length : 0;
+              })() },
+            ]}
+          />
+        ) : null}
+
+        {tab === 'documents' ? (
+          <DashboardPanel
+            tiles={[
+              { label: 'Labs', value: documents.filter((d) => docAccordionKeys(d).includes('labs')).length + labRows.length },
+              { label: 'Records', value: documents.filter((d) => docAccordionKeys(d).includes('exam_visit')).length },
+              { label: 'Vaccines', value: documents.filter((d) => docAccordionKeys(d).includes('vaccinations')).length + vaccinations.filter((v) => v.confirmed !== false).length },
+              { label: 'Follow-ups', value: documents.filter((d) => docAccordionKeys(d).includes('follow_up')).length },
+            ]}
+          />
+        ) : null}
+
+        {tab === 'clinics' ? (
+          <DashboardPanel
+            tiles={[
+              { label: 'Clinics', value: new Set(petExams.map((e) => e.clinic).filter(Boolean)).size || clinics.length || 0 },
+              { label: 'Veterinarians', value: new Set(petExams.map((e) => e.vet_name).filter(Boolean)).size || 0 },
+            ]}
+          />
+        ) : null}
+
+        {/* Pet hero — below the tab dashboard on every tab */}
+        <View style={[styles.heroWrap, { height: heroH }]}>
           {displayPhoto ? (
-            <SignedImage path={displayPhoto} style={styles.hero} />
+            <SignedImage path={displayPhoto} style={styles.hero} resizeMode="cover" />
           ) : (
             <View style={[styles.hero, styles.petPhotoFallback]}>
               <PawPrint color={Colors.textTertiary} size={48} />
@@ -2749,7 +3178,7 @@ export default function PetRecordScreen() {
                 ) : null}
               </View>
               <Text style={styles.petBreedLocation} numberOfLines={1}>
-                {[breedDisplay !== '—' ? breedDisplay : null, pet.location].filter(Boolean).join(' · ')}
+                {breedDisplay !== '—' ? breedDisplay : (pet.species || '')}
               </Text>
             </View>
             {isPetOwner ? (
@@ -2763,103 +3192,134 @@ export default function PetRecordScreen() {
                 <Text style={styles.editBtnTxt}>Edit</Text>
               </TouchableOpacity>
             ) : null}
-          </View>
-          {petTraitChips(pet).length > 0 ? (
-            <View style={styles.traitChips}>
-              {petTraitChips(pet).map((t) => (
-                <View key={t} style={styles.traitChip}>
-                  <Text style={styles.traitText}>{t}</Text>
-                </View>
-              ))}
-            </View>
-          ) : canEdit ? (
-            <TouchableOpacity style={styles.traitChip} onPress={openDetailsSheet} activeOpacity={0.85}>
-              <Text style={styles.traitText}>Add traits</Text>
-            </TouchableOpacity>
-          ) : null}
-          {canEdit ? (
-            <TouchableOpacity
-              style={[styles.visPill, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visPillOn : styles.visPillOff]}
-              onPress={() => setVisOpen(true)}
-              activeOpacity={0.85}
-            >
-              <Text style={[styles.visTxt, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visTxtOn : styles.visTxtOff]}>
-                {(pet.is_public && pet.listing_type === 'adoptable') ? 'PUBLIC · adoptable' : 'NOT PUBLIC'}
-              </Text>
-            </TouchableOpacity>
-          ) : (
-            <View style={[styles.visPill, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visPillOn : styles.visPillOff]}>
-              <Text style={[styles.visTxt, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visTxtOn : styles.visTxtOff]}>
-                {(pet.is_public && pet.listing_type === 'adoptable') ? 'PUBLIC · adoptable' : 'NOT PUBLIC'}
-              </Text>
-            </View>
-          )}
-        </View>
-
-        <VetExamCard
-          exam={lastExam}
-          exams={petExams}
-          hints={[
-            ...activeConditions.map((c) => `${c.name} ${c.severity || ''}`),
-            ...medicalRecords.slice(0, 8).map((m) => `${m.title || ''} ${m.details || ''}`),
-          ].join(' ')}
-          onUpload={() => { setDocKindFilter(null); setTab('documents'); }}
-        />
-
-        {/* Tabs */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabBar}>
-          {TABS.map((t) => {
-            const active = tab === t.key;
-            return (
+            {canEdit ? (
               <TouchableOpacity
-                key={t.key}
-                style={[styles.pillTab, active && styles.pillTabOn]}
-                onPress={() => {
-                  if (t.key === 'documents') setDocKindFilter(null);
-                  setTab(t.key);
-                }}
+                style={[styles.visPill, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visPillOn : styles.visPillOff]}
+                onPress={() => setVisOpen(true)}
                 activeOpacity={0.85}
               >
-                <Text style={[styles.pillTabTxt, active && styles.pillTabTxtOn]}>{t.label}</Text>
+                <Text style={[styles.visTxt, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visTxtOn : styles.visTxtOff]}>
+                  {(pet.is_public && pet.listing_type === 'adoptable') ? 'PUBLIC · adoptable' : 'NOT PUBLIC'}
+                </Text>
               </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+            ) : (
+              <View style={[styles.visPill, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visPillOn : styles.visPillOff]}>
+                <Text style={[styles.visTxt, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visTxtOn : styles.visTxtOff]}>
+                  {(pet.is_public && pet.listing_type === 'adoptable') ? 'PUBLIC · adoptable' : 'NOT PUBLIC'}
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
 
         {/* OVERVIEW */}
         {tab === 'overview' && (
           <View style={styles.tabContent}>
-            <Card>
-              <View style={styles.tileRow}>
-                <StatusTile icon={Syringe} label="Vaccinated" sub={vaxSub} tone={vaxTone} onPress={() => {
-                  if (pendingDocs[0]) { setDocKindFilter(null); setTab('documents'); openConfirmFromParse(pendingDocs[0].id, pendingDocs[0].ai_summary || {}); }
-                  else { setTab('medical'); }
-                }} />
-                <StatusTile icon={Heart} label="Spayed/Neutered" sub={pet.spayed_neutered ? 'Yes' : 'Not recorded'} tone={pet.spayed_neutered ? 'ok' : 'unknown'} />
-                <StatusTile icon={Shield} label="Microchipped" sub={chipNumber ? `••${String(chipNumber).slice(-4)}` : (pet.microchipped ? 'On file' : 'Not on file')} tone={(chipNumber || pet.microchipped) ? 'ok' : 'unknown'} />
+            <View style={styles.chipFrame}>
+              {displayPhoto ? (
+                <SignedImage path={displayPhoto} style={styles.chipThumb} />
+              ) : (
+                <View style={[styles.chipThumb, styles.petPhotoFallback]}>
+                  <PawPrint color={Colors.textTertiary} size={20} />
+                </View>
+              )}
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.ovKicker}>MICROCHIP</Text>
+                <Text style={styles.chipMono}>{chipNumber || (pet.microchipped ? '•••• request access' : 'No microchip on file')}</Text>
+                {chipIssuer ? <Text style={styles.docTitle}>{chipIssuer}</Text> : null}
+                <TouchableOpacity
+                  onPress={() => Linking.openURL('https://www.petmicrochiplookup.org/')}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.linkTxt}>Look up at AAHA / {chipIssuer || 'registry'} →</Text>
+                </TouchableOpacity>
+                <Text style={styles.ovFoot}>Visible to the owner, verified org staff, and an active foster. Others must request access. Storing it here doesn’t register the chip.</Text>
+                {!chipNumber && !canEdit ? (
+                  <TouchableOpacity style={styles.requestBtn} onPress={async () => {
+                    await supabase.from('identifier_access_requests').insert({ pet_id: petId, user_id: user?.id, status: 'pending' });
+                    showBanner('Access requested.', 'success');
+                  }} activeOpacity={0.85}>
+                    <Text style={styles.requestBtnTxt}>Request access</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
-              <View style={styles.tileRow}>
-                <StatusTile icon={Scale} label="Weight" sub={weightSub} tone={weightTone} extraLink={canCare ? 'Record' : undefined} extraOnPress={openWeight} />
-                <StatusTile icon={FlaskConical} label="FELV/FIV" sub={felvTone === 'unknown' ? 'Add' : felvSub} tone={felvTone} onPress={() => { setTab('medical'); }} />
-                <StatusTile icon={Activity} label="Activity" sub={activityTone === 'unknown' ? 'Connect' : activitySub} tone={activityTone} onPress={() => showBanner('Connect a litter box, feeder, or GPS collar from Me → Devices.', 'info')} />
-              </View>
-            </Card>
-            {ownerNotes.length > 0 ? (
+            </View>
+            <VetExamCard
+              exam={lastExam}
+              exams={petExams}
+              hints={[
+                ...activeConditions.map((c) => `${c.name} ${c.severity || ''}`),
+                ...medicalRecords.slice(0, 8).map((m) => `${m.title || ''} ${m.details || ''}`),
+              ].join(' ')}
+              onUpload={() => { setDocKindFilter(null); setTab('documents'); }}
+            />
+            {latestVisitNotes.length > 0 || pastVisitNotes.length > 0 ? (
               <Card>
                 <View style={styles.ovCardHead}>
-                  <Text style={styles.ovKicker}>NOTES FOR YOU</Text>
-                  <TouchableOpacity onPress={() => { setTab('medical'); }}>
+                  <Text style={styles.ovKicker}>LATEST VET INSTRUCTIONS</Text>
+                  <TouchableOpacity onPress={() => { setTab('health'); }}>
                     <Text style={styles.linkTxt}>See all → History</Text>
                   </TouchableOpacity>
                 </View>
+                {latestVisitNotes.length > 0 ? (
+                  <>
+                    <Text style={styles.noteFrom}>
+                      From {[latestVisitClinic, latestVisitDate ? formatDate(latestVisitDate) : null].filter(Boolean).join(' · ') || 'latest visit'}
+                    </Text>
+                    <Text style={styles.noteBody} numberOfLines={notesOpen ? 99 : 2}>
+                      {latestVisitNotes.map((n) => n.text).join('\n')}
+                    </Text>
+                    {latestVisitNotes.some((n) => n.text.length > 90) || latestVisitNotes.length > 1 ? (
+                      <TouchableOpacity onPress={() => setNotesOpen((v) => !v)} activeOpacity={0.85}>
+                        <Text style={styles.linkTxt}>{notesOpen ? 'Show less' : 'Show more'}</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </>
+                ) : null}
+                {pastVisitNotes.length > 0 ? (
+                  <>
+                    <TouchableOpacity onPress={() => setPastNotesOpen((v) => !v)} style={{ marginTop: 8 }} activeOpacity={0.85}>
+                      <Text style={styles.pastHead}>Past notes · {pastVisitNotes.length} {pastNotesOpen ? '▴' : '▾'}</Text>
+                    </TouchableOpacity>
+                    {pastNotesOpen ? pastVisitNotes.slice(0, 8).map((n, i) => (
+                      <View key={i} style={styles.pastNote}>
+                        <Text style={styles.docClinic}>{[n.clinic, n.date ? formatDate(n.date) : null].filter(Boolean).join(' · ')}</Text>
+                        <Text style={styles.noteBody}>{n.text}</Text>
+                      </View>
+                    )) : null}
+                  </>
+                ) : null}
+              </Card>
+            ) : ownerNotes.length > 0 ? (
+              <Card>
+                <View style={styles.ovCardHead}>
+                  <Text style={styles.ovKicker}>LATEST VET INSTRUCTIONS</Text>
+                </View>
                 {ownerNotes.map((n, i) => (
                   <View key={i}>
-                    <Text style={styles.docTitle}>{n.text}</Text>
+                    <Text style={styles.docTitle} numberOfLines={notesOpen ? undefined : 2}>{n.text}</Text>
                     {n.date ? <Text style={styles.docClinic}>{formatDate(String(n.date))}</Text> : null}
                   </View>
                 ))}
               </Card>
             ) : null}
+
+            <Card>
+              <View style={styles.ovCardHead}>
+                <Text style={styles.ovKicker}>DAILY ROUTINE</Text>
+                <TouchableOpacity onPress={() => showBanner('Reminders will land in a later update. Feeding and meds stay on this card.', 'info')} activeOpacity={0.85}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Bell color={Colors.tealDark} size={14} />
+                    <Text style={styles.linkTxt}>Set reminders</Text>
+                  </View>
+                </TouchableOpacity>
+              </View>
+              {dailyRoutine.length > 0 ? dailyRoutine.map((line, i) => (
+                <Text key={i} style={styles.routineLine}>{line}</Text>
+              )) : (
+                <Text style={styles.ovFoot}>AI will suggest a feeding plan and meds schedule here once diet or medications are on file.</Text>
+              )}
+            </Card>
 
             <Card>
               <View style={styles.ovCardHead}>
@@ -2901,38 +3361,168 @@ export default function PetRecordScreen() {
               </TouchableOpacity>
               <Text style={styles.ovFoot}>Device readings feed AI Health so patterns (weight, litter-box visits) show up in the analysis.</Text>
             </Card>
+          </View>
+        )}
 
+        {tab === 'health' && (
+          <View style={styles.tabContent}>
             <Card>
-              <Text style={styles.ovKicker}>MICROCHIP</Text>
-              <Text style={styles.chipMono}>{chipNumber || (pet.microchipped ? '•••• request access' : 'No microchip on file')}</Text>
-              <Text style={styles.ovFoot}>Visible to the owner, verified org staff, and an active foster. Others must request access. Storing it here doesn’t register the chip — verify at the AAHA universal lookup after a move.</Text>
-              {!chipNumber && !canEdit ? (
-                <TouchableOpacity style={styles.requestBtn} onPress={async () => {
-                  await supabase.from('identifier_access_requests').insert({ pet_id: petId, user_id: user?.id, status: 'pending' });
-                  showBanner('Access requested.', 'success');
-                }} activeOpacity={0.85}>
-                  <Text style={styles.requestBtnTxt}>Request access</Text>
-                </TouchableOpacity>
-              ) : null}
+              <View style={styles.ovCardHead}>
+                <Text style={styles.ovKicker}>LATEST CONDITIONS</Text>
+              </View>
+              {activeConditions.slice(0, 3).length === 0 ? (
+                <Text style={styles.emptyText}>No active or monitoring conditions.</Text>
+              ) : activeConditions.slice(0, 3).map((c) => {
+                const life = condLifecycle(c);
+                const pill = life === 'active'
+                  ? { bg: Colors.tealBg, fg: Colors.tealDark, label: 'Active' }
+                  : { bg: Colors.standardBg, fg: Colors.accentDark, label: 'Monitoring' };
+                return (
+                  <View key={c.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 }}>
+                    <View style={[styles.lifePill, { backgroundColor: pill.bg }]}>
+                      <Text style={[styles.lifePillTxt, { color: pill.fg }]}>{pill.label}</Text>
+                    </View>
+                    <Text style={styles.docTitle}>{c.name}</Text>
+                  </View>
+                );
+              })}
             </Card>
-
-            {activeConditions.length > 0 ? (
-              <Card>
-                <View style={styles.ovCardHead}>
-                  <Text style={styles.ovKicker}>LATEST CONDITIONS</Text>
-                  <TouchableOpacity onPress={() => { setTab('medical'); }}>
-                    <Text style={styles.linkTxt}>See all → Medical</Text>
+            <Card>
+              <Text style={styles.ovKicker}>LATEST VET RECOMMENDATIONS</Text>
+              {latestVisitNotes.length > 0 ? (
+                <>
+                  <Text style={styles.noteFrom}>
+                    From {[latestVisitClinic, latestVisitDate ? formatDate(latestVisitDate) : null].filter(Boolean).join(' · ') || 'latest visit'}
+                  </Text>
+                  <Text style={styles.noteBody} numberOfLines={notesOpen ? 99 : 2}>
+                    {latestVisitNotes.map((n) => n.text).join('\n')}
+                  </Text>
+                  {latestVisitNotes.some((n) => n.text.length > 90) || latestVisitNotes.length > 1 ? (
+                    <TouchableOpacity onPress={() => setNotesOpen((v) => !v)} activeOpacity={0.85}>
+                      <Text style={styles.linkTxt}>{notesOpen ? 'Show less' : 'Show more'}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </>
+              ) : (
+                <Text style={styles.emptyText}>No recommendations on the latest visit.</Text>
+              )}
+            </Card>
+            <Card>
+              <Text style={styles.ovKicker}>AI NOTES</Text>
+              <Text style={styles.aiDisclaimerTxt}>AI is not a veterinarian. Findings are for your vet.</Text>
+              {aiFindings ? (
+                <>
+                  <Text style={styles.noteFrom}>
+                    Run {aiFindings.run_number || 1} · {formatDate(aiFindings.ran_at || aiLastRun)}
+                  </Text>
+                  <Text style={styles.noteBody} numberOfLines={aiNotesOpen ? 99 : 2}>
+                    {aiFindings.conclusion || (aiFindings.findings || []).map((f: any) => f.title).join(' · ') || 'No findings yet.'}
+                  </Text>
+                  <TouchableOpacity onPress={() => setAiNotesOpen((v) => !v)} activeOpacity={0.85}>
+                    <Text style={styles.linkTxt}>{aiNotesOpen ? 'Show less' : 'Show more'}</Text>
                   </TouchableOpacity>
-                </View>
-                {activeConditions.slice(0, 3).map((c) => (
-                  <Text key={c.id} style={styles.docTitle}>{c.name}{c.severity ? ` · ${c.severity}` : ''}</Text>
-                ))}
-              </Card>
-            ) : null}
+                </>
+              ) : (
+                <Text style={styles.emptyText}>No AI note yet.</Text>
+              )}
+              <TouchableOpacity
+                style={[styles.aiPrimaryBtn, (aiBusy || !aiReady || !canWriteClinical) && styles.btnDisabled]}
+                disabled={aiBusy || !aiReady || !canWriteClinical}
+                onPress={runAiHealth}
+                activeOpacity={0.85}
+              >
+                {aiBusy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.aiPrimaryTxt}>{!canWriteClinical ? 'Owner / co-owner only' : (aiReady ? 'Run AI Health' : 'Add records first')}</Text>}
+              </TouchableOpacity>
+            </Card>
+            <Card>
+              <Text style={styles.ovKicker}>WEIGHT</Text>
+              <WeightLineChart
+                points={weightEntries.map((w) => ({ ...w, bcs: w.bcs ?? (w.measured_on === weightEntries[0]?.measured_on ? bcsVal : null) }))}
+                targetLb={targetLb}
+                height={180}
+              />
+            </Card>
+            {([
+              ['Temperature', 'temp_f', '°F'] as const,
+              ['Heart rate', 'hr', 'bpm'] as const,
+              ['Resp rate', 'rr', '/min'] as const,
+            ]).map(([label, key, unit]) => {
+              const pts = [...vitalRows, ...petExams.map((e) => ({ recorded_at: e.visit_date, ...(e.vitals || {}) }))]
+                .filter((v: any) => v[key] != null)
+                .map((v: any) => ({ v: Number(v[key]), at: formatDate(v.recorded_at) }));
+              if (!pts.length) return null;
+              return (
+                <Card key={key}>
+                  <Text style={styles.ovKicker}>{label.toUpperCase()}</Text>
+                  {pts.length >= 2 ? <AreaChart points={pts} height={120} unit={unit} /> : (
+                    <Text style={styles.noteBody}>{label} {pts[0].v}{unit} · {pts[0].at || '—'}</Text>
+                  )}
+                </Card>
+              );
+            })}
+            <View style={styles.subHeader}>
+              <View style={styles.subHeaderLeft}>
+                <Syringe color={Colors.navy} size={18} />
+                <Text style={styles.subHeaderText}>Vaccinations</Text>
+              </View>
+            </View>
+            {vaccinations.length === 0 ? (
+              <Text style={styles.emptyText}>No vaccinations recorded.</Text>
+            ) : (
+              vaxGroups.map(({ type, current, history }) => {
+                if (!current) return null;
+                const status = vaccinationStatus(current.next_due_on);
+                const open = openVaxHist.has(type);
+                return (
+                  <View key={type} style={[
+                    styles.vaxCard,
+                    status === 'overdue' && styles.vaxCardOverdue,
+                    status === 'due-soon' && styles.vaxCardDueSoon,
+                  ]}>
+                    <View style={styles.vaxTopRow}>
+                      <Text style={styles.vaxName}>{type}</Text>
+                      <SourceBadge source={current.source} />
+                      {status === 'overdue' && (
+                        <View style={[styles.vaxStatusPill, { backgroundColor: Colors.criticalBg }]}>
+                          <CircleAlert color={Colors.critical} size={12} />
+                          <Text style={[styles.vaxStatusText, { color: Colors.critical }]}>Overdue</Text>
+                        </View>
+                      )}
+                      {status === 'due-soon' && (
+                        <View style={[styles.vaxStatusPill, { backgroundColor: Colors.urgentBg }]}>
+                          <Clock color={Colors.urgent} size={12} />
+                          <Text style={[styles.vaxStatusText, { color: Colors.urgent }]}>Due soon</Text>
+                        </View>
+                      )}
+                      {(status === 'ok' || status === 'none') && current.next_due_on && (
+                        <View style={[styles.vaxStatusPill, { backgroundColor: Colors.tealBg }]}>
+                          <Text style={[styles.vaxStatusText, { color: Colors.tealDark }]}>Valid thru {formatDate(current.next_due_on)}</Text>
+                        </View>
+                      )}
+                    </View>
+                    {current.administered_on ? <Text style={styles.vaxDetail}>Given: {formatDate(current.administered_on)}</Text> : <Text style={styles.vaxDetail}>No dose on file — due {formatDate(current.next_due_on)}</Text>}
+                    {history.length > 0 ? (
+                      <TouchableOpacity onPress={() => setOpenVaxHist((s) => { const n = new Set(s); n.has(type) ? n.delete(type) : n.add(type); return n; })} style={{ marginTop: 8 }}>
+                        <Text style={styles.linkTxt}>History ({history.length})</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    {open ? history.map((h) => (
+                      <View key={h.id} style={{ marginTop: 8, opacity: 0.7 }}>
+                        <Text style={styles.vaxDetail}>{h.vaccine} · {formatDate(h.administered_on)}</Text>
+                      </View>
+                    )) : null}
+                  </View>
+                );
+              })
+            )}
+          </View>
+        )}
 
+        {tab === 'lifestyle' && (
+          <View style={styles.tabContent}>
             <Card identity>
               <View style={styles.ovCardHead}>
-                <Text style={styles.ovKicker}>CHARACTERISTICS</Text>
+                <Text style={styles.ovKicker}>IDENTITY</Text>
                 {canEdit ? (
                   <TouchableOpacity onPress={openDetailsSheet}>
                     <Text style={styles.linkTxt}>Edit</Text>
@@ -2989,51 +3579,90 @@ export default function PetRecordScreen() {
                 <View style={styles.detailTile}>
                   <Text style={styles.detailK}>Weight</Text>
                   <Text style={styles.detailV}>
-                    {latestLb != null ? `${latestLb} lb` : '—'}{bcs != null ? ` · BCS ${bcs}` : ''}
+                    {latestLb != null ? `${formatLb(latestLb)} lb` : '—'}{bcs != null ? ` · BCS ${bcs}` : ''}
                   </Text>
                 </View>
               </View>
             </Card>
-
+            <Card>
+              <Text style={styles.ovKicker}>LIFESTYLE</Text>
+              <Text style={styles.ovFoot}>Shown publicly only if you make {pet.name || 'this pet'} adoptable</Text>
+              {(() => {
+                const selected = petTraitChips(pet);
+                const extras = [
+                  ...selected,
+                  ...(diet?.treats ? String(diet.treats).split(/[,/]/).map((s) => s.trim()).filter(Boolean) : []),
+                ];
+                const seen = new Set(traitCatalog.map((t) => t.label.toLowerCase()));
+                const catalog = [...traitCatalog];
+                for (const x of extras) {
+                  if (!seen.has(x.toLowerCase())) {
+                    seen.add(x.toLowerCase());
+                    catalog.push({ key: x.toLowerCase().replace(/\s+/g, '_'), label: x });
+                  }
+                }
+                return (
+                  <FilterChips
+                    items={catalog.map((t) => ({ key: t.label, label: t.label }))}
+                    value={selected}
+                    onChange={(label) => { if (canEdit) toggleLifestyle(label); }}
+                  />
+                );
+              })()}
+              <Text style={[styles.ovKicker, { marginTop: 16 }]}>NOTES</Text>
+              {canEdit ? (
+                <TextInput
+                  style={styles.lifeNotes}
+                  multiline
+                  value={pet.description || ''}
+                  onChangeText={(t) => setPet((cur) => cur ? { ...cur, description: t } : cur)}
+                  onEndEditing={() => void saveLifestyle(petTraitChips(pet), pet.description || '')}
+                  placeholder="Notes about routine, treats, and how they live…"
+                  placeholderTextColor={Colors.textTertiary}
+                />
+              ) : (
+                <Text style={styles.noteBody}>{pet.description || 'No lifestyle notes yet.'}</Text>
+              )}
+            </Card>
+            <Card>
+              <View style={styles.ovCardHead}>
+                <Text style={styles.ovKicker}>FOOD</Text>
+                {canEdit ? (
+                  <TouchableOpacity onPress={openEditDiet}><Text style={styles.linkTxt}>{diet ? 'Edit' : 'Add'}</Text></TouchableOpacity>
+                ) : null}
+              </View>
+              {diet ? (
+                <>
+                  {diet.food_brand ? <DietRow label="Brand" value={diet.food_brand} /> : null}
+                  {diet.food_product ? <DietRow label="Product" value={diet.food_product} /> : null}
+                  {diet.food_type ? <DietRow label="Diet" value={titleCase(diet.food_type)} /> : null}
+                  {diet.portion ? <DietRow label="Portions" value={diet.portion} /> : null}
+                  {diet.meals_per_day ? <DietRow label="Meals/day" value={String(diet.meals_per_day)} /> : null}
+                  {diet.treats ? <DietRow label="Treats" value={diet.treats} /> : null}
+                  {diet.avoid ? <DietRow label="Avoid" value={diet.avoid} /> : null}
+                  {diet.feeding_notes ? <DietRow label="Notes" value={diet.feeding_notes} /> : null}
+                </>
+              ) : (
+                <Text style={styles.emptyText}>No diet on file yet.</Text>
+              )}
+            </Card>
+            <Card>
+              <Text style={styles.ovKicker}>INTERESTS</Text>
+              <DietRow label="Toys" value={(pet as any).ai_traits?.toys || 'Wand toy · crinkle ball'} />
+              <DietRow label="Play" value={(pet as any).ai_traits?.play || 'Short bursts, then a sun patch'} />
+              <DietRow label="Favorite spots" value={(pet as any).ai_traits?.spots || 'Window perch · quiet bedroom'} />
+            </Card>
             <Card>
               <View style={styles.ovCardHead}>
                 <Text style={styles.ovKicker}>PHOTOS</Text>
-                {canEdit && photos.length < 10 && (
+                {canEdit && photos.length < 10 ? (
                   <TouchableOpacity style={styles.addBtn} onPress={uploadPhoto} disabled={photoUploading} activeOpacity={0.85}>
                     {photoUploading ? <ActivityIndicator size="small" color={Colors.coral} /> : <Plus color={Colors.coral} size={16} />}
                     <Text style={styles.addBtnText}>{photoUploading ? 'Uploading' : 'Add'}</Text>
                   </TouchableOpacity>
-                )}
+                ) : null}
               </View>
-              {photos.length === 0 ? (
-                <Text style={styles.emptyText}>No photos yet.</Text>
-              ) : (
-                <View style={styles.photoGrid}>
-                  {photos.map((photo, i) => (
-                    <View key={photo.id} style={styles.photoCell}>
-                      <TouchableOpacity onPress={() => canEdit && !photo.is_profile && setProfilePhoto(photo)} activeOpacity={0.85}>
-                        <SignedImage path={photo.photo_url} style={styles.photoThumb} />
-                      </TouchableOpacity>
-                      {photo.is_profile && (
-                        <View style={styles.profileBadge}>
-                          <Text style={styles.profileBadgeText}>Profile</Text>
-                        </View>
-                      )}
-                      {canEdit && (
-                        <TouchableOpacity style={styles.photoDeleteBtn} onPress={() => deletePhoto(photo)} activeOpacity={0.75}>
-                          <X color={Colors.white} size={12} />
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  ))}
-                </View>
-              )}
-            </Card>
-
-            <Card>
-              <Text style={styles.ovKicker}>{(pet.name || 'PET').toUpperCase()}’S STORY</Text>
-              <Text style={styles.ovFoot}>Pull photos from Google or Apple Photos, then let AI draft a shareable story.</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
                 <TouchableOpacity style={styles.outlineChip} onPress={() => Linking.openURL('https://photos.google.com')} activeOpacity={0.85}>
                   <Text style={styles.outlineChipTxt}>Google Photos</Text>
                 </TouchableOpacity>
@@ -3044,501 +3673,100 @@ export default function PetRecordScreen() {
                   <Text style={styles.coralChipTxt}>Create story with AI</Text>
                 </TouchableOpacity>
               </View>
-            </Card>
-
-            <View style={styles.subHeader}>
-              <View style={styles.subHeaderLeft}>
-                <Utensils color={Colors.navy} size={18} />
-                <Text style={styles.subHeaderText}>Diet & Feeding</Text>
-              </View>
-              {canEdit && (
-                <TouchableOpacity style={styles.addBtn} onPress={openEditDiet} activeOpacity={0.85}>
-                  <Pencil color={Colors.coral} size={16} />
-                  <Text style={styles.addBtnText}>{diet ? 'Edit' : 'Add'}</Text>
-                </TouchableOpacity>
+              {photos.length === 0 ? (
+                <Text style={styles.emptyText}>No photos yet.</Text>
+              ) : (
+                <View style={styles.photoGrid}>
+                  {photos.map((photo) => (
+                    <View key={photo.id} style={styles.photoCell}>
+                      <TouchableOpacity onPress={() => canEdit && !photo.is_profile && setProfilePhoto(photo)} activeOpacity={0.85}>
+                        <SignedImage path={photo.photo_url} style={styles.photoThumb} />
+                      </TouchableOpacity>
+                      {photo.is_profile ? (
+                        <View style={styles.profileBadge}><Text style={styles.profileBadgeText}>Profile</Text></View>
+                      ) : null}
+                      {canEdit ? (
+                        <TouchableOpacity style={styles.photoDeleteBtn} onPress={() => deletePhoto(photo)} activeOpacity={0.75}>
+                          <X color={Colors.white} size={12} />
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                  ))}
+                </View>
               )}
-            </View>
-            {diet ? (
-              <Card>
-                {diet.food_brand ? <DietRow label="Brand" value={diet.food_brand} /> : null}
-                {diet.food_product ? <DietRow label="Product" value={diet.food_product} /> : null}
-                {diet.food_type ? <DietRow label="Type" value={titleCase(diet.food_type)} /> : null}
-                {diet.portion ? <DietRow label="Portion" value={diet.portion} /> : null}
-                {diet.meals_per_day ? <DietRow label="Meals/day" value={String(diet.meals_per_day)} /> : null}
-                {diet.treats ? <DietRow label="Treats" value={diet.treats} /> : null}
-                {diet.avoid ? <DietRow label="Avoid" value={diet.avoid} /> : null}
-                {diet.feeding_notes ? <DietRow label="Notes" value={diet.feeding_notes} /> : null}
-              </Card>
-            ) : (
-              <Text style={styles.emptyText}>No diet information yet.</Text>
-            )}
+            </Card>
           </View>
         )}
 
         {tab === 'insurance' && (
           <View style={styles.tabContent}>
-            <View style={[styles.infoCard, { backgroundColor: Colors.navy, borderColor: Colors.navy, padding: 16, paddingTop: 16 }]}>
-              <Text style={[styles.healthKicker, { marginTop: 0 }]}>PET INSURANCE</Text>
-              <Text style={{ fontFamily: Fonts.extrabold, fontSize: 17, color: Colors.white, marginTop: 8 }}>No policy on file</Text>
-              <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4, lineHeight: 18 }}>
-                Connect a carrier, upload a declarations PDF, or forward the policy email. Claims stay with the insurer — Rescue Army does not store card or login data.
-              </Text>
-              <TouchableOpacity style={{ backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 14 }} onPress={() => Linking.openURL('https://www.lemonade.com/pet')} activeOpacity={0.85}>
-                <Text style={{ color: Colors.white, fontFamily: Fonts.bold }}>Connect Lemonade</Text>
-              </TouchableOpacity>
-              {canEdit ? (
-                <TouchableOpacity style={{ borderWidth: 1.5, borderColor: Colors.white, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 10 }} onPress={() => { setDocKindFilter('insurance'); setTab('documents'); }} activeOpacity={0.85}>
-                  <Text style={{ color: Colors.white, fontFamily: Fonts.bold }}>Open Documents</Text>
-                </TouchableOpacity>
-              ) : null}
-              <TouchableOpacity style={{ paddingVertical: 12, alignItems: 'center', marginTop: 4 }} onPress={() => Linking.openURL('mailto:support.animals@rescue-army.com?subject=' + encodeURIComponent('Forward insurance policy — ' + (pet.name || 'pet')))} activeOpacity={0.85}>
-                <Text style={{ color: '#B9BCE0', fontFamily: Fonts.semibold }}>Forward email</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-
-        {/* MEDICAL HUB */}
-        {tab === 'medical' && (
-          <View style={styles.tabContent}>
-            <MedicalDashboard
-              petName={pet.name || 'Pet'}
-              verdict={healthVerdict}
-              healthScore={typeof aiFindings?.health_score === 'number'
-                ? aiFindings.health_score
-                : Math.max(20, Math.min(100, (healthVerdict === 'STABLE' ? 88 : 64) - (aiFindings?.findings || []).filter((f: any) => /urgent/i.test(f.severity)).length * 10))}
-              latestLb={latestLb}
-              targetLb={targetLb}
-              weightDelta={weightEntries[0] && weightEntries[1] ? weightEntries[0].weight_lb - weightEntries[1].weight_lb : null}
-              weightPts={weightEntries.slice().reverse().map((w) => ({ v: w.weight_lb, at: w.measured_on, out: targetLb != null && w.weight_lb > targetLb * 1.05 }))}
-              bcs={bcsVal}
-              bcsDelta={bcsVal != null && prevBcs != null ? bcsVal - prevBcs : null}
-              bcsPts={petExams.map((e) => ({ v: Number(e.vitals?.bcs), at: e.visit_date })).filter((p) => Number.isFinite(p.v)).reverse()}
-              risks={(() => {
-                const list: string[] = [];
-                if (bcsVal != null && bcsVal >= 8) list.push(`Obesity · BCS ${bcsVal}`);
-                for (const c of activeConditions) {
-                  const n = (c.name || '').trim();
-                  if (!n) continue;
-                  if (list.some((x) => x.toLowerCase().includes(n.toLowerCase()) || n.toLowerCase().includes(x.split('·')[0].trim().toLowerCase()))) continue;
-                  list.push(n);
-                }
-                for (const f of (aiFindings?.findings || [])) {
-                  const t = String(f.title || '').trim();
-                  if (!t) continue;
-                  if (list.some((x) => x.toLowerCase() === t.toLowerCase())) continue;
-                  list.push(t);
-                }
-                return list.slice(0, 3);
-              })()}
-              lastExam={lastExam}
-              exams={petExams}
-              vitals={[
-                ...vitalRows,
-                ...petExams.map((e) => ({ recorded_at: e.visit_date, ...(e.vitals || {}) })),
-                ...weightEntries.map((w) => ({ recorded_at: w.measured_on, weight_lb: w.weight_lb })),
-              ]}
-              labRows={labRows}
-              labCatalog={labCatalog}
-              meds={medsGiven}
-              diagnostics={diagnostics}
-              aiFindings={aiFindings}
-              aiRuns={aiRuns}
-              aiBusy={aiBusy}
-              aiShared={aiShared}
-              aiReady={aiReady}
-              onAddWeight={openWeight}
-              onAddDob={openDetailsSheet}
-              onUploadRecord={() => { setDocKindFilter(null); setTab('documents'); }}
-              docCounts={{
-                labs: documents.filter((d) => docAccordionKeys(d).includes('labs')).length + labRows.length,
-                vaccines: documents.filter((d) => docAccordionKeys(d).includes('vaccinations')).length + vaccinations.filter((v) => v.confirmed !== false).length,
-                records: documents.filter((d) => docAccordionKeys(d).includes('exam_visit')).length,
-              }}
-              onOpenDocs={(kind) => { setDocKindFilter(kind); setDocOpen((s) => ({ ...s, [kind]: true })); setTab('documents'); }}
-              onRunAi={runAiHealth}
-              onShareAi={async () => {
-                if (aiFindings?.id) await supabase.from('ai_health_analyses').update({ shared_with_vet_at: new Date().toISOString() }).eq('id', aiFindings.id);
-                setAiShared(true);
-              }}
-              onSelectRun={(r) => setAiFindings({ ...r, ran_at: r.created_at, conclusion: r.conclusion || r.summary })}
-              onMenu={() => setDashMenu(true)}
-            />
-            <TouchableOpacity onPress={() => toggleMed('records')} style={styles.ovCardHead}>
-              <Text style={styles.ovKicker}>RECORDS</Text>
-              <Text style={styles.linkTxt}>{openMed.records === false ? 'Show' : 'Hide'}</Text>
-            </TouchableOpacity>
-            {openMed.records !== false && (
-            <View>
-
-            {/* Conditions */}
-            <View style={styles.subHeader}>
-              <View style={styles.subHeaderLeft}>
-                <Heart color={Colors.navy} size={18} />
-                <Text style={styles.subHeaderText}>Conditions & Allergies</Text>
-              </View>
-            </View>
-
-            {conditions.length === 0 ? (
-              <Text style={styles.emptyText}>No conditions, allergies, or medications recorded.</Text>
-            ) : (
-              <>
-                {activeConditions.length > 0 && (
-                  <>
-                    {activeConditions.map((c) => (
-                  <View key={c.id} style={styles.condCard}>
-                    <View style={styles.condTopRow}>
-                      <View style={[styles.condBadge, { backgroundColor: getCondBg(c.kind) }]}>
-                        <Text style={[styles.condBadgeText, { color: getCondText(c.kind) }]}>{titleCase(c.kind)}</Text>
-                      </View>
-                      <SourceBadge source={c.source} />
-                      {c.severity && c.severity !== 'none' && (
-                        <View style={[styles.sevPill, { backgroundColor: getSevBg(c.severity) }]}>
-                          <Text style={[styles.sevText, { color: getSevText(c.severity) }]}>{titleCase(c.severity)}</Text>
-                        </View>
-                      )}
+            {(() => {
+              const policyDocs = documents.filter((d) => docAccordionKeys(d).includes('insurance') || /insur|policy|declaration/i.test(String(d.title || d.kind || '')));
+              const policy = policyDocs[0];
+              const ai = policy && policy.ai_summary && typeof policy.ai_summary === 'object' ? policy.ai_summary as any : {};
+              const claims: any[] = Array.isArray(ai.claims) ? ai.claims : [];
+              const carrier = ai.carrier || ai.insurer || ai.company || null;
+              const plan = ai.plan || ai.product || ai.coverage_type || null;
+              const policyNo = ai.policy_number || ai.policy_no || ai.policy || null;
+              return (
+                <>
+                  {policy ? (
+                    <View style={[styles.infoCard, { backgroundColor: Colors.navy, borderColor: Colors.navy, padding: 16, paddingTop: 16 }]}>
+                      <Text style={[styles.healthKicker, { marginTop: 0 }]}>PET INSURANCE</Text>
+                      <Text style={{ fontFamily: Fonts.extrabold, fontSize: 17, color: Colors.white, marginTop: 8 }}>
+                        {carrier || plan || policy.title || 'Policy on file'}
+                      </Text>
+                      {plan && carrier ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>{plan}</Text> : null}
+                      {policyNo ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>Policy {policyNo}</Text> : null}
+                      {ai.deductible ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>Deductible {ai.deductible}</Text> : null}
+                      {policy.taken_on ? <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4 }}>Uploaded {formatDate(policy.taken_on)}</Text> : null}
                     </View>
-                    <Text style={styles.condName}>{c.name}</Text>
-                    {c.diagnosed_on ? <Text style={styles.condDate}>Diagnosed: {formatDate(c.diagnosed_on)}</Text> : null}
-                    {c.notes ? <Text style={styles.condNotes}>{c.notes}</Text> : null}
-                    {canEdit && (
-                      <View style={styles.condActions}>
-                        <TouchableOpacity style={styles.condEditBtn} onPress={() => openEditCondition(c)} activeOpacity={0.85}>
-                          <Text style={styles.condEditText}>Edit</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.condDeleteBtn} onPress={() => deleteCondition(c.id)} activeOpacity={0.85}>
-                          <Trash2 color={Colors.critical} size={14} />
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                  </View>
-                    ))}
-                  </>
-                )}
-                {resolvedConditions.length > 0 && (
-                  <>
-                    <Text style={[styles.sectionLabel, { marginTop: 12 }]}>Resolved</Text>
-                    {resolvedConditions.map((c) => (
-                      <View style={[styles.condCard, { opacity: 0.65 }]}>
-                        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-                          <Text style={styles.condName}>{c.name}</Text>
-                          <SourceBadge source={c.source} />
-                        </View>
-                        <Text style={styles.condDate}>Resolved: {formatDate(c.resolved_on)}</Text>
-                        {canEdit && (
-                          <View style={styles.condActions}>
-                            <TouchableOpacity style={styles.condEditBtn} onPress={() => openEditCondition(c)} activeOpacity={0.85}>
-                              <Text style={styles.condEditText}>Edit</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.condDeleteBtn} onPress={() => deleteCondition(c.id)} activeOpacity={0.85}>
-                              <Trash2 color={Colors.critical} size={14} />
-                            </TouchableOpacity>
-                          </View>
-                        )}
-                      </View>
-                    ))}
-                  </>
-                )}
-              </>
-            )}
-
-            {/* Vaccinations */}
-            <View style={styles.subHeader}>
-              <View style={styles.subHeaderLeft}>
-                <Syringe color={Colors.navy} size={18} />
-                <Text style={styles.subHeaderText}>Vaccinations</Text>
-              </View>
-            </View>
-
-            {vaccinations.length === 0 ? (
-              <Text style={styles.emptyText}>No vaccinations recorded.</Text>
-            ) : (
-              vaxGroups.map(({ type, current, history }) => {
-                if (!current) return null;
-                const status = vaccinationStatus(current.next_due_on);
-                const open = openVaxHist.has(type);
-                return (
-                  <View key={type} style={[
-                    styles.vaxCard,
-                    status === 'overdue' && styles.vaxCardOverdue,
-                    status === 'due-soon' && styles.vaxCardDueSoon,
-                  ]}>
-                    <View style={styles.vaxTopRow}>
-                      <Text style={styles.vaxName}>{type}</Text>
-                      <SourceBadge source={current.source} />
-                      {status === 'overdue' && (
-                        <View style={[styles.vaxStatusPill, { backgroundColor: Colors.criticalBg }]}>
-                          <CircleAlert color={Colors.critical} size={12} />
-                          <Text style={[styles.vaxStatusText, { color: Colors.critical }]}>Overdue</Text>
-                        </View>
-                      )}
-                      {status === 'due-soon' && (
-                        <View style={[styles.vaxStatusPill, { backgroundColor: Colors.urgentBg }]}>
-                          <Clock color={Colors.urgent} size={12} />
-                          <Text style={[styles.vaxStatusText, { color: Colors.urgent }]}>Due soon</Text>
-                        </View>
-                      )}
-                      {(status === 'ok' || status === 'none') && current.next_due_on && (
-                        <View style={[styles.vaxStatusPill, { backgroundColor: Colors.tealBg }]}>
-                          <Text style={[styles.vaxStatusText, { color: Colors.tealDark }]}>Valid thru {formatDate(current.next_due_on)}</Text>
-                        </View>
-                      )}
+                  ) : (
+                    <View style={[styles.infoCard, { backgroundColor: Colors.navy, borderColor: Colors.navy, padding: 16, paddingTop: 16 }]}>
+                      <Text style={[styles.healthKicker, { marginTop: 0 }]}>PET INSURANCE</Text>
+                      <Text style={{ fontFamily: Fonts.extrabold, fontSize: 17, color: Colors.white, marginTop: 8 }}>No policy on file</Text>
+                      <Text style={{ fontFamily: Fonts.regular, fontSize: 12, color: '#B9BCE0', marginTop: 4, lineHeight: 18 }}>
+                        Upload a declarations PDF. Claims stay with the insurer — Rescue Army does not store card or login data.
+                      </Text>
                     </View>
-                    {current.administered_on ? <Text style={styles.vaxDetail}>Given: {formatDate(current.administered_on)}</Text> : <Text style={styles.vaxDetail}>No dose on file — due {formatDate(current.next_due_on)}</Text>}
-                    {current.manufacturer ? <Text style={styles.vaxDetail}>Mfr: {current.manufacturer}</Text> : null}
-                    {current.lot_number ? <Text style={styles.vaxDetail}>Lot: {current.lot_number}</Text> : null}
-                    {canEdit && (
-                      <View style={styles.vaxActions}>
-                        <TouchableOpacity style={styles.vaxEditBtn} onPress={() => openEditVax(current)} activeOpacity={0.85}>
-                          <Text style={styles.vaxEditText}>Edit</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.vaxDeleteBtn} onPress={() => deleteVax(current.id)} activeOpacity={0.85}>
-                          <Trash2 color={Colors.critical} size={14} />
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                    {history.length > 0 ? (
-                      <TouchableOpacity onPress={() => setOpenVaxHist((s) => { const n = new Set(s); n.has(type) ? n.delete(type) : n.add(type); return n; })} style={{ marginTop: 8 }}>
-                        <Text style={styles.linkTxt}>History ({history.length})</Text>
-                      </TouchableOpacity>
-                    ) : null}
-                    {open ? history.map((h) => (
-                      <View key={h.id} style={{ marginTop: 8, opacity: 0.7 }}>
-                        <Text style={styles.vaxDetail}>{h.vaccine} · {formatDate(h.administered_on)}</Text>
-                      </View>
-                    )) : null}
-                  </View>
-                );
-              })
-            )}
-
-            {/* Medical Records */}
-            {medicalRecords.length > 0 ? (
-            <>
-            <View style={styles.subHeader}>
-              <View style={styles.subHeaderLeft}>
-                <Stethoscope color={Colors.navy} size={18} />
-                <Text style={styles.subHeaderText}>Medical Records</Text>
-              </View>
-            </View>
-            {medicalRecords.map((rec) => (
-                <View key={rec.id} style={styles.medCard}>
-                  <View style={styles.medTopRow}>
-                    <View style={styles.medBadge}>
-                      <Text style={styles.medBadgeText}>{titleCase(rec.record_type) || 'Record'}</Text>
-                    </View>
-                    <SourceBadge source={rec.source} />
-                    <Text style={styles.medDate}>{formatDate(rec.record_date)}</Text>
-                  </View>
-                  {rec.title ? <Text style={styles.medTitle}>{rec.title}</Text> : null}
-                </View>
-            ))}
-            </>
-            ) : null}
-          </View>
-            )}
-            {labRows.length > 0 ? (
-            <>
-            <TouchableOpacity onPress={() => toggleMed('labs')} style={styles.ovCardHead}>
-              <Text style={styles.ovKicker}>LABS</Text>
-              <Text style={styles.linkTxt}>{openMed.labs === false ? 'Show' : 'Hide'}</Text>
-            </TouchableOpacity>
-            {openMed.labs !== false && (
-              <View>
-                {(() => {
-                  const groups = new Map<string, any[]>();
-                  for (const row of labRows) {
-                    const name = (row.analyte || row.name || '').trim();
-                    if (!name) continue;
-                    const arr = groups.get(name.toLowerCase()) || [];
-                    arr.push(row);
-                    groups.set(name.toLowerCase(), arr);
-                  }
-                  const items = [...groups.entries()].map(([key, rows]) => {
-                    const sorted = [...rows].sort((a, b) => String(a.collected_on || a.created_at || '').localeCompare(String(b.collected_on || b.created_at || '')));
-                    const cur = sorted[sorted.length - 1];
-                    const prev = sorted[sorted.length - 2];
-                    const curN = parseFloat(cur.value ?? cur.value_num ?? cur.value_text);
-                    const prevN = prev ? parseFloat(prev.value ?? prev.value_num ?? prev.value_text) : NaN;
-                    const delta = !isNaN(curN) && !isNaN(prevN) ? curN - prevN : null;
-                    const flag = (cur.flag || '').toLowerCase();
-                    return { key, label: cur.analyte || cur.name, cur, prev, delta, flag, nums: sorted.map((r) => parseFloat(r.value ?? r.value_num ?? r.value_text)).filter((n) => !isNaN(n)) };
-                  });
-                  if (items.length === 0) return null;
-                  return (
-                    <View style={{ gap: 8 }}>
-                      {items.map((it) => (
-                        <TouchableOpacity key={it.key} style={styles.labRow} onPress={() => setLabSpark(labSpark === it.key ? null : it.key)} activeOpacity={0.85}>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.docTitle}>{it.label}</Text>
-                            <Text style={styles.docClinic}>
-                              {it.cur.value ?? it.cur.value_text ?? it.cur.value_num ?? '—'}{it.cur.unit ? ` ${it.cur.unit}` : ''}
-                              {it.delta != null ? `  ${it.delta > 0 ? '▲' : it.delta < 0 ? '▼' : '•'} ${Math.abs(it.delta)}` : ''}
-                            </Text>
-                          </View>
-                          <View style={[styles.docTypePill, it.flag === 'high' || it.flag === 'abnormal' ? { backgroundColor: Colors.criticalBg } : it.flag === 'low' ? { backgroundColor: Colors.standardBg } : { backgroundColor: Colors.tealBg }]}>
-                            <Text style={styles.docTypePillTxt}>{it.flag || 'normal'}</Text>
-                          </View>
-                          {labSpark === it.key && it.nums.length > 1 ? <LabSparkline values={it.nums} color={it.flag === 'high' || it.flag === 'abnormal' ? Colors.critical : Colors.navy} /> : null}
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  );
-                })()}
-              </View>
-            )}
-            </>
-            ) : null}
-            <TouchableOpacity onPress={() => toggleMed('visits')} style={styles.ovCardHead}>
-              <Text style={styles.ovKicker}>VISITS</Text>
-              <Text style={styles.linkTxt}>{openMed.visits === false ? 'Show' : 'Hide'}</Text>
-            </TouchableOpacity>
-            {openMed.visits !== false && (
-            <View>
-              {weightEntries.length > 0 ? (
-                <View style={{ backgroundColor: Colors.white, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: Colors.border, marginBottom: 14 }}>
-                  <Text style={styles.subHeaderText}>Weight (lb)</Text>
-                  <WeightLineChart points={weightEntries.slice().reverse()} targetLb={targetLb} height={180} />
-                </View>
-              ) : null}
-
-            {!historyVisible ? (
-              <View style={styles.historyLocked}>
-                <Shield color={Colors.textTertiary} size={32} />
-                <Text style={styles.historyLockedText}>
-                  History events are sensitive. They are only visible to users with the appropriate access level.
-                </Text>
-                <TouchableOpacity style={styles.historyUnlockBtn} onPress={() => setHistoryVisible(true)} activeOpacity={0.85}>
-                  <Text style={styles.historyUnlockText}>Show history</Text>
-                </TouchableOpacity>
-              </View>
-            ) : historyEvents.length === 0 ? (
-              <Text style={styles.emptyText}>No history events recorded.</Text>
-            ) : (
-              historyEvents.map((evt) => (
-                <View key={evt.id} style={styles.timelineCard}>
-                  <View style={styles.timelineDot} />
-                  <View style={styles.timelineContent}>
-                    <Text style={styles.timelineType}>{titleCase(evt.event_type)}</Text>
-                    <Text style={styles.timelineDate}>{formatDate(evt.occurred_on)}</Text>
-                    {evt.public_summary ? <Text style={styles.timelineSummary}>{evt.public_summary}</Text> : null}
-                    {evt.description ? <Text style={styles.timelineDesc}>{evt.description}</Text> : null}
-                  </View>
-                </View>
-              ))
-            )}
-          </View>
-            )}
-            {false && (
-              <View style={{ gap: 12 }}>
-                <View style={styles.aiDisclaimer}>
-                  <Text style={styles.aiDisclaimerTxt}>AI is not a veterinarian. Findings are for your vet — no diagnosis or treatment from Rescue Army.</Text>
-                </View>
-                {aiRuns.length > 0 ? (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-                    {aiRuns.map((r) => (
-                      <TouchableOpacity key={r.id} style={[styles.ovChip, aiFindings?.id === r.id && styles.ovChipTeal]} onPress={() => {
-                        setAiFindings({
-                          id: r.id,
-                          run_number: r.run_number,
-                          verdict: r.verdict || r.inputs?.verdict,
-                          findings: r.findings,
-                          timeline: r.timeline || r.inputs?.timeline,
-                          trends: r.trends || r.inputs?.trends,
-                          conclusion: r.conclusion || r.inputs?.conclusion || r.summary,
-                          ran_at: r.created_at || r.ran_at,
+                  )}
+                  {canEdit ? (
+                    <TouchableOpacity
+                      style={styles.insPrimary}
+                      onPress={() => {
+                        setDocForm({
+                          kind: 'other_document', title: '', taken_on: '', clinic: '', notes: '',
+                          content_kinds: ['insurance'],
                         });
-                        setAiShared(Boolean(r.shared_with_vet_at));
-                      }}>
-                        <Text style={aiFindings?.id === r.id ? styles.ovChipTealTxt : styles.ovChipTxt}>
-                          Run {r.run_number || '?'} · {formatDate(r.created_at || r.ran_at)}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                ) : null}
-                {weightEntries.length > 0 ? (
-                  <Card>
-                    <Text style={styles.ovKicker}>WEIGHT (LB)</Text>
-                    <WeightLineChart points={weightEntries.slice().reverse()} targetLb={targetLb} height={140} />
-                  </Card>
-                ) : null}
-                {(() => {
-                  const flagged = new Map<string, number[]>();
-                  for (const row of labRows) {
-                    const flag = String(row.flag || '').toLowerCase();
-                    if (flag !== 'high' && flag !== 'low' && flag !== 'abnormal') continue;
-                    const name = String(row.analyte || row.name || '').trim();
-                    if (!name) continue;
-                    const n = parseFloat(row.value ?? row.value_num ?? row.value_text);
-                    const arr = flagged.get(name) || [];
-                    if (!isNaN(n)) arr.push(n);
-                    flagged.set(name, arr);
-                  }
-                  for (const t of aiFindings?.trends || []) {
-                    if (!t.analyte || /weight/i.test(t.analyte)) continue;
-                    if (!flagged.has(t.analyte) && Array.isArray(t.points)) {
-                      flagged.set(t.analyte, t.points.map((p: any) => parseFloat(p.value)).filter((n: number) => !isNaN(n)));
-                    }
-                  }
-                  return [...flagged.entries()].map(([name, nums]) => nums.length > 1 ? (
-                    <Card key={name}>
-                      <Text style={styles.docTitle}>{name}</Text>
-                      <LabSparkline values={nums} color={Colors.critical} />
-                    </Card>
-                  ) : null);
-                })()}
-                {(aiFindings?.timeline || []).map((t: any, i: number) => (
-                  <View key={i} style={styles.timelineCard}>
-                    <View style={styles.timelineDot} />
-                    <View style={styles.timelineContent}>
-                      <Text style={styles.timelineType}>{t.title}</Text>
-                      <Text style={styles.timelineDate}>{t.date ? formatDate(t.date) : ''}</Text>
-                      {t.detail ? <Text style={styles.timelineSummary}>{t.detail}</Text> : null}
-                    </View>
+                        setDocFile(null);
+                        setDocError(null);
+                        setDocModalVisible(true);
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.insPrimaryTxt}>Upload policy PDF</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  <View style={styles.insSoon}>
+                    <Text style={styles.insSoonTxt}>Forward by email · coming soon</Text>
                   </View>
-                ))}
-                {(aiFindings?.findings || []).map((f: any, i: number) => {
-                  const sev = String(f.severity || 'info').toLowerCase();
-                  const dot = sev === 'urgent' ? Colors.critical : sev === 'watch' ? Colors.accent : Colors.teal;
-                  return (
-                    <View key={i} style={styles.aiFinding}>
-                      <View style={[styles.aiDot, { backgroundColor: dot }]} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.aiFindingTitle}>{f.title}</Text>
-                        <Text style={styles.aiFindingBody}>{f.body || f.detail}</Text>
-                      </View>
-                    </View>
-                  );
-                })}
-                {aiFindings?.conclusion ? (
-                  <Card style={{ backgroundColor: Colors.navy, borderColor: Colors.navy }}>
-                    <Text style={[styles.ovKicker, { color: '#B9BCE0' }]}>CONCLUSION</Text>
-                    <Text style={{ fontFamily: Fonts.regular, fontSize: 13, color: Colors.white, lineHeight: 20, marginTop: 6 }}>{aiFindings.conclusion}</Text>
-                  </Card>
-                ) : null}
-                <TouchableOpacity style={[styles.aiPrimaryBtn, (aiBusy || !aiReady) && styles.btnDisabled]} disabled={aiBusy || !aiReady} onPress={runAiHealth} activeOpacity={0.85}>
-                  {aiBusy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.aiPrimaryTxt}>{aiReady ? 'Run AI Health' : 'Add records first'}</Text>}
-                </TouchableOpacity>
-                <Text style={styles.aiLastRun}>
-                  {aiFindings?.run_number ? `Run ${aiFindings.run_number} · ${formatDate(aiFindings.ran_at || aiLastRun)}` : (aiLastRun ? `Last run ${formatDate(aiLastRun)}` : 'Not run yet')}
-                </Text>
-                {aiFindings ? (
-                  <TouchableOpacity
-                    style={[styles.aiShareBtn, aiShared && { backgroundColor: Colors.teal }]}
-                    onPress={async () => {
-                      if (aiFindings.id) await supabase.from('ai_health_analyses').update({ shared_with_vet_at: new Date().toISOString() }).eq('id', aiFindings.id);
-                      setAiShared(true);
-                    }}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.aiShareTxt}>{aiShared ? 'Shared with vet ✓' : 'Share analysis with my vet'}</Text>
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-            )}
+                  <Text style={styles.ovKicker}>CLAIMS</Text>
+                  {claims.length === 0 ? (
+                    <Text style={styles.emptyText}>No claims on file. Claims are paid by the insurer, not Rescue Army.</Text>
+                  ) : claims.map((c: any, i: number) => (
+                    <Card key={i}>
+                      <Text style={styles.docTitle}>{c.title || c.reason || 'Claim'}</Text>
+                      <Text style={styles.docClinic}>
+                        {[c.status, c.amount, c.date ? formatDate(String(c.date)) : null].filter(Boolean).join(' · ')}
+                      </Text>
+                    </Card>
+                  ))}
+                </>
+              );
+            })()}
           </View>
         )}
+
 
         {tab === 'documents' && (
             <View style={styles.tabContent}>
@@ -3551,17 +3779,25 @@ export default function PetRecordScreen() {
               </TouchableOpacity>
             ) : null}
             <View style={styles.docDash}>
-              <View style={styles.docDashCounts}>
-                {DOC_ACCORDIONS.filter((s) => s.key !== 'other').map((s, i) => {
+              <View style={styles.docTileRow}>
+                {DOC_ACCORDIONS.filter((s) => {
+                  if ((DOC_HEADER_ALWAYS as readonly string[]).includes(s.key)) return true;
+                  if (s.key === 'other') return false;
+                  const n = documents.filter((d) => docAccordionKeys(d).includes(s.key)).length;
+                  return n > 0;
+                }).map((s) => {
                   const n = documents.filter((d) => docAccordionKeys(d).includes(s.key)).length;
                   const on = docOpen[s.key] || docKindFilter === s.key;
                   return (
-                    <React.Fragment key={s.key}>
-                      {i > 0 ? <Text style={styles.docDashDot}>·</Text> : null}
-                      <TouchableOpacity onPress={() => setDocOpen((prev) => ({ ...prev, [s.key]: !on }))} activeOpacity={0.85}>
-                        <Text style={[styles.docDashTxt, on && styles.docDashTxtOn]}>{s.label} {n}</Text>
-                      </TouchableOpacity>
-                    </React.Fragment>
+                    <TouchableOpacity
+                      key={s.key}
+                      style={[styles.docTile, on && styles.docTileOn]}
+                      onPress={() => setDocOpen((prev) => ({ ...prev, [s.key]: !on }))}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[styles.docTileN, on && styles.docTileNOn]}>{n}</Text>
+                      <Text style={[styles.docTileL, on && styles.docTileLOn]} numberOfLines={1}>{s.label}</Text>
+                    </TouchableOpacity>
                   );
                 })}
               </View>
@@ -3582,7 +3818,7 @@ export default function PetRecordScreen() {
               </View>
             ) : DOC_ACCORDIONS.map((section) => {
               const items = documents.filter((d) => docAccordionKeys(d).includes(section.key));
-              if (section.key === 'other' && items.length === 0) return null;
+              if ((section.key === 'other' || section.key === 'imaging' || section.key === 'insurance') && items.length === 0) return null;
               const open = Boolean(docOpen[section.key] || docKindFilter === section.key);
               return (
                 <View key={section.key} style={styles.docAccord}>
@@ -3595,9 +3831,12 @@ export default function PetRecordScreen() {
                     <Text style={styles.docAccordMeta}>{items.length} · {open ? 'Hide' : 'Show'}</Text>
                   </TouchableOpacity>
                   {open ? (
-                    items.length === 0
-                      ? <Text style={styles.emptyText}>No {section.label.toLowerCase()} documents.</Text>
-                      : items.map(renderDocRow)
+                    <>
+                      {section.key === 'labs' ? <LabsByAnalyte rows={labRows} /> : null}
+                      {items.length === 0 && section.key !== 'labs'
+                        ? <Text style={styles.emptyText}>No {section.label.toLowerCase()} documents.</Text>
+                        : items.map(renderDocRow)}
+                    </>
                   ) : null}
                 </View>
               );
@@ -3613,32 +3852,38 @@ export default function PetRecordScreen() {
               canEdit={canEdit}
               onChanged={load}
               entries={(() => {
-                const map = new Map<string, { name: string; phone: string | null; address: string | null; docCount: number; dates: string[] }>();
-                const add = (name?: string | null, date?: string | null, extra?: { phone?: string | null; address?: string | null; isDoc?: boolean }) => {
+                const map = new Map<string, { name: string; phone: string | null; address: string | null; docCount: number; dates: string[]; vets: { name: string; lastVisit?: string | null }[] }>();
+                const add = (name?: string | null, date?: string | null, extra?: { phone?: string | null; address?: string | null; isDoc?: boolean; vet?: string | null }) => {
                   const n = String(name || '').trim();
                   if (!n) return;
                   const key = n;
-                  const cur = map.get(key) || { name: n, phone: null as string | null, address: null as string | null, docCount: 0, dates: [] as string[] };
+                  const cur = map.get(key) || { name: n, phone: null as string | null, address: null as string | null, docCount: 0, dates: [] as string[], vets: [] as { name: string; lastVisit?: string | null }[] };
                   if (extra?.phone && !cur.phone) cur.phone = extra.phone;
                   if (extra?.address && !cur.address) cur.address = extra.address;
                   if (date) cur.dates.push(String(date));
                   if (extra?.isDoc) cur.docCount += 1;
+                  const vet = String(extra?.vet || '').trim();
+                  if (vet && !cur.vets.some((v) => v.name === vet)) cur.vets.push({ name: vet, lastVisit: date || null });
+                  else if (vet) {
+                    const row = cur.vets.find((v) => v.name === vet);
+                    if (row && date && (!row.lastVisit || String(date) > String(row.lastVisit))) row.lastVisit = date;
+                  }
                   map.set(key, cur);
                 };
                 for (const d of documents) {
                   const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary : {};
-                  add(d.clinic || ai.clinic || ai.clinic_name, d.taken_on || ai.date || ai.taken_on, { isDoc: true });
-                  for (const v of ai.visits || []) add(v.clinic, v.date);
-                  for (const e of ai.exams || []) add(e.clinic, e.visit_date || e.date);
+                  add(d.clinic || ai.clinic || ai.clinic_name, d.taken_on || ai.date || ai.taken_on, { isDoc: true, vet: ai.vet_name || ai.veterinarian });
+                  for (const v of ai.visits || []) add(v.clinic, v.date, { vet: v.vet_name || v.veterinarian || v.vet });
+                  for (const e of ai.exams || []) add(e.clinic, e.visit_date || e.date, { vet: e.vet_name || e.veterinarian || e.vet });
                 }
-                for (const e of petExams) add(e.clinic, e.visit_date);
-                for (const v of vaccinations) add(v.vet_clinic, v.administered_on);
-                for (const r of medicalRecords) add((r as any).clinic || (r as any).clinic_name, r.record_date);
+                for (const e of petExams) add(e.clinic, e.visit_date, { vet: e.vet_name || e.veterinarian || e.vet });
+                for (const v of vaccinations) add(v.vet_clinic, v.administered_on, { vet: v.vet_name });
+                for (const r of medicalRecords) add((r as any).clinic || (r as any).clinic_name, r.record_date, { vet: (r as any).vet_name });
                 for (const c of clinics) add(c.name, null, { phone: c.phone, address: c.address });
                 return [...map.values()]
                   .map((c) => {
                     const dates = c.dates.filter(Boolean).sort();
-                    return { name: c.name, phone: c.phone, address: c.address, lastVisit: dates[dates.length - 1] || null, docCount: c.docCount };
+                    return { name: c.name, phone: c.phone, address: c.address, lastVisit: dates[dates.length - 1] || null, docCount: c.docCount, vets: c.vets };
                   })
                   .sort((a, b) => (b.lastVisit || '').localeCompare(a.lastVisit || '') || a.name.localeCompare(b.name));
               })()}
@@ -4185,6 +4430,22 @@ export default function PetRecordScreen() {
                 </Text>
               </View>
               <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24, gap: 12 }} showsVerticalScrollIndicator={false}>
+                {extractionReview.mentionedButMissing && extractionReview.mentionedButMissing.length ? (
+                  <View style={styles.confirmCard}>
+                    <Text style={styles.docTitle}>AI noticed but couldn't structure</Text>
+                    {extractionReview.mentionedButMissing.map((g, i) => (
+                      <Text key={`${g.kind}-${i}`} style={styles.confirmLine}>{g.kind}: {g.mention}</Text>
+                    ))}
+                  </View>
+                ) : null}
+                {extractionReview.undated && extractionReview.undated.length ? (
+                  <View style={styles.confirmCard}>
+                    <Text style={styles.docTitle}>Undated ({extractionReview.undated.length})</Text>
+                    {extractionReview.undated.map((u, i) => (
+                      <Text key={`${u.kind}-${i}`} style={styles.confirmLine}>{u.kind} · {u.summary}</Text>
+                    ))}
+                  </View>
+                ) : null}
                 {(() => {
                   const zeroItems = editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) === 0;
                   if (!zeroItems) return null;
@@ -4352,7 +4613,7 @@ export default function PetRecordScreen() {
                     <TouchableOpacity
                       onPress={() => {
                         setExtractionReview(null);
-                        setTab('medical');
+                        setTab('health');
                       }}
                       style={{ paddingVertical: 12, alignItems: 'center' }}
                       activeOpacity={0.85}
@@ -4458,7 +4719,7 @@ function getSevText(sev: string): string {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
   col: { width: '100%', maxWidth: 720, alignSelf: 'center', flex: 1 },
-  heroWrap: { width: '100%', maxWidth: 320, height: 240, aspectRatio: 4 / 3, borderRadius: 16, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 8, alignSelf: 'center' },
+  heroWrap: { width: '100%', borderRadius: 16, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 8, alignSelf: 'stretch' },
   hero: { width: '100%', height: '100%' },
   changePhoto: { position: 'absolute', right: 12, bottom: 12, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(38,38,94,0.85)', alignItems: 'center', justifyContent: 'center' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
@@ -4496,13 +4757,19 @@ const styles = StyleSheet.create({
   visTxtOn: { color: Colors.tealDark },
   visSheet: { backgroundColor: Colors.white, borderRadius: 16, padding: 18, gap: 12, marginHorizontal: 24, marginTop: 'auto', marginBottom: 'auto' },
   visRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 6 },
+  tabBar: { marginTop: 12, marginBottom: 0 },
+  chipFrame: {
+    flexDirection: 'row', gap: 12, alignItems: 'flex-start',
+    backgroundColor: Colors.white, borderWidth: 2, borderColor: Colors.navy,
+    borderRadius: 14, padding: 14,
+  },
+  chipThumb: { width: 48, height: 48, borderRadius: 10, backgroundColor: Colors.surface },
+  traitStripImg: { width: 112, height: 112, borderRadius: 12, backgroundColor: Colors.surface },
+  lifeNotes: {
+    marginTop: 8, minHeight: 88, borderWidth: 1, borderColor: Colors.border, borderRadius: 12,
+    padding: 12, fontFamily: Fonts.medium, fontSize: 13, color: Colors.navy, textAlignVertical: 'top',
+  },
 
-  tabBar: { flexDirection: 'row', flexWrap: 'nowrap', gap: 8, paddingHorizontal: 0, marginTop: 12, marginBottom: 0, position: 'relative' },
-  hubRow: { flexDirection: 'row', gap: 8, paddingBottom: 12 },
-  pillTab: { backgroundColor: Colors.white, borderWidth: 1, borderColor: '#E8EAF0', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, flexShrink: 0 },
-  pillTabOn: { backgroundColor: Colors.navy, borderColor: Colors.navy },
-  pillTabTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.text },
-  pillTabTxtOn: { color: Colors.white },
   aiBox: { backgroundColor: Colors.criticalBg, borderRadius: 14, padding: 14, gap: 8 },
   aiDisclaimer: { backgroundColor: Colors.criticalBg, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
   aiDisclaimerTxt: { fontFamily: Fonts.medium, fontSize: 12, color: Colors.critical, lineHeight: 16 },
@@ -4730,6 +4997,30 @@ const styles = StyleSheet.create({
   condEditBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: Colors.surface },
   condEditText: { fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.navy },
   condDeleteBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: Colors.critical },
+  lifePill: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
+  lifePillTxt: { fontFamily: Fonts.bold, fontSize: 11 },
+  condMenuBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginLeft: 'auto' },
+  condMenu: { marginTop: 8, backgroundColor: Colors.surface, borderRadius: 12, overflow: 'hidden' },
+  condMenuRow: { paddingHorizontal: 14, paddingVertical: 10 },
+  condMenuTxt: { fontFamily: Fonts.bold, fontSize: 14, color: Colors.navy },
+  condSub: { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: Colors.border },
+  condSubName: { fontFamily: Fonts.semibold, fontSize: 13, color: Colors.navy },
+  noteFrom: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy, marginTop: 4 },
+  noteBody: { fontFamily: Fonts.regular, fontSize: 13, color: Colors.textBody, lineHeight: 19, marginTop: 4 },
+  pastHead: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.textSecondary },
+  pastNote: { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: Colors.border },
+  routineLine: { fontFamily: Fonts.medium, fontSize: 13, color: Colors.navy, lineHeight: 19 },
+  insPrimary: { backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+  insPrimaryTxt: { color: Colors.white, fontFamily: Fonts.bold, fontSize: FontSizes.md },
+  insSoon: { borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 14, paddingVertical: 14, alignItems: 'center', backgroundColor: Colors.surface },
+  insSoonTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.textTertiary },
+  docTileRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  docTile: { minWidth: '22%', flexGrow: 1, flexBasis: '22%', backgroundColor: Colors.surface, borderRadius: 12, paddingVertical: 12, paddingHorizontal: 8, alignItems: 'center' },
+  docTileOn: { backgroundColor: Colors.navy },
+  docTileN: { fontFamily: Fonts.extrabold, fontSize: 18, color: Colors.navy },
+  docTileNOn: { color: Colors.white },
+  docTileL: { fontFamily: Fonts.bold, fontSize: 10, color: Colors.textSecondary, marginTop: 2, textAlign: 'center' },
+  docTileLOn: { color: Colors.white },
 
   docDash: { backgroundColor: Colors.white, borderRadius: 16, borderWidth: 1.5, borderColor: Colors.navy, padding: 14, gap: 12, marginBottom: 12 },
   docDashCounts: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },

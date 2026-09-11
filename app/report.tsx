@@ -1,18 +1,19 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { createElement, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput, Switch,
   ActivityIndicator, KeyboardAvoidingView, Platform, Image, Linking, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ChevronLeft, Search, PawPrint, Heart, AlertTriangle, Camera, MapPin, EyeOff, Sparkles, Check } from 'lucide-react-native';
+import { ChevronLeft, Search, PawPrint, Heart, AlertTriangle, Camera, Image as ImageIcon, MapPin, EyeOff, Sparkles, Check } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import { InlineBanner } from '@/components/InlineBanner';
+import NearbyMap from '@/components/NearbyMap';
 import { CONTENT_MAX } from '@/components/Page';
-import { pickImage, releasePicked } from '@/lib/pick-image';
+import { pickImage, releasePicked, imageFromFile, PickImageError, type PickedImage } from '@/lib/pick-image';
 import { reverseGeocode, geocodePlace } from '@/lib/geocode';
 
 const INTER = Platform.OS === 'web' ? 'Inter, system-ui, sans-serif' : Fonts.regular;
@@ -80,6 +81,83 @@ function kmBetween(aLat: number, aLng: number, bLat: number, bLng: number) {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
 }
 
+function supabaseMessage(err: any, fallback = 'Could not submit report.') {
+  const parts = [err?.message, err?.details, err?.hint, err?.code].filter((p) => typeof p === 'string' && p.trim());
+  const text = parts.join(' — ').trim();
+  return text || fallback;
+}
+
+function phoneOk(raw: string) {
+  return raw.replace(/\D/g, '').length >= 7;
+}
+
+function WebFileBtn({
+  camera, label, onFile, onError,
+}: {
+  camera: boolean;
+  label: string;
+  onFile: (file: File) => Promise<void>;
+  onError: (msg: string) => void;
+}) {
+  const Icon = camera ? Camera : ImageIcon;
+  return createElement(
+    'label',
+    {
+      style: {
+        flex: 1,
+        display: 'flex',
+        position: 'relative',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        minHeight: 48,
+        padding: '12px 8px',
+        background: '#FFFFFF',
+        border: '1px solid #E8EAF0',
+        borderRadius: 12,
+        cursor: 'pointer',
+        overflow: 'hidden',
+        boxSizing: 'border-box',
+      },
+    },
+    createElement('input', {
+      type: 'file',
+      accept: 'image/*',
+      ...(camera ? { capture: 'environment' } : {}),
+      style: {
+        position: 'absolute',
+        inset: 0,
+        opacity: 0.01,
+        width: '100%',
+        height: '100%',
+        cursor: 'pointer',
+        fontSize: 16,
+        zIndex: 2,
+      },
+      onChange: async (ev: any) => {
+        const file = ev?.target?.files?.[0] as File | undefined;
+        if (ev?.target) ev.target.value = '';
+        if (!file) return;
+        try {
+          await onFile(file);
+        } catch (e: any) {
+          onError(e?.message || 'Could not read that picture.');
+        }
+      },
+    }),
+    createElement(Icon as any, { color: '#26265E', size: 16, style: { pointerEvents: 'none' } }),
+    createElement('span', {
+      style: {
+        fontFamily: 'Inter, system-ui, sans-serif',
+        fontWeight: 700,
+        fontSize: 13,
+        color: '#26265E',
+        pointerEvents: 'none',
+      },
+    }, label),
+  );
+}
+
 export default function NewReportScreen() {
   const { prefillPetId } = useLocalSearchParams<{ prefillPetId?: string }>();
   const { user } = useAuth();
@@ -87,12 +165,15 @@ export default function NewReportScreen() {
   const [kind, setKind] = useState<ReportKind | null>(null);
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [photoBlob, setPhotoBlob] = useState<Blob | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeMs, setAnalyzeMs] = useState<number | null>(null);
   const [ai, setAi] = useState<AiDraft | null>(null);
   const [matchCount, setMatchCount] = useState<number | null>(null);
   const [petName, setPetName] = useState('');
   const [description, setDescription] = useState('');
+  const [phone, setPhone] = useState('');
+  const [contactName, setContactName] = useState('');
   const [location, setLocation] = useState('');
   const [lat, setLat] = useState<number | null>(null);
   const [lng, setLng] = useState<number | null>(null);
@@ -114,6 +195,20 @@ export default function NewReportScreen() {
       useMyLocation({ silent: true });
     }
   }, [step]);
+
+  useEffect(() => {
+    if (!user) {
+      if (!contactName) setContactName('Anonymous');
+      return;
+    }
+    setContactName((n) => n && n !== 'Anonymous' ? n : (user.email?.split('@')[0] || 'Anonymous'));
+    Promise.resolve(supabase.from('profiles').select('phone, full_name').eq('id', user.id).maybeSingle())
+      .then(({ data }) => {
+        if (data?.full_name) setContactName(data.full_name);
+        if (data?.phone) setPhone((p) => p || data.phone);
+      })
+      .catch(() => {});
+  }, [user]);
 
   const selected = TYPES.find((t) => t.value === kind) || null;
 
@@ -157,24 +252,50 @@ export default function NewReportScreen() {
     setAnalyzing(false);
   };
 
+  const applyPicked = async (picked: PickedImage) => {
+    setBanner(null);
+    setPhotoError(null);
+    setCameraDenied(false);
+    releasePicked(photoUri);
+    setPhotoUri(picked.uri);
+    setPhotoBlob(picked.blob);
+    setAi(null);
+    setAnalyzeMs(null);
+    runAnalyze(picked.dataUrl);
+  };
+
+  const onPhotoError = (msg: string, code?: string) => {
+    const text = (msg || '').trim() || 'Could not read that picture.';
+    if (code === 'camera-denied') {
+      setCameraDenied(true);
+      setPhotoError(text);
+      return;
+    }
+    setPhotoError(text);
+    setBanner({ message: text, kind: 'error' });
+  };
+
   const applyPhoto = async (camera: boolean) => {
     setBanner(null);
+    setPhotoError(null);
     try {
       const picked = await pickImage({ camera });
       if (!picked) return;
-      setCameraDenied(false);
-      releasePicked(photoUri);
-      setPhotoUri(picked.uri);
-      setPhotoBlob(picked.blob);
-      setAi(null);
-      setAnalyzeMs(null);
-      runAnalyze(picked.dataUrl);
+      await applyPicked(picked);
     } catch (e: any) {
-      if (e?.code === 'camera-denied') {
-        setCameraDenied(true);
-        return;
-      }
-      setBanner({ message: e?.message || 'Could not read that photo.', kind: 'error' });
+      const msg = e?.message || 'Could not read that picture.';
+      onPhotoError(msg, e instanceof PickImageError ? e.code : undefined);
+    }
+  };
+
+  const applyWebFile = async (file: File) => {
+    setBanner(null);
+    setPhotoError(null);
+    try {
+      const picked = await imageFromFile(file);
+      await applyPicked(picked);
+    } catch (e: any) {
+      onPhotoError(e?.message || 'Could not read that picture.');
     }
   };
 
@@ -182,6 +303,7 @@ export default function NewReportScreen() {
     releasePicked(photoUri);
     setPhotoUri(null);
     setPhotoBlob(null);
+    setPhotoError(null);
     setAi(null);
     setAnalyzeMs(null);
     setMatchCount(null);
@@ -229,9 +351,15 @@ export default function NewReportScreen() {
   const goNext = async () => {
     setBanner(null);
     if (step === 1 && !kind) return;
-    if (step === 2 && !description.trim()) {
-      setBanner({ message: 'Please describe the animal and situation.', kind: 'error' });
-      return;
+    if (step === 2) {
+      if (!description.trim()) {
+        setBanner({ message: 'Please describe the animal and situation.', kind: 'error' });
+        return;
+      }
+      if (!phoneOk(phone)) {
+        setBanner({ message: 'Add a phone number for follow-up. It is never public.', kind: 'error' });
+        return;
+      }
     }
     if (step === 3) {
       if (!location.trim()) {
@@ -254,19 +382,31 @@ export default function NewReportScreen() {
       setBanner({ message: 'Type, description, and location are required.', kind: 'error' });
       return;
     }
+    if (!phoneOk(phone)) {
+      setBanner({ message: 'Add a phone number for follow-up. It is never public.', kind: 'error' });
+      setStep(2);
+      return;
+    }
     setLoading(true);
     setBanner(null);
+    let lastPayload: { status?: string; severity?: string; user_id?: string | null } = {};
     try {
       let photoUrl: string | null = null;
       if (photoBlob) {
         const path = `reports/${Date.now()}.jpg`;
-        const up = await supabase.storage.from('pet-photos').upload(path, photoBlob, { contentType: 'image/jpeg', upsert: true });
-        if (!up.error) photoUrl = supabase.storage.from('pet-photos').getPublicUrl(path).data.publicUrl;
+        const up = await supabase.storage.from('report-photos').upload(path, photoBlob, { contentType: 'image/jpeg', upsert: true });
+        if (up.error) {
+          const fallback = await supabase.storage.from('pet-photos').upload(path, photoBlob, { contentType: 'image/jpeg', upsert: true });
+          if (fallback.error) throw fallback.error;
+        }
+        photoUrl = path;
       }
       const address = location.replace(/^Detected:\s*/i, '').trim();
-      const { data, error } = await supabase.from('reports').insert({
+      const { data: sess } = await supabase.auth.getSession();
+      const authUid = sess?.session?.user?.id ?? user?.id ?? null;
+      const payload = {
         report_type: kind,
-        severity: selected?.severity || 'standard',
+        severity: String(selected?.severity || 'standard').toLowerCase(),
         urgency: URGENCY[selected?.severity || 'standard'],
         incident_category: INCIDENT[kind],
         pet_name: petName.trim() || null,
@@ -276,7 +416,8 @@ export default function NewReportScreen() {
         location_address: address,
         latitude: lat ?? 0,
         longitude: lng ?? 0,
-        contact_name: user?.email?.split('@')[0] || 'Anonymous',
+        contact_name: contactName.trim() || user?.email?.split('@')[0] || 'Anonymous',
+        contact_phone: phone.trim(),
         contact_email: user?.email || null,
         pet_id: prefillPetId || null,
         photo_url: photoUrl,
@@ -284,7 +425,7 @@ export default function NewReportScreen() {
         status: 'pending_moderation',
         approximate_public: approxPublic,
         allow_direct_contact: false,
-        user_id: user?.id || null,
+        user_id: authUid,
         ai_species: ai?.species || null,
         ai_breed: ai?.breed_guess || null,
         ai_colors: ai?.colors?.length ? ai.colors : null,
@@ -293,8 +434,26 @@ export default function NewReportScreen() {
         ai_confidence: ai?.confidence || null,
         ai_summary: ai?.short_description || null,
         ai_analyzed_at: ai?.analyzed ? new Date().toISOString() : null,
-      }).select('id').single();
-      if (error) throw error;
+      };
+      console.log('[reports.insert] anon fields', {
+        status: payload.status,
+        severity: payload.severity,
+        user_id: payload.user_id,
+        authUid,
+        session: Boolean(sess?.session),
+        contextUser: user?.id ?? null,
+      });
+      console.log('[reports.insert] payload', JSON.stringify(payload));
+      lastPayload = { status: payload.status, severity: payload.severity, user_id: payload.user_id };
+      const { data, error } = await supabase.from('reports').insert(payload).select('id').single();
+      if (error) {
+        console.log('[reports.insert] error', error.message, error.code, error.details, {
+          status: payload.status,
+          severity: payload.severity,
+          user_id: payload.user_id,
+        });
+        throw error;
+      }
       setSubmittedId(data.id);
       if (lat != null && lng != null) {
         try {
@@ -316,18 +475,37 @@ export default function NewReportScreen() {
       }
       setSent(true);
     } catch (err: any) {
-      setBanner({ message: err.message || 'Could not submit report.', kind: 'error' });
+      const extra = `status=${lastPayload.status ?? 'unset'} severity=${lastPayload.severity ?? 'unset'} user_id=${lastPayload.user_id ?? 'null'}`;
+      setBanner({ message: `${supabaseMessage(err)} · ${extra}`, kind: 'error' });
     }
     setLoading(false);
   };
 
   const continueDisabled =
     (step === 1 && !kind) ||
-    (step === 2 && !description.trim()) ||
+    (step === 2 && (!description.trim() || !phoneOk(phone))) ||
     (step === 3 && !location.trim()) ||
     loading;
 
   const onCancel = () => router.back();
+
+  const photoButtons = Platform.OS === 'web' ? (
+    <View style={styles.photoActions}>
+      <WebFileBtn camera label="Take photo" onFile={applyWebFile} onError={(m) => onPhotoError(m)} />
+      <WebFileBtn camera={false} label="Choose from library" onFile={applyWebFile} onError={(m) => onPhotoError(m)} />
+    </View>
+  ) : (
+    <View style={styles.photoActions}>
+      <TouchableOpacity style={styles.photoBtn} onPress={() => applyPhoto(true)} activeOpacity={0.85}>
+        <Camera color={Colors.navy} size={16} />
+        <Text style={styles.photoBtnText}>Take photo</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.photoBtn} onPress={() => applyPhoto(false)} activeOpacity={0.85}>
+        <ImageIcon color={Colors.navy} size={16} />
+        <Text style={styles.photoBtnText}>Choose from library</Text>
+      </TouchableOpacity>
+    </View>
+  );
 
   if (sent) {
     return (
@@ -385,6 +563,9 @@ export default function NewReportScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.col}>
+            {banner ? (
+              <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />
+            ) : null}
             {step === 1 && (
               <>
                 <Text style={styles.heroTitle}>What happened?</Text>
@@ -436,12 +617,19 @@ export default function NewReportScreen() {
                     </View>
                   </View>
                 ) : (
-                  <TouchableOpacity style={styles.dashBox} onPress={() => applyPhoto(Platform.OS !== 'web')} activeOpacity={0.85}>
+                  <View style={styles.dashBox}>
                     <Camera color={Colors.textTertiary} size={26} />
-                    <Text style={styles.dashTitle}>Tap to add photo or video</Text>
+                    <Text style={styles.dashTitle}>Add photo</Text>
                     <Text style={styles.dashSub}>AI identifies the animal automatically</Text>
-                  </TouchableOpacity>
+                    {photoButtons}
+                  </View>
                 )}
+                {photoUri ? photoButtons : null}
+                {photoError ? (
+                  <View style={styles.photoErr}>
+                    <Text style={styles.photoErrText}>{photoError}</Text>
+                  </View>
+                ) : null}
                 {cameraDenied ? (
                   <View style={styles.permNote}>
                     <Text style={styles.permText}>Camera access is off. You can still choose a photo from your library.</Text>
@@ -490,6 +678,17 @@ export default function NewReportScreen() {
                     </Text>
                   </View>
                 ) : null}
+                <Text style={styles.fieldLabel}>Your phone (for follow-up, never public)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={phone}
+                  onChangeText={setPhone}
+                  placeholder="(555) 123-4567"
+                  placeholderTextColor={Colors.textTertiary}
+                  keyboardType="phone-pad"
+                  autoComplete="tel"
+                  textContentType="telephoneNumber"
+                />
                 <TextInput
                   style={[styles.input, styles.textArea]}
                   value={description}
@@ -524,10 +723,7 @@ export default function NewReportScreen() {
                   <TextInput
                     style={styles.detectedInput}
                     value={location}
-                    onChangeText={(t) => {
-                      setLocation(t);
-                      if (lat != null) { /* keep pin; user is editing label */ }
-                    }}
+                    onChangeText={setLocation}
                     placeholder="Address or area"
                     placeholderTextColor={Colors.textTertiary}
                   />
@@ -586,26 +782,21 @@ export default function NewReportScreen() {
           </View>
         </View>
       </KeyboardAvoidingView>
-      {banner && <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />}
     </SafeAreaView>
   );
 }
 
 function LocationPreview({ lat, lng }: { lat: number; lng: number }) {
-  const delta = 0.006;
-  const src = `https://www.openstreetmap.org/export/embed.html?bbox=${lng - delta}%2C${lat - delta * 0.7}%2C${lng + delta}%2C${lat + delta * 0.7}&layer=mapnik&marker=${lat}%2C${lng}`;
   return (
     <View style={styles.mapWrap}>
-      {Platform.OS === 'web' ? (
-        // @ts-ignore web-only map preview
-        <iframe title="map" src={src} width="100%" height="200" style={{ border: 0 }} />
-      ) : (
-        <View style={styles.mapFallback}>
-          <MapPin color={Colors.coral} size={28} />
-        </View>
-      )}
-      <View pointerEvents="none" style={styles.mapRadius} />
-      <View pointerEvents="none" style={styles.mapPinDot} />
+      <NearbyMap
+        center={{ lat, lng }}
+        zoom={16}
+        radiusKm={0.3}
+        pins={[]}
+        onSelect={() => {}}
+        mode="pin"
+      />
     </View>
   );
 }
@@ -658,14 +849,33 @@ const styles = StyleSheet.create({
     borderColor: Colors.borderInput,
     borderRadius: 16,
     backgroundColor: Colors.white,
-    paddingVertical: 28,
-    paddingHorizontal: 18,
+    paddingVertical: 18,
+    paddingHorizontal: 14,
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
     marginTop: 4,
   },
   dashTitle: { fontSize: FontSizes.md, fontFamily: INTERB, fontWeight: '700', color: Colors.text, marginTop: 4 },
-  dashSub: { fontSize: FontSizes.sm, fontFamily: INTER, color: Colors.textTertiary },
+  dashSub: { fontSize: FontSizes.sm, fontFamily: INTER, color: Colors.textTertiary, marginBottom: 4 },
+  photoActions: { flexDirection: 'row', gap: 10, width: '100%', marginTop: 4 },
+  photoBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.borderInput,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    position: 'relative',
+    minHeight: 48,
+  },
+  photoBtnText: { fontSize: FontSizes.sm, fontFamily: INTERB, fontWeight: '700', color: Colors.navy },
+  photoErr: { backgroundColor: Colors.criticalBg, borderRadius: 12, padding: 12 },
+  photoErrText: { fontSize: FontSizes.sm, fontFamily: INTERB, fontWeight: '600', color: Colors.critical, lineHeight: 18 },
   photoRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: Colors.white, borderRadius: 14, padding: 10, borderWidth: 1, borderColor: Colors.border },
   thumb: { width: 76, height: 76, borderRadius: 12, backgroundColor: Colors.surface },
   photoAdded: { fontSize: FontSizes.sm, fontFamily: INTERB, fontWeight: '700', color: Colors.text, marginBottom: 4 },
@@ -686,35 +896,10 @@ const styles = StyleSheet.create({
   matchNote: { backgroundColor: Colors.tealBg, borderRadius: 12, padding: 12 },
   matchText: { fontSize: FontSizes.sm, fontFamily: INTER, color: Colors.tealDark, lineHeight: 18 },
   matchEm: { fontFamily: INTERB, fontWeight: '700' },
+  fieldLabel: { fontSize: FontSizes.sm, fontFamily: INTERB, fontWeight: '700', color: Colors.text, marginTop: 2 },
   input: { borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 14, fontSize: FontSizes.md, fontFamily: INTER, color: Colors.text, backgroundColor: Colors.white },
   textArea: { minHeight: 100, textAlignVertical: 'top' },
-  mapWrap: { height: 200, borderRadius: 16, overflow: 'hidden', backgroundColor: '#D7E4D4', position: 'relative' },
-  mapFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#D7E4D4' },
-  mapRadius: {
-    position: 'absolute',
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: 'rgba(232,90,80,0.18)',
-    borderWidth: 2,
-    borderColor: 'rgba(232,90,80,0.45)',
-    top: 30,
-    alignSelf: 'center',
-    left: '50%',
-    marginLeft: -70,
-  },
-  mapPinDot: {
-    position: 'absolute',
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: Colors.coral,
-    borderWidth: 2.5,
-    borderColor: Colors.white,
-    top: 91,
-    left: '50%',
-    marginLeft: -9,
-  },
+  mapWrap: { height: 200, borderRadius: 16, overflow: 'hidden', backgroundColor: '#e6e9ee' },
   mapPlaceholder: {
     height: 180,
     borderRadius: 16,

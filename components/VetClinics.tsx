@@ -24,6 +24,7 @@ export type ClinicEntry = {
   lastVisit?: string | null;
   docCount?: number;
   variants?: string[];
+  vets?: { name: string; lastVisit?: string | null }[];
 };
 
 function formatDate(iso?: string | null) {
@@ -186,6 +187,18 @@ export function VetClinics({
         lastVisit: dates[dates.length - 1] || null,
         docCount: members.reduce((s, m) => s + (m.docCount || 0), 0),
         variants: g.variants,
+        vets: (() => {
+          const map = new Map<string, { name: string; lastVisit?: string | null }>();
+          for (const m of members) {
+            for (const v of m.vets || []) {
+              if (!v?.name) continue;
+              const cur = map.get(v.name) || { name: v.name, lastVisit: v.lastVisit || null };
+              if (v.lastVisit && (!cur.lastVisit || String(v.lastVisit) > String(cur.lastVisit))) cur.lastVisit = v.lastVisit;
+              map.set(v.name, cur);
+            }
+          }
+          return [...map.values()];
+        })(),
       };
     }).sort((a, b) => (b.lastVisit || '').localeCompare(a.lastVisit || '') || a.name.localeCompare(b.name));
   }, [rawRows]);
@@ -193,6 +206,21 @@ export function VetClinics({
   return (
     <View>
       {banner && <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />}
+      {(() => {
+        const vetN = new Set(rows.flatMap((r) => (r.vets || []).map((v) => v.name).filter(Boolean))).size;
+        return (
+          <View style={styles.headerTiles}>
+            <View style={styles.headerTile}>
+              <Text style={styles.headerTileN}>{rows.length}</Text>
+              <Text style={styles.headerTileL}>Clinics</Text>
+            </View>
+            <View style={styles.headerTile}>
+              <Text style={styles.headerTileN}>{vetN}</Text>
+              <Text style={styles.headerTileL}>Veterinarians</Text>
+            </View>
+          </View>
+        );
+      })()}
       <View style={styles.subHeader}>
         <View style={styles.subHeaderLeft}>
           <Building2 color={Colors.navy} size={18} />
@@ -233,6 +261,15 @@ export function VetClinics({
                 <Text style={styles.clinicDetail}>Last visit {formatDate(c.lastVisit)}</Text>
                 <Text style={styles.clinicDetail}>{c.docCount ?? 0} document{(c.docCount ?? 0) === 1 ? '' : 's'}</Text>
                 {c.address ? <Text style={styles.clinicDetail}>{c.address}</Text> : null}
+                {(c.vets || []).length > 0 ? (
+                  <View style={styles.vetList}>
+                    {(c.vets || []).map((v) => (
+                      <Text key={v.name} style={styles.vetLine}>
+                        {v.name}{v.lastVisit ? ` · ${formatDate(v.lastVisit)}` : ''}
+                      </Text>
+                    ))}
+                  </View>
+                ) : null}
               </View>
               {canEdit ? (
                 <View style={styles.clinicActions}>
@@ -308,6 +345,12 @@ const styles = StyleSheet.create({
   varChipTxt: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy },
   clinicRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
   clinicDetail: { fontSize: FontSizes.sm, fontFamily: Fonts.regular, color: Colors.textSecondary },
+  vetList: { marginTop: 8, gap: 4, paddingTop: 8, borderTopWidth: 1, borderTopColor: Colors.border },
+  vetLine: { fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.navy },
+  headerTiles: { flexDirection: 'row', gap: 10, marginBottom: 4 },
+  headerTile: { flex: 1, backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, paddingVertical: 14, alignItems: 'center' },
+  headerTileN: { fontFamily: Fonts.extrabold, fontSize: 22, color: Colors.navy },
+  headerTileL: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.textSecondary, marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.4 },
   clinicActions: { flexDirection: 'column', gap: 8, alignItems: 'flex-end', justifyContent: 'center' },
   mergeBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: Colors.navy },
   mergeTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.white },

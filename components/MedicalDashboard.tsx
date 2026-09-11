@@ -6,6 +6,7 @@ import { AreaChart, HealthRing, RefBand } from '@/components/MedicalCharts';
 import { LabSparkline as MiniSpark } from '@/components/PetCharts';
 import { SourceBadge } from '@/components/SourceBadge';
 import { Card } from '@/components/Card';
+import { DashboardPanel } from '@/components/DashboardPanel';
 export { EXAM_PILLS } from '@/components/VetExamCard';
 
 export function classifyLab(name: string): 'Hematology' | 'Chemistry' | 'Endocrinology' | 'Urinalysis' {
@@ -56,6 +57,10 @@ export default function MedicalDashboard(props: {
   docCounts?: { labs: number; vaccines: number; records: number };
   onOpenDocs?: (kind: 'labs' | 'vaccinations' | 'exam_visit') => void;
   onMenu?: () => void;
+  mode?: 'panel' | 'body' | 'all';
+  skipWeight?: boolean;
+  hideUploads?: boolean;
+  pastConditions?: string[];
 }) {
   const [labOpen, setLabOpen] = useState<Record<string, boolean>>({ Hematology: true, Chemistry: true, Endocrinology: true, Urinalysis: true });
 
@@ -139,6 +144,7 @@ export default function MedicalDashboard(props: {
   const overPctLabel = overPct == null ? null : `${overPct > 0 ? '+' : ''}${overPct.toFixed(1)}%`;
 
   const [expand, setExpand] = useState<Record<string, boolean>>({});
+  const mode = props.mode || 'all';
 
   const wDelta = props.weightDelta;
   const bcsDelta = props.bcsDelta;
@@ -164,66 +170,23 @@ export default function MedicalDashboard(props: {
 
   return (
     <View style={{ gap: 16 }}>
-      <View style={styles.navy}>
-        {props.onMenu ? (
-          <TouchableOpacity style={styles.menuBtn} onPress={props.onMenu} activeOpacity={0.85} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Text style={styles.menuTxt}>⋮</Text>
-          </TouchableOpacity>
+      {mode !== 'body' ? (
+      <DashboardPanel
+        tiles={[
+          { label: 'Health score', value: props.healthScore, hint: props.verdict },
+          { label: 'Weight', value: props.latestLb != null ? `${props.latestLb} lb` : '—', hint: props.targetLb != null ? `target ${props.targetLb} lb` : undefined },
+          { label: 'BCS', value: props.bcs != null ? `${props.bcs} /9` : '—' },
+          { label: 'Main risk', value: mainRisk },
+        ]}
+        footer={props.pastConditions && props.pastConditions.length > 0 ? (
+          <Text style={styles.pastLine}>Past conditions · {props.pastConditions.join(' · ')}</Text>
         ) : null}
-        <View style={styles.kpiRow}>
-          <View style={styles.kpi}>
-            <Text style={styles.kpiKLight}>Health score</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <HealthRing score={props.healthScore} size={64} />
-              <Text style={styles.kpiHint}>{props.verdict}</Text>
-            </View>
-          </View>
-          <View style={styles.kpi}>
-            <Text style={styles.kpiKLight}>Weight</Text>
-            <Text style={styles.kpiV}>{props.latestLb != null ? props.latestLb : '—'}<Text style={styles.kpiU}> lb</Text></Text>
-            {overPctLabel ? (
-              <Text style={[styles.kpiHint, { color: overPct != null && overPct > 15 ? '#F5C1B8' : overPct != null && overPct > 5 ? '#FCE9C8' : '#B9BCE0' }]}>{overPctLabel}</Text>
-            ) : (
-              <Delta d={wDelta} />
-            )}
-            {props.targetLb != null ? <Text style={styles.kpiHint}>target {props.targetLb} lb</Text> : null}
-            {props.weightPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.45, width: 90 }}><MiniSpark values={props.weightPts.map((p) => p.v)} color="#7EE0D6" height={28} /></View> : null}
-          </View>
-          <View style={styles.kpi}>
-            <Text style={styles.kpiKLight}>BCS</Text>
-            <Text style={styles.kpiV}>{props.bcs != null ? props.bcs : '—'}<Text style={styles.kpiU}> /9</Text></Text>
-            <Delta d={bcsDelta} />
-            {props.bcsPts.length > 1 ? <View style={{ position: 'absolute', right: 8, bottom: 8, opacity: 0.45, width: 90 }}><MiniSpark values={props.bcsPts.map((p) => p.v)} color="#FCE9C8" height={28} /></View> : null}
-          </View>
-          <View style={[styles.kpi, riskTone === 'red' ? { backgroundColor: 'rgba(215,68,62,0.28)' } : riskTone === 'yellow' ? { backgroundColor: 'rgba(229,164,21,0.22)' } : null]}>
-            <Text style={styles.kpiKLight}>Main risk</Text>
-            <Text style={[styles.kpiV, { fontSize: 16, color: riskTone === 'red' ? '#F5C1B8' : riskTone === 'yellow' ? '#FCE9C8' : Colors.white }]} numberOfLines={2}>{mainRisk}</Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
-              {computedRisks.slice(1, 3).map((r) => (
-                <View key={r.label} style={[styles.riskChip, r.tone === 'gray' ? { backgroundColor: 'rgba(255,255,255,0.10)' } : r.tone === 'red' ? { backgroundColor: 'rgba(215,68,62,0.35)' } : r.tone === 'yellow' ? { backgroundColor: 'rgba(229,164,21,0.28)' } : null]}>
-                  <Text style={[styles.riskTxt, r.tone === 'gray' ? { color: '#C5C8D8' } : null]} numberOfLines={1}>{r.label}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        </View>
-        <View style={styles.docStripNavy}>
-          {([
-            { kind: 'labs' as const, label: 'Labs', n: props.docCounts?.labs ?? 0 },
-            { kind: 'vaccinations' as const, label: 'Vaccines', n: props.docCounts?.vaccines ?? 0 },
-            { kind: 'exam_visit' as const, label: 'Records', n: props.docCounts?.records ?? 0 },
-          ]).map((item, i) => (
-            <React.Fragment key={item.kind}>
-              {i > 0 ? <Text style={styles.stripDotNavy}>·</Text> : null}
-              <TouchableOpacity onPress={() => props.onOpenDocs?.(item.kind)} activeOpacity={0.85}>
-                <Text style={styles.stripTxtNavy}>{item.label} {item.n}</Text>
-              </TouchableOpacity>
-            </React.Fragment>
-          ))}
-        </View>
-      </View>
+      />
+      ) : null}
 
-      {props.weightPts.length >= 1 ? (
+      {mode === 'panel' ? null : (
+      <>
+      {!props.skipWeight && props.weightPts.length >= 1 ? (
       <Card>
         <Text style={styles.kicker}>WEIGHT + BCS</Text>
         {props.weightPts.length >= 2 ? (
@@ -356,7 +319,7 @@ export default function MedicalDashboard(props: {
             <Text style={styles.link}>Run {r.run_number || r.run_no} · {formatDate(r.created_at)} ▾</Text>
           </TouchableOpacity>
         ))}
-        {props.aiReady === false ? (
+        {props.aiReady === false && !props.hideUploads ? (
           <View style={styles.started}>
             <Text style={styles.kicker}>GET STARTED</Text>
             <Text style={styles.body}>Add a few basics so AI Health has something to read.</Text>
@@ -381,6 +344,8 @@ export default function MedicalDashboard(props: {
           </TouchableOpacity>
         ) : null}
       </Card>
+      </>
+      )}
     </View>
   );
 }
@@ -412,6 +377,7 @@ const styles = StyleSheet.create({
   kpiV: { fontFamily: Fonts.extrabold, fontSize: 26, color: Colors.white },
   kpiU: { fontFamily: Fonts.medium, fontSize: 13, color: '#B9BCE0' },
   kpiHint: { fontFamily: Fonts.regular, fontSize: 11, color: '#B9BCE0' },
+  pastLine: { fontFamily: Fonts.medium, fontSize: 11, color: '#9AA1AC', marginTop: 2 },
   delta: { alignSelf: 'flex-start', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
   card: { backgroundColor: Colors.white, borderRadius: 16, padding: 16, borderWidth: 1, borderColor: Colors.border, gap: 8 },
   kicker: { fontFamily: Fonts.extrabold, fontSize: 11, letterSpacing: 0.8, color: Colors.textTertiary },

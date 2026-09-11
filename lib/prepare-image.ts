@@ -7,21 +7,27 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
-    img.onerror = reject;
+    img.onerror = () => reject(new Error('Could not read that picture.'));
     img.src = url;
   });
 }
 
 export async function compressImage(file: Blob, maxPx = MAX_PX, quality = JPEG_Q): Promise<Blob> {
   if (typeof document === 'undefined') return file;
-  if (file.type && !file.type.startsWith('image/')) return file;
+  if (file.type && !file.type.startsWith('image/') && file.type !== 'application/octet-stream') {
+    return file;
+  }
 
   const objectUrl = URL.createObjectURL(file);
   let bitmap: ImageBitmap | HTMLImageElement | null = null;
   try {
-    bitmap = typeof createImageBitmap === 'function'
-      ? await createImageBitmap(file)
-      : await loadImage(objectUrl);
+    try {
+      bitmap = typeof createImageBitmap === 'function'
+        ? await createImageBitmap(file)
+        : await loadImage(objectUrl);
+    } catch {
+      bitmap = await loadImage(objectUrl);
+    }
     const longest = Math.max(bitmap.width, bitmap.height) || 1;
     const scale = longest > maxPx ? maxPx / longest : 1;
     const w = Math.max(1, Math.round(bitmap.width * scale));
@@ -42,6 +48,8 @@ export async function compressImage(file: Blob, maxPx = MAX_PX, quality = JPEG_Q
     canvas.width = 0;
     canvas.height = 0;
     return blob;
+  } catch (e: any) {
+    throw new Error(e?.message || 'Could not read that picture.');
   } finally {
     URL.revokeObjectURL(objectUrl);
     if (bitmap && 'close' in bitmap && typeof (bitmap as ImageBitmap).close === 'function') {
@@ -54,7 +62,7 @@ export async function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => resolve(String(r.result));
-    r.onerror = reject;
+    r.onerror = () => reject(new Error('Could not read that picture.'));
     r.readAsDataURL(blob);
   });
 }

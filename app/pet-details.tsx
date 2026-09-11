@@ -6,9 +6,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Image,
-  Alert,
   ActivityIndicator,
-  Platform,
   Linking,
   useWindowDimensions,
 } from 'react-native';
@@ -18,29 +16,17 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeBack } from '@/hooks/useSafeBack';
 import {
   ArrowLeft,
-  Heart,
-  Share,
-  MapPin,
-  Shield,
   ShieldCheck,
-  Phone,
   Check,
   PawPrint,
   Lock,
-  Activity,
-  Clock,
-  TriangleAlert as AlertTriangle,
-  ChevronRight,
-  FileText,
-  MessageCircle,
 } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
-import OrgAvatar from '@/components/OrgAvatar';
 import SignedImage from '@/components/SignedImage';
-import { Page } from '@/components/Page';
+import { SegmentedTabs } from '@/components/Tabs';
 
 
 interface PetRecord {
@@ -63,7 +49,22 @@ interface PetRecord {
   vaccinated: boolean;
   spayed_neutered: boolean;
   microchipped: boolean;
+  dewormed?: boolean;
+  felv_fiv_negative?: boolean;
   shelter_id: string | null;
+  org_name?: string | null;
+  listing_phone?: string | null;
+  listing_email?: string | null;
+  size?: string | null;
+  coat?: string | null;
+  house_trained?: string | null;
+  special_needs?: string | null;
+  adoption_fee?: string | null;
+  color?: string | null;
+  energy?: string | null;
+  good_with_kids_text?: string | null;
+  good_with_dogs_text?: string | null;
+  good_with_cats_text?: string | null;
 }
 
 interface MedicalRecord {
@@ -207,12 +208,48 @@ function inferListing(text: string) {
     chips,
   };
 }
+
+function publicChips(pet: PetRecord): string[] {
+  const inferred = inferListing(pet.description || '');
+  const out: string[] = [];
+  const push = (s?: string | null) => {
+    const v = String(s || '').trim();
+    if (!v) return;
+    if (out.some((x) => x.toLowerCase() === v.toLowerCase())) return;
+    out.push(v);
+  };
+  if (pet.dewormed || inferred.chips.includes('Dewormed')) push('Dewormed');
+  if (pet.felv_fiv_negative || inferred.chips.includes('FELV/FIV negative')) push('FELV/FIV negative');
+  const g = String(pet.gender || '').toLowerCase();
+  if (g.startsWith('f')) push('Female');
+  else if (g.startsWith('m')) push('Male');
+  if (pet.vaccinated || inferred.vaccinated) push('Vaccinated');
+  (pet.personality || []).forEach(push);
+  inferred.chips.forEach(push);
+  return out;
+}
+
+function listingRows(pet: PetRecord): [string, string][] {
+  const rows: [string, string | null | undefined][] = [
+    ['Size', pet.size],
+    ['Coat', pet.coat],
+    ['Color', pet.color],
+    ['House-trained', pet.house_trained],
+    ['Special needs', pet.special_needs],
+    ['Adoption fee', pet.adoption_fee],
+    ['Energy', pet.energy],
+    ['Good with kids', pet.good_with_kids_text ?? (pet.good_with_kids ? 'Yes' : null)],
+    ['Good with dogs', pet.good_with_dogs_text ?? (pet.good_with_dogs ? 'Yes' : null)],
+    ['Good with cats', pet.good_with_cats_text ?? (pet.good_with_cats ? 'Yes' : null)],
+  ];
+  return rows.filter((r): r is [string, string] => Boolean(r[1] && String(r[1]).trim()));
+}
 export default function PetDetailsScreen() {
   const { id } = useLocalSearchParams();
   const safeBack = useSafeBack('/(tabs)');
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const compactBar = width < 480;
   const [isFavorite, setIsFavorite] = useState(false);
   const [favoriteId, setFavoriteId] = useState<string | null>(null);
@@ -274,11 +311,15 @@ export default function PetDetailsScreen() {
           return;
         }
         const inferred = inferListing(a.description || '');
-        setListingEmail(inferred.email);
-        setListingPhone(inferred.phone);
+        setListingEmail(a.listing_email || inferred.email);
+        setListingPhone(a.listing_phone || inferred.phone);
         setListingUrl(a.listing_url || null);
         setDescTab('about');
-        
+        if (a.org_name) {
+          setShelterName(a.org_name);
+          setShelterVerified(true);
+        }
+
       setPet({
           id: petId,
           name: a.name,
@@ -299,7 +340,22 @@ export default function PetDetailsScreen() {
           vaccinated: !!a.vaccinated || inferred.vaccinated,
           spayed_neutered: !!a.spayed_neutered || inferred.spayed,
           microchipped: !!a.microchipped || inferred.microchipped,
+          dewormed: !!a.dewormed,
+          felv_fiv_negative: !!a.felv_fiv_negative,
           shelter_id: null,
+          org_name: a.org_name || null,
+          listing_phone: a.listing_phone || inferred.phone,
+          listing_email: a.listing_email || inferred.email,
+          size: a.size || null,
+          coat: a.coat || null,
+          house_trained: a.house_trained || null,
+          special_needs: a.special_needs || null,
+          adoption_fee: a.adoption_fee || null,
+          color: a.color || null,
+          energy: a.energy || null,
+          good_with_kids_text: a.good_with_kids || null,
+          good_with_dogs_text: a.good_with_dogs || null,
+          good_with_cats_text: a.good_with_cats || null,
         });
         setLoading(false);
       } catch {
@@ -339,10 +395,13 @@ export default function PetDetailsScreen() {
         if (shelter) setShelterName(shelter.name);
         const { data: org } = await supabase
           .from('organizations')
-          .select('status')
+          .select('status, name, phone, contact_email')
           .eq('id', data.shelter_id)
           .maybeSingle();
         if (org && org.status === 'approved') setShelterVerified(true);
+        if (org?.name && !shelterName) setShelterName(org.name);
+        if (org?.phone) setListingPhone((p) => p || org.phone);
+        if (org?.contact_email) setListingEmail((p) => p || org.contact_email);
       }
 
       // Check org membership
@@ -584,30 +643,33 @@ export default function PetDetailsScreen() {
   };
 
   const HealthTile = ({ label, done }: { label: string; done: boolean }) => (
-    <View style={styles.healthTile}>
+    <View style={[styles.healthTile, done && styles.healthTileOn]}>
       <View style={[styles.healthCheck, done && styles.healthCheckDone]}>
-        {done && <Check color={Colors.white} size={14} />}
+        {done ? <Check color={Colors.teal} size={16} strokeWidth={2.6} /> : null}
       </View>
-      <Text style={styles.healthLabel} numberOfLines={2}>{label}</Text>
+      <Text style={[styles.healthLabel, done && { color: Colors.tealDark }]} numberOfLines={2}>{label}</Text>
     </View>
   );
 
-  // Determine microchip display state
   const microchipFullAccess = isOrgMember;
-  const microchipHasRequest = microchipAccessRequest !== null;
-  const microchipRequestPending = microchipAccessRequest?.status === 'pending';
-  const microchipRequestApproved = microchipAccessRequest?.status === 'approved';
+
+  const chips = publicChips(pet);
+  const rows = listingRows(pet);
+  const phone = listingPhone || pet.listing_phone || null;
+  const email = listingEmail || pet.listing_email || null;
+  const heroH = Math.round(height * 0.45);
+  const chipDisplay = microchipValue
+    ? (microchipFullAccess ? microchipValue : `••••${String(microchipValue).slice(-4)}`)
+    : 'Not on file';
 
   return (
-    <SafeAreaView style={styles.container}>
-      <Page wideMax={720}>
-      <View>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
         {banner && <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />}
-        {/* Hero image */}
-        <View style={styles.heroWrap}>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 120 + insets.bottom }} showsVerticalScrollIndicator={false}>
+        <View style={[styles.heroWrap, { height: heroH }]}>
           {pet.main_photo_url ? (
             pet.main_photo_url.startsWith('http') ? (
-        <Image source={{ uri: pet.main_photo_url }} style={styles.heroImage} resizeMode="cover" />
+              <Image source={{ uri: pet.main_photo_url }} style={styles.heroImage} resizeMode="cover" />
             ) : (
               <SignedImage path={pet.main_photo_url} style={styles.heroImage} />
             )
@@ -616,20 +678,11 @@ export default function PetDetailsScreen() {
               <PawPrint color={Colors.textTertiary} size={48} />
             </View>
           )}
-          <TouchableOpacity style={styles.heroBack} onPress={safeBack}>
-            <ArrowLeft color={Colors.white} size={20} />
+          <TouchableOpacity style={[styles.heroBack, { top: Math.max(12, insets.top + 8) }]} onPress={safeBack} activeOpacity={0.85}>
+            <ArrowLeft color={Colors.navy} size={20} />
           </TouchableOpacity>
-          <View style={styles.heroActions}>
-            <TouchableOpacity style={styles.heroActionBtn} onPress={toggleFavorite}>
-              <Heart color={isFavorite ? Colors.coral : Colors.white} fill={isFavorite ? Colors.coral : 'transparent'} size={18} />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.heroActionBtn}>
-              <Share color={Colors.white} size={18} />
-            </TouchableOpacity>
-          </View>
         </View>
 
-        {/* Pet info */}
         <View style={styles.petInfo}>
           <View style={styles.petHeader}>
             <Text style={styles.petName} numberOfLines={2}>{titleCaseName(pet.name)}</Text>
@@ -638,406 +691,102 @@ export default function PetDetailsScreen() {
           <Text style={styles.petBreedLocation}>
             {[pet.breed, pet.location].filter(Boolean).join(' · ')}
           </Text>
-          {pet.dob ? (
-            <Text style={styles.petBreedLocation}>Born {pet.dob}</Text>
-          ) : null}
 
-          {/* Trait chips */}
-          {pet.personality && pet.personality.length > 0 && (
+          {chips.length ? (
             <View style={styles.traitChips}>
-              {pet.personality.map((trait, i) => (
-                <View key={i} style={styles.traitChip}>
+              {chips.map((trait) => (
+                <View key={trait} style={styles.traitChip}>
                   <Text style={styles.traitText}>{trait}</Text>
                 </View>
               ))}
             </View>
-          )}
+          ) : null}
 
-          {/* Description */}
-          {pet.description ? (
+          <SegmentedTabs
+            items={[
+              { key: 'about', label: 'About' },
+              { key: 'full', label: 'Full listing' },
+            ]}
+            value={descTab}
+            onChange={setDescTab}
+          />
+
+          {descTab === 'about' ? (
             <>
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 8 }}>
-                <TouchableOpacity onPress={() => setDescTab('about')} style={[styles.traitChip, descTab === 'about' && { backgroundColor: Colors.navy }]}>
-                  <Text style={[styles.traitText, descTab === 'about' && { color: Colors.white }]}>About</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setDescTab('full')} style={[styles.traitChip, descTab === 'full' && { backgroundColor: Colors.navy }]}>
-                  <Text style={[styles.traitText, descTab === 'full' && { color: Colors.white }]}>Full listing</Text>
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.description}>
-                {descTab === 'full' ? decodeHtml(pet.description) : inferListing(pet.description).about}
-              </Text>
-              {listingPhone ? (
-                <TouchableOpacity onPress={() => Linking.openURL('tel:' + listingPhone.replace(/[^\d+]/g, ''))}>
-                  <Text style={{ color: Colors.coral, fontFamily: Fonts.semibold, marginBottom: 8 }}>Call {listingPhone}</Text>
+              {pet.description ? (
+                <Text style={styles.description}>{inferListing(pet.description).about}</Text>
+              ) : null}
+              {phone ? (
+                <TouchableOpacity onPress={() => Linking.openURL('tel:' + phone.replace(/[^\d+]/g, ''))}>
+                  <Text style={styles.contactLink}>Call {phone}</Text>
                 </TouchableOpacity>
               ) : null}
-              {listingEmail ? (
-                <TouchableOpacity onPress={() => Linking.openURL(`mailto:${listingEmail}?subject=${encodeURIComponent('Adoption inquiry: ' + pet.name)}`)}>
-                  <Text style={{ color: Colors.coral, fontFamily: Fonts.semibold, marginBottom: 8 }}>Email {listingEmail}</Text>
+              {email ? (
+                <TouchableOpacity onPress={() => Linking.openURL(`mailto:${email}?subject=${encodeURIComponent('Adoption inquiry: ' + pet.name)}`)}>
+                  <Text style={styles.contactLink}>Email {email}</Text>
                 </TouchableOpacity>
               ) : null}
-            </>
-          ) : null}
 
-          {/* Health tiles */}
-          <View style={styles.healthRow}>
-            <HealthTile label="Vaccinated" done={pet.vaccinated} />
-            <HealthTile label="Spayed/Neutered" done={pet.spayed_neutered} />
-            <HealthTile label="Microchipped" done={pet.microchipped} />
-          </View>
-
-          {/* Identity & Records card */}
-          <View style={styles.identityCard}>
-            {/* Microchip row */}
-            <View style={styles.identityRow}>
-              <View style={styles.identityIcon}>
-                <Lock color={Colors.navy} size={16} />
+              <View style={styles.healthRow}>
+                <HealthTile label="Vaccinated" done={pet.vaccinated} />
+                <HealthTile label="Spayed/Neutered" done={pet.spayed_neutered} />
+                <HealthTile label="Microchipped" done={pet.microchipped} />
               </View>
-              <View style={styles.identityBody}>
-                <Text style={styles.identityLabel}>Microchip</Text>
-                {microchipValue ? (
-                  <Text style={styles.identityValueMono}>{microchipValue}</Text>
-                ) : (
-                  <Text style={styles.identityValueEmpty}>Not on file</Text>
-                )}
-              </View>
-              {microchipFullAccess ? (
-                <View style={styles.accessPillFull}>
-                  <Text style={styles.accessPillFullText}>Full access</Text>
-                </View>
-              ) : microchipRequestApproved ? (
-                <View style={styles.accessPillFull}>
-                  <Text style={styles.accessPillFullText}>Approved</Text>
-                </View>
-              ) : microchipRequestPending ? (
-                <View style={styles.accessPillPending}>
-                  <Text style={styles.accessPillPendingText}>Pending review</Text>
-                </View>
-              ) : isRegisteredFoster ? (
-                <TouchableOpacity style={styles.requestBtn} onPress={requestMicrochipAccess} activeOpacity={0.85}>
-                  <Text style={styles.requestBtnText}>Request access</Text>
-                </TouchableOpacity>
-              ) : (
-                <View style={styles.accessPillRestricted}>
-                  <Text style={styles.accessPillRestrictedText}>Orgs only</Text>
-                </View>
-              )}
-            </View>
 
-            <View style={styles.identityDivider} />
-
-            {/* Medical record row */}
-            <View style={styles.identityRow}>
-              <View style={styles.identityIcon}>
-                <Activity color={Colors.navy} size={16} />
-              </View>
-              <View style={styles.identityBody}>
-                <Text style={styles.identityLabel}>Medical record</Text>
-                {medicalAccess && medicalRecords.length > 0 ? (
-                  <View style={styles.medicalList}>
-                    {medicalRecords.slice(0, 3).map((mr) => (
-                      <View key={mr.id} style={styles.medicalEntry}>
-                        <Text style={styles.medicalDate}>{mr.record_date ? formatShortDate(mr.record_date) : ''}</Text>
-                        <Text style={styles.medicalTitle} numberOfLines={1}>{mr.title}</Text>
-                        {mr.provider_name ? <Text style={styles.medicalProvider} numberOfLines={1}>{mr.provider_name}</Text> : null}
-                      </View>
-                    ))}
-                  </View>
-                ) : medicalAccess && medicalRecords.length === 0 ? (
-                  <Text style={styles.identityValueEmpty}>No records on file</Text>
-                ) : (
-                  <View style={styles.restrictedNote}>
+              <View style={styles.chipCard}>
+                <Lock color={Colors.textTertiary} size={16} />
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Text style={styles.identityLabel}>Microchip</Text>
                     <View style={styles.accessPillRestricted}>
-                      <Text style={styles.accessPillRestrictedText}>Restricted</Text>
+                      <Text style={styles.accessPillRestrictedText}>{microchipFullAccess ? 'Full access' : 'Orgs only'}</Text>
                     </View>
-                    <Text style={styles.restrictedText}>Summary badges above are public. Full records are restricted to verified organizations.</Text>
-                    {isRegisteredFoster && !microchipHasRequest && (
-                      <TouchableOpacity style={styles.requestBtn} onPress={requestMedicalAccess} activeOpacity={0.85}>
-                        <Text style={styles.requestBtnText}>Request access</Text>
-                      </TouchableOpacity>
+                  </View>
+                  <Text style={microchipValue && microchipFullAccess ? styles.identityValueMono : styles.identityValueEmpty}>{chipDisplay}</Text>
+                </View>
+              </View>
+
+              {shelterName ? (
+                <View style={styles.shelterCard}>
+                  <View style={styles.shelterAvatarTile}>
+                    <Text style={styles.shelterAvatarText}>{shelterName.charAt(0).toUpperCase()}</Text>
+                  </View>
+                  <View style={styles.shelterInfo}>
+                    <View style={styles.shelterNameRow}>
+                      <Text style={styles.shelterName}>{shelterName}</Text>
+                      {shelterVerified ? <ShieldCheck color={Colors.teal} size={16} /> : null}
+                    </View>
+                    {shelterVerified ? (
+                      <Text style={styles.verifiedText}>Verified 501(c)(3) · responds in ~2h</Text>
+                    ) : (
+                      <Text style={styles.shelterLocation}>{pet.location || ''}</Text>
                     )}
-                    {medicalAccessRequest?.status === 'pending' && (
-                      <View style={styles.accessPillPending}>
-                        <Text style={styles.accessPillPendingText}>Pending review</Text>
-                      </View>
-                    )}
                   </View>
-                )}
-              </View>
-            </View>
-
-            <View style={styles.identityDivider} />
-
-            {/* Adoption history row */}
-            <View style={styles.identityRow}>
-              <View style={styles.identityIcon}>
-                <Clock color={Colors.navy} size={16} />
-              </View>
-              <View style={styles.identityBody}>
-                <Text style={styles.identityLabel}>Adoption history</Text>
-                {isOrgMember && adoptionHistory.length > 0 ? (
-                  <View style={styles.timeline}>
-                    {adoptionHistory.map((ah) => (
-                      <View key={ah.id} style={styles.timelineItem}>
-                        <View style={[styles.timelineDot, { backgroundColor: ah.event === 'adopted' ? Colors.teal : ah.event === 'returned' ? Colors.coral : Colors.accent }]} />
-                        <View style={styles.timelineBody}>
-                          <Text style={styles.timelineEvent}>{ah.event === 'adopted' ? 'Adopted' : ah.event === 'returned' ? 'Returned' : 'Foster placement'}{ah.period ? ` · ${ah.period}` : ''}</Text>
-                          {ah.note ? <Text style={styles.timelineNote} numberOfLines={2}>{ah.note}</Text> : null}
-                        </View>
-                      </View>
-                    ))}
-                  </View>
-                ) : isOrgMember && adoptionHistory.length === 0 ? (
-                  <Text style={styles.identityValueEmpty}>No history on file</Text>
-                ) : (
-                  <Text style={styles.identityValueEmpty}>
-                    {adoptionCount > 0 ? `${adoptionCount} previous home${adoptionCount !== 1 ? 's' : ''} · details restricted` : 'No previous homes'}
-                  </Text>
-                )}
-              </View>
-            </View>
-
-            {linkedReports.length > 0 && <View style={styles.identityDivider} />}
-
-            {/* Linked reports row */}
-            {linkedReports.length > 0 && (
-              <View style={styles.identityRow}>
-                <View style={[styles.identityIcon, { backgroundColor: Colors.urgentBg }]}>
-                  <AlertTriangle color={Colors.urgent} size={16} />
                 </View>
-                <View style={styles.identityBody}>
-                  <Text style={styles.identityLabel}>Linked reports</Text>
-                  <Text style={styles.linkedReportText}>
-                    {linkedReports.length} linked report{linkedReports.length !== 1 ? 's' : ''} — {REPORT_TYPE_LABELS[linkedReports[0].report_type] || linkedReports[0].report_type}
-                  </Text>
-                  {isOrgMember && (
-                    <TouchableOpacity
-                      style={styles.caseLinkBtn}
-                      onPress={() => router.push(`/report-details?id=${linkedReports[0].id}`)}
-                      activeOpacity={0.85}
-                    >
-                      <Text style={styles.caseLinkText}>View case record</Text>
-                      <ChevronRight color={Colors.coral} size={12} />
-                    </TouchableOpacity>
-                  )}
-                  {isOrgMember && <Text style={styles.accessLoggedNote}>Access logged</Text>}
-                </View>
-              </View>
-            )}
-          </View>
+              ) : null}
 
-          {/* Footnote */}
-          <View style={styles.footnoteRow}>
-            <Shield color={Colors.textTertiary} size={11} />
-            <Text style={styles.footnoteText}>
-              Medical and adoption records may contain PII/ePHI. Access is role-based, approved by the listing organization, and every view is logged.
-            </Text>
-          </View>
-
-          {/* Shelter card */}
-          {shelterName ? (
-            <View style={styles.shelterCard}>
-              <View style={styles.shelterAvatarTile}>
-                <Text style={styles.shelterAvatarText}>{shelterName.charAt(0).toUpperCase()}</Text>
-                {shelterVerified && (
-                  <View style={styles.shelterAvatarBadge}>
-                    <ShieldCheck color={Colors.teal} size={10} />
-                  </View>
-                )}
+              <View style={styles.ctaRow}>
+                <TouchableOpacity style={styles.fosterButton} onPress={() => openAppForm('foster')} activeOpacity={0.85}>
+                  <Text style={styles.fosterText}>Foster</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.adoptButton} onPress={() => openAppForm('adopt')} activeOpacity={0.85}>
+                  <Text style={styles.adoptText}>Adopt</Text>
+                </TouchableOpacity>
               </View>
-              <View style={styles.shelterInfo}>
-                <View style={styles.shelterNameRow}>
-                  <Text style={styles.shelterName}>{shelterName}</Text>
-                  {shelterVerified && <ShieldCheck color={Colors.teal} size={14} />}
+            </>
+          ) : (
+            <View style={{ gap: 10 }}>
+              {rows.map(([label, value]) => (
+                <View key={label} style={styles.listingRow}>
+                  <Text style={styles.listingKey}>{label}</Text>
+                  <Text style={styles.listingVal}>{value}</Text>
                 </View>
-                {shelterVerified ? (
-                  <Text style={styles.verifiedText}>Verified 501(c)(3) · responds in ~2h</Text>
-                ) : (
-                  <Text style={styles.shelterLocation}>{pet.location || ''}</Text>
-                )}
-              </View>
-              <TouchableOpacity
-                style={styles.callButton}
-                onPress={async () => {
-                  if (!user) { router.push('/auth'); return; }
-                  if (!pet) return;
-                  try {
-                    const { data, error } = await supabase.rpc('get_or_create_conversation', {
-                      p_subject_type: 'pet',
-                      p_subject_id: pet.id,
-                    });
-                    if (error) throw error;
-                    router.push(`/chat?conversationId=${data}` as any);
-                  } catch (err) { console.error('[pet-details] conversation failed:', err); }
-                }}
-                activeOpacity={0.85}
-              >
-                <MessageCircle color={Colors.coral} size={18} />
-              </TouchableOpacity>
+              ))}
+              {pet.description ? <Text style={styles.description}>{decodeHtml(pet.description)}</Text> : null}
             </View>
-          ) : null}
+          )}
         </View>
-        <View style={{ height: (compactBar ? 148 : 90) + insets.bottom }} />
-      </View>
-
-      {/* Bottom actions — fixed footer with top border */}
-      <View style={[styles.bottomActions, compactBar && styles.bottomActionsStack, { paddingBottom: 12 + insets.bottom }]}>
-        {compactBar ? (
-          <>
-            <View style={styles.barRow}>
-              <TouchableOpacity
-                style={[styles.messageBtn, styles.messageBtnSm]}
-                onPress={() => {
-                  if (String(pet.id).startsWith('rg-a-')) {
-                    if (listingEmail) {
-                      Linking.openURL(`mailto:${listingEmail}?subject=${encodeURIComponent('Adoption inquiry: ' + pet.name)}`);
-                    } else if (listingPhone) {
-                      Linking.openURL('tel:' + listingPhone.replace(/[^\d+]/g, ''));
-                    }
-                    return;
-                  }
-                  if (!user) { router.push('/auth'); return; }
-                  (async () => {
-                    try {
-                      const { data, error } = await supabase.rpc('get_or_create_conversation', {
-                        p_subject_type: 'pet',
-                        p_subject_id: pet.id,
-                      });
-                      if (error) throw error;
-                      router.push(`/chat?conversationId=${data}` as any);
-                    } catch (err) { console.error('[pet-details] conversation failed:', err); }
-                  })();
-                }}
-                activeOpacity={0.85}
-              >
-                <MessageCircle color={Colors.navy} size={16} />
-                <Text style={[styles.messageBtnText, styles.messageBtnTextSm]} numberOfLines={1}>Message</Text>
-              </TouchableOpacity>
-              {user ? (
-                <TouchableOpacity
-                  style={[styles.messageBtn, styles.messageBtnSm]}
-                  onPress={() => router.push('/(tabs)/community?seg=services')}
-                  activeOpacity={0.85}
-                >
-                  <Text style={[styles.messageBtnText, styles.messageBtnTextSm]} numberOfLines={1}>Find a sitter/walker</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-            <View style={styles.barRow}>
-              {/adopted/i.test(pet.status || '') ? (
-                <TouchableOpacity style={styles.adoptButton} onPress={claimAdoptedPet}>
-                  <Text style={styles.adoptText} numberOfLines={1}>Add {firstName(pet.name)} to my pets</Text>
-                </TouchableOpacity>
-              ) : null}
-              {(pet.availability === 'foster' || pet.availability === 'both') && (
-                existingApps.foster ? (
-                  <View style={styles.appliedPill}>
-                    <FileText color={Colors.textTertiary} size={14} />
-                    <Text style={styles.appliedPillText} numberOfLines={1}>Application {existingApps.foster}</Text>
-                  </View>
-                ) : (
-                  <TouchableOpacity style={styles.fosterButton} onPress={() => openAppForm('foster')}>
-                    <Text style={styles.fosterText} numberOfLines={1}>Foster me</Text>
-                  </TouchableOpacity>
-                )
-              )}
-              {(pet.availability === 'adoption' || pet.availability === 'both') && (
-                existingApps.adopt ? (
-                  <View style={styles.appliedPill}>
-                    <FileText color={Colors.textTertiary} size={14} />
-                    <Text style={styles.appliedPillText} numberOfLines={1}>Application {existingApps.adopt}</Text>
-                  </View>
-                ) : (
-                  <TouchableOpacity style={styles.adoptButton} onPress={() => openAppForm('adopt')}>
-                    <Text style={styles.adoptText} numberOfLines={1}>Adopt {firstName(pet.name)}</Text>
-                  </TouchableOpacity>
-                )
-              )}
-              {pet.availability === 'none' && !/adopted/i.test(pet.status || '') ? (
-                <View style={styles.unavailablePill}>
-                  <Text style={styles.unavailablePillText} numberOfLines={1}>Not available</Text>
-                </View>
-              ) : null}
-            </View>
-          </>
-        ) : (
-          <>
-            <TouchableOpacity
-              style={styles.messageBtn}
-              onPress={() => {
-                if (String(pet.id).startsWith('rg-a-')) {
-                  if (listingEmail) {
-                    Linking.openURL(`mailto:${listingEmail}?subject=${encodeURIComponent('Adoption inquiry: ' + pet.name)}`);
-                  } else if (listingPhone) {
-                    Linking.openURL('tel:' + listingPhone.replace(/[^\d+]/g, ''));
-                  }
-                  return;
-                }
-                if (!user) { router.push('/auth'); return; }
-                (async () => {
-                  try {
-                    const { data, error } = await supabase.rpc('get_or_create_conversation', {
-                      p_subject_type: 'pet',
-                      p_subject_id: pet.id,
-                    });
-                    if (error) throw error;
-                    router.push(`/chat?conversationId=${data}` as any);
-                  } catch (err) { console.error('[pet-details] conversation failed:', err); }
-                })();
-              }}
-              activeOpacity={0.85}
-            >
-              <MessageCircle color={Colors.navy} size={18} />
-              <Text style={styles.messageBtnText} numberOfLines={1}>Message</Text>
-            </TouchableOpacity>
-            {/adopted/i.test(pet.status || '') && (
-              <TouchableOpacity style={styles.adoptButton} onPress={claimAdoptedPet}>
-                <Text style={styles.adoptText} numberOfLines={1}>Add {firstName(pet.name)} to my pets</Text>
-              </TouchableOpacity>
-            )}
-            {(pet.availability === 'foster' || pet.availability === 'both') && (
-              existingApps.foster ? (
-                <View style={styles.appliedPill}>
-                  <FileText color={Colors.textTertiary} size={14} />
-                  <Text style={styles.appliedPillText} numberOfLines={1}>Application {existingApps.foster}</Text>
-                </View>
-              ) : (
-                <TouchableOpacity style={styles.fosterButton} onPress={() => openAppForm('foster')}>
-                  <Text style={styles.fosterText} numberOfLines={1}>Foster me</Text>
-                </TouchableOpacity>
-              )
-            )}
-            {(pet.availability === 'adoption' || pet.availability === 'both') && (
-              existingApps.adopt ? (
-                <View style={styles.appliedPill}>
-                  <FileText color={Colors.textTertiary} size={14} />
-                  <Text style={styles.appliedPillText} numberOfLines={1}>Application {existingApps.adopt}</Text>
-                </View>
-              ) : (
-                <TouchableOpacity style={styles.adoptButton} onPress={() => openAppForm('adopt')}>
-                  <Text style={styles.adoptText} numberOfLines={1}>Adopt {firstName(pet.name)}</Text>
-                </TouchableOpacity>
-              )
-            )}
-            {user ? (
-              <TouchableOpacity
-                style={styles.messageBtn}
-                onPress={() => router.push('/(tabs)/community?seg=services')}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.messageBtnText} numberOfLines={1}>Find a sitter/walker</Text>
-              </TouchableOpacity>
-            ) : null}
-            {pet.availability === 'none' && (
-              <View style={styles.unavailablePill}>
-                <Text style={styles.unavailablePillText} numberOfLines={1}>Not available for foster or adoption</Text>
-              </View>
-            )}
-          </>
-        )}
-      </View>
-      </Page>
+        </ScrollView>
     </SafeAreaView>
   );
 }
@@ -1052,13 +801,14 @@ const styles = StyleSheet.create({
 
   scrollContent: { paddingBottom: 100 },
 
-  heroWrap: { position: 'relative', width: '100%', maxWidth: 320, height: 240, aspectRatio: 4/3, borderRadius: 16, overflow: 'hidden', backgroundColor: Colors.surface, marginTop: 12, alignSelf: 'center' },
+  heroWrap: { position: 'relative', width: '100%', backgroundColor: Colors.surface },
   heroImage: { width: '100%', height: '100%' },
   heroPlaceholder: { justifyContent: 'center', alignItems: 'center' },
   heroBack: {
     position: 'absolute', top: 16, left: 16,
-    width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.3)',
+    width: 44, height: 44, borderRadius: 22, backgroundColor: '#FFFFFF',
     justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 3,
   },
   heroActions: {
     position: 'absolute', top: 16, right: 16, flexDirection: 'row', gap: 8,
@@ -1069,45 +819,56 @@ const styles = StyleSheet.create({
   },
 
   petInfo: {
-    backgroundColor: Colors.white, borderRadius: 16,
-    marginTop: 12, paddingTop: 20, paddingHorizontal: 4, paddingBottom: 20,
+    backgroundColor: Colors.white,
+    paddingTop: 16, paddingHorizontal: 16, paddingBottom: 24, gap: 12,
   },
   petHeader: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 4,
+    flexDirection: 'row', alignItems: 'flex-end', gap: 8,
   },
   petName: {
-    flex: 1, fontSize: 22, fontFamily: Fonts.extrabold, fontWeight: '800', color: Colors.navy,
+    flex: 1, fontSize: 26, fontFamily: Fonts.extrabold, fontWeight: '800', color: '#26265E',
   },
   petAge: {
-    fontSize: 16, fontFamily: Fonts.bold, color: Colors.coral, marginTop: 4, flexShrink: 0,
+    fontSize: 16, fontFamily: Fonts.bold, fontWeight: '700', color: Colors.coral, flexShrink: 0,
   },
   petBreedLocation: {
-    fontSize: 13, fontFamily: Fonts.medium, color: '#6B7280', marginBottom: 16,
+    fontSize: 14, fontFamily: Fonts.regular, color: '#6B7280',
   },
 
-  traitChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
+  traitChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   traitChip: {
     backgroundColor: '#F1F2F8', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6,
   },
   traitText: {
-    fontSize: FontSizes.sm, fontFamily: Fonts.medium, color: Colors.navy,
+    fontSize: 13, fontFamily: Fonts.semibold, fontWeight: '600', color: '#26265E',
   },
+  contactLink: { color: Colors.coral, fontFamily: Fonts.bold, fontSize: 14 },
+  chipCard: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+    backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: '#EEF0F4',
+    padding: 14,
+  },
+  ctaRow: { flexDirection: 'row', gap: 10, marginTop: 8 },
+  listingRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#EEF0F4' },
+  listingKey: { fontSize: 13, fontFamily: Fonts.semibold, color: '#6B7280' },
+  listingVal: { flex: 1, textAlign: 'right', fontSize: 14, fontFamily: Fonts.bold, color: '#26265E' },
 
   description: {
-    fontSize: 13.5, fontFamily: Fonts.regular, color: '#4A4E69', lineHeight: 22, marginBottom: 20,
+    fontSize: 13.5, fontFamily: Fonts.regular, color: '#4A4E69', lineHeight: 22,
   },
 
-  healthRow: { flexDirection: 'row', gap: 10, marginBottom: 20 },
+  healthRow: { flexDirection: 'row', gap: 10 },
   healthTile: {
-    flex: 1, backgroundColor: Colors.surface, borderRadius: 14, padding: 14, alignItems: 'center', gap: 8,
+    flex: 1, backgroundColor: '#E4F3F1', borderRadius: 14, padding: 14, alignItems: 'center', gap: 8,
   },
+  healthTileOn: { backgroundColor: '#E4F3F1' },
   healthCheck: {
-    width: 24, height: 24, borderRadius: 12, backgroundColor: Colors.border,
+    width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(46,158,150,.18)',
     justifyContent: 'center', alignItems: 'center',
   },
-  healthCheckDone: { backgroundColor: Colors.teal },
+  healthCheckDone: { backgroundColor: 'transparent' },
   healthLabel: {
-    fontSize: 11, fontFamily: Fonts.semibold, color: Colors.text, textAlign: 'center',
+    fontSize: 11, fontFamily: Fonts.semibold, color: Colors.tealDark, textAlign: 'center',
   },
 
   // Identity & Records card

@@ -4,20 +4,22 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { MapPin, PawPrint, Siren, Crosshair, Sparkles } from 'lucide-react-native';
 import AppHeader from '@/components/AppHeader';
 import NearbyMap from '@/components/NearbyMap';
+import { FilterChips } from '@/components/Tabs';
 import type { NearbyLayer, NearbyPin } from '@/components/NearbyMapProps';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
-import { loadHelpFlags } from '@/lib/help-alerts';
 import { geocodeMany, geocodePlace, reverseGeocode } from '@/lib/geocode';
 import { decodeGeohash } from '@/lib/geohash';
 
 const FALLBACK = { lat: 40.758, lng: -73.985 };
 const RADII = [5, 10, 25];
+const DEFAULT_MI = 10;
+const EXPAND_MI = 25;
+const LOAD_MS = 4500;
 
 const TYPE_LABEL: Record<string, string> = {
   lost: 'Lost pet', stray: 'Found stray', injured: 'Injured animal',
@@ -38,6 +40,25 @@ function kmBetween(a: { lat: number; lng: number }, b: { lat: number; lng: numbe
     Math.sin(dLat / 2) ** 2 +
     Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
+function timed<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(fallback), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      () => { clearTimeout(t); resolve(fallback); },
+    );
+  });
+}
+
+function fetchJson(url: string, ms = 7000): Promise<any> {
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const t = setTimeout(() => ctrl?.abort(), ms);
+  return fetch(url, ctrl ? { signal: ctrl.signal } : undefined)
+    .then((r) => (r.ok ? r.json() : {}))
+    .catch(() => ({}))
+    .finally(() => clearTimeout(t));
 }
 
 function reportTitle(r: { pet_name?: string | null; location_address?: string; report_type?: string }) {
@@ -124,8 +145,9 @@ export default function NearbyScreen() {
   const { user } = useAuth();
   const [center, setCenter] = useState(FALLBACK);
   const [located, setLocated] = useState(false);
-  const [radiusMi, setRadiusMi] = useState(5);
-  const [layers, setLayers] = useState<Record<NearbyLayer, boolean>>({ reports: true, pets: true, clinics: true, providers: true });
+  const [radiusMi, setRadiusMi] = useState(DEFAULT_MI);
+  const [rangeNote, setRangeNote] = useState<string | null>(null);
+  const [layer, setLayer] = useState<NearbyLayer>('reports');
   const [pins, setPins] = useState<NearbyPin[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -134,22 +156,21 @@ export default function NearbyScreen() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    const watchdog = setTimeout(() => setLoading(false), LOAD_MS);
     try {
-      const flags = user?.id ? await loadHelpFlags(user.id) : null;
-      if (flags?.alert_radius_mi) setRadiusMi(flags.alert_radius_mi);
-      const device = await deviceLocation();
+      const device = await timed(deviceLocation(), 2500, null);
       let loc = device;
       let didLocate = Boolean(device);
       let state = '';
       if (didLocate && loc) {
-        const rev = await reverseGeocode(loc.lat, loc.lng);
+        const rev = await timed(reverseGeocode(loc.lat, loc.lng), 2500, null);
         state = (rev?.stateCode || '').slice(0, 2).toUpperCase();
       }
       if (!state && user?.id) {
         const { data: prof } = await supabase.from('profiles').select('address_city, address_state').eq('id', user.id).maybeSingle();
         state = String(prof?.address_state || '').slice(0, 2).toUpperCase();
         if (!loc && (prof?.address_city || prof?.address_state)) {
-          loc = await geocodePlace([prof.address_city, prof.address_state].filter(Boolean).join(', '));
+          loc = await timed(geocodePlace([prof.address_city, prof.address_state].filter(Boolean).join(', ')), 4000, null);
         }
       }
       if (!loc) loc = FALLBACK;
@@ -180,9 +201,9 @@ export default function NearbyScreen() {
           .eq('is_public', true)
           .order('created_at', { ascending: false })
           .limit(80),
-        fetch(`/api/rescuegroups?pets=1&state=${encodeURIComponent(state)}`).then((r) => r.ok ? r.json() : { pets: [] }).catch(() => ({ pets: [] })),
-        fetch(`/api/rescuegroups?state=${encodeURIComponent(state)}`).then((r) => r.ok ? r.json() : { orgs: [] }).catch(() => ({ orgs: [] })),
-        fetch(`/api/nearby-clinics?kind=clinic&lat=${here.lat}&lng=${here.lng}`).then((r) => r.json()).catch(() => ({ clinics: [] })),
+        fetchJson(`/api/rescuegroups?pets=1&state=${encodeURIComponent(state)}`),
+        fetchJson(`/api/rescuegroups?state=${encodeURIComponent(state)}`),
+        fetchJson(`/api/nearby-clinics?kind=clinic&lat=${here.lat}&lng=${here.lng}`),
         user
           ? supabase.from('service_provider_profiles').select('user_id, services, radius_mi, rating, show_on_map').eq('show_on_map', true).limit(80)
           : Promise.resolve({ data: [] as any[], error: null }),
@@ -243,13 +264,25 @@ export default function NearbyScreen() {
         const q = [p?.address_city, p?.address_state].filter(Boolean).join(', ');
         if (q) needGeo.push(q);
       }
-      const geo = await geocodeMany(needGeo);
+      const geo = await timed(geocodeMany(needGeo), 5000, new Map());
 
       const next: NearbyPin[] = [];
-      const preferredMi = flags?.alert_radius_mi || 5;
       const paint = () => {
-        const view = viewForPins(here, didLocate, next, preferredMi);
-        setRadiusMi(view.mi);
+        const view = viewForPins(here, didLocate, next, DEFAULT_MI);
+        const km10 = DEFAULT_MI * 1.609 + 0.05;
+        const km25 = EXPAND_MI * 1.609 + 0.05;
+        const n10 = next.filter((p) => kmBetween(view.center, p) <= km10).length;
+        const n25 = next.filter((p) => kmBetween(view.center, p) <= km25).length;
+        let mi = Math.max(view.mi, DEFAULT_MI);
+        let note: string | null = null;
+        if (n10 === 0 && n25 > 0) {
+          mi = EXPAND_MI;
+          note = 'Nothing within 10 mi — showing 25 mi';
+        } else if (n10 === 0) {
+          mi = DEFAULT_MI;
+        }
+        setRadiusMi(mi);
+        setRangeNote(note);
         setCenter(view.center);
         setPins([...next]);
         setLoading(false);
@@ -266,6 +299,10 @@ export default function NearbyScreen() {
           subtitle: TYPE_LABEL[r.report_type] || r.report_type,
           color: SEV_COLOR[r.severity] || Colors.accent,
           href: `/report-details?id=${r.id}`,
+          glyph: r.severity === 'standard' ? '?' : '!',
+          tag: (r.severity || 'standard').toUpperCase(),
+          tagFg: SEV_COLOR[r.severity] || Colors.accent,
+          tagBg: r.severity === 'critical' ? Colors.criticalBg : r.severity === 'urgent' ? Colors.urgentBg : Colors.standardBg,
         });
       }
 
@@ -293,6 +330,10 @@ export default function NearbyScreen() {
             color: Colors.teal,
             href: `/pet-details?id=${p.id}`,
             count: 1,
+            glyph: '1',
+            tag: 'ADOPTABLE',
+            tagFg: Colors.tealDark,
+            tagBg: Colors.tealBg,
           });
         } else {
           next.push({
@@ -304,6 +345,10 @@ export default function NearbyScreen() {
             color: Colors.teal,
             href: '/pets',
             count: n,
+            glyph: String(n),
+            tag: 'ADOPTABLE',
+            tagFg: Colors.tealDark,
+            tagBg: Colors.tealBg,
           });
         }
       }
@@ -324,6 +369,10 @@ export default function NearbyScreen() {
           color: Colors.navy,
           href: `/organization-details?id=${o.id}`,
           initial: orgInitial(o.name || ''),
+          glyph: orgInitial(o.name || ''),
+          tag: String(o.org_type || 'ORG').toUpperCase(),
+          tagFg: Colors.navy,
+          tagBg: Colors.surface,
         });
       }
 
@@ -365,7 +414,9 @@ export default function NearbyScreen() {
       paint();
     } catch {
       setPins([]);
+      setRangeNote(null);
     } finally {
+      clearTimeout(watchdog);
       setLoading(false);
     }
   }, [user?.id]);
@@ -373,11 +424,8 @@ export default function NearbyScreen() {
   useEffect(() => { load(); }, [load]);
 
   const visible = useMemo(() => {
-    return pins.filter((p) => {
-      if (!layers[p.layer]) return false;
-      return kmBetween(center, p) <= radiusKm + 0.05;
-    });
-  }, [pins, layers, center, radiusKm]);
+    return pins.filter((p) => p.layer === layer && kmBetween(center, p) <= radiusKm + 0.05);
+  }, [pins, layer, center, radiusKm]);
 
   const onSelect = (pin: NearbyPin) => {
     setSelectedId(pin.id);
@@ -389,14 +437,14 @@ export default function NearbyScreen() {
     router.push(pin.href as any);
   };
 
-  const toggle = (key: NearbyLayer) => setLayers((s) => ({ ...s, [key]: !s[key] }));
-
-  const counts = {
-    reports: visible.filter((p) => p.layer === 'reports').length,
-    pets: visible.reduce((s, p) => s + (p.layer === 'pets' ? (p.count || 1) : 0), 0),
-    clinics: visible.filter((p) => p.layer === 'clinics').length,
-    providers: visible.filter((p) => p.layer === 'providers').length,
+  const LAYER_COPY: Record<NearbyLayer, string> = {
+    reports: 'Reports',
+    pets: 'Adoptable pets',
+    clinics: 'Shelters & clinics',
+    providers: 'Providers',
   };
+
+  const toggle = (key: NearbyLayer) => setLayer(key);
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
@@ -410,46 +458,46 @@ export default function NearbyScreen() {
           onSelect={onSelect}
         />
         <View style={styles.chips} pointerEvents="box-none">
-          <View style={styles.chipRow}>
-            {([
-              { key: 'reports' as const, label: 'Reports', icon: Siren, n: counts.reports },
-              { key: 'pets' as const, label: 'Adoptable pets', icon: PawPrint, n: counts.pets },
-              { key: 'clinics' as const, label: 'Shelters & clinics', icon: MapPin, n: counts.clinics },
-              { key: 'providers' as const, label: 'Providers', icon: Sparkles, n: counts.providers },
-            ]).map((c) => {
-              const on = layers[c.key];
-              const Icon = c.icon;
-              return (
-                <TouchableOpacity key={c.key} style={[styles.chip, on && styles.chipOn]} onPress={() => toggle(c.key)} activeOpacity={0.85}>
-                  <Icon size={14} color={on ? Colors.white : Colors.navy} />
-                  <Text style={[styles.chipTxt, on && styles.chipTxtOn]}>{c.label} {c.n}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-          <View style={styles.chipRow}>
-            {RADII.map((mi) => (
-              <TouchableOpacity key={mi} style={[styles.rChip, radiusMi === mi && styles.rChipOn]} onPress={() => setRadiusMi(mi)} activeOpacity={0.85}>
-                <Text style={[styles.rTxt, radiusMi === mi && styles.rTxtOn]}>{mi} mi</Text>
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity style={styles.rChip} onPress={load} activeOpacity={0.85}>
-              <Crosshair size={13} color={Colors.navy} />
-              <Text style={styles.rTxt}>{located ? 'My location' : 'Locate'}</Text>
-            </TouchableOpacity>
+          <FilterChips
+            floating
+            items={[
+              { key: 'reports', label: 'Reports' },
+              { key: 'pets', label: 'Adoptable pets' },
+              { key: 'clinics', label: 'Shelters & clinics' },
+              { key: 'providers', label: 'Providers' },
+            ]}
+            value={layer}
+            onChange={toggle}
+          />
+          <View style={{ marginTop: 8 }}>
+            <FilterChips
+              floating
+              size="sm"
+              items={RADII.map((mi) => ({ key: String(mi), label: `${mi} mi` }))}
+              value={String(radiusMi)}
+              onChange={(k) => { setRadiusMi(Number(k)); setRangeNote(null); }}
+            />
           </View>
         </View>
         <View style={styles.sheet}>
           <View style={styles.handle} />
           <Text style={styles.sheetTitle}>
-            {loading ? 'Finding what’s around you' : `${visible.length} within ${radiusMi} mi`}
+            {loading
+              ? 'Finding what’s around you'
+              : rangeNote
+                ? rangeNote
+                : `${visible.length} items on map · ${LAYER_COPY[layer]}`}
           </Text>
           {loading ? (
             <ActivityIndicator color={Colors.coral} style={{ marginTop: 12 }} />
           ) : (
             <ScrollView style={styles.sheetList} showsVerticalScrollIndicator={false}>
               {visible.length === 0 ? (
-                <Text style={styles.empty}>Nothing in this radius yet. Widen the range or turn on another layer.</Text>
+                <Text style={styles.empty}>
+                  {rangeNote
+                    ? 'Nothing in this radius yet. Widen the range or pick another layer.'
+                    : `Nothing within ${radiusMi} mi yet. Widen the range or pick another layer.`}
+                </Text>
               ) : visible.map((p) => (
                 <TouchableOpacity
                   key={p.id}
@@ -458,13 +506,17 @@ export default function NearbyScreen() {
                   activeOpacity={0.85}
                 >
                   <View style={[styles.badge, { backgroundColor: p.color }]}>
-                    <Text style={styles.badgeTxt}>{p.count != null ? p.count : (p.initial || '•')}</Text>
+                    <Text style={styles.badgeTxt}>{p.glyph || p.count || p.initial || '•'}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
+                    {p.tag ? (
+                      <View style={[styles.sevPill, { backgroundColor: p.tagBg || Colors.surface }]}>
+                        <Text style={[styles.sevTxt, { color: p.tagFg || Colors.navy }]}>{p.tag}</Text>
+                      </View>
+                    ) : null}
                     <Text style={styles.rowTitle} numberOfLines={1}>{p.title}</Text>
-                    {p.subtitle ? <Text style={styles.rowSub} numberOfLines={1}>{p.subtitle}</Text> : null}
                   </View>
-                  <Text style={styles.ago}>{kmBetween(center, p).toFixed(1)} km</Text>
+                  <Text style={styles.chev}>›</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -478,42 +530,28 @@ export default function NearbyScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: Colors.screen },
   stage: { flex: 1, position: 'relative' },
-  chips: { position: 'absolute', top: 10, left: 12, right: 12, gap: 8 },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: 'rgba(255,255,255,0.94)', borderRadius: 999,
-    paddingHorizontal: 12, paddingVertical: 8,
-    borderWidth: 1, borderColor: '#E8EAF0',
-  },
-  chipOn: { backgroundColor: Colors.navy, borderColor: Colors.navy },
-  chipTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.navy },
-  chipTxtOn: { color: Colors.white },
-  rChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: 'rgba(255,255,255,0.94)', borderRadius: 999,
-    paddingHorizontal: 10, paddingVertical: 6,
-    borderWidth: 1, borderColor: '#E8EAF0',
-  },
-  rChipOn: { backgroundColor: Colors.teal, borderColor: Colors.teal },
-  rTxt: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy },
-  rTxtOn: { color: Colors.white },
+  chips: { position: 'absolute', top: 10, left: 12, right: 12, zIndex: 20 },
   sheet: {
     position: 'absolute', left: 0, right: 0, bottom: 0,
     backgroundColor: Colors.white, borderTopLeftRadius: 18, borderTopRightRadius: 18,
     paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12,
-    maxHeight: '42%',
-    borderTopWidth: 1, borderColor: Colors.border,
+    maxHeight: '46%',
+    shadowColor: '#26265E',
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: -8 },
+    elevation: 8,
   },
   handle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: '#D9DCE6', marginBottom: 8 },
-  sheetTitle: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.navy, marginBottom: 8 },
+  sheetTitle: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.navy, marginBottom: 8 },
   sheetList: { flexGrow: 0 },
   empty: { fontFamily: Fonts.regular, fontSize: FontSizes.sm, color: Colors.textSecondary, paddingVertical: 8 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, paddingHorizontal: 4, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, backgroundColor: '#FBFBFD', marginBottom: 8, paddingRight: 10 },
   rowOn: { backgroundColor: Colors.surface },
-  badge: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  badgeTxt: { fontFamily: Fonts.bold, fontSize: 10, color: Colors.white },
-  rowTitle: { fontFamily: Fonts.bold, fontSize: 14, color: Colors.navy },
-  rowSub: { fontFamily: Fonts.regular, fontSize: 12, color: Colors.textSecondary, marginTop: 1 },
-  ago: { fontFamily: Fonts.medium, fontSize: 11, color: Colors.textTertiary },
+  badge: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginLeft: 8 },
+  badgeTxt: { fontFamily: Fonts.extrabold, fontSize: 15, color: Colors.white },
+  sevPill: { alignSelf: 'flex-start', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, marginBottom: 2 },
+  sevTxt: { fontFamily: Fonts.extrabold, fontSize: 10 },
+  rowTitle: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.navy },
+  chev: { fontFamily: Fonts.bold, fontSize: 18, color: '#9AA1AC' },
 });

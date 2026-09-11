@@ -1,10 +1,15 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
-import Svg, { Polyline, Line, Circle, G } from 'react-native-svg';
+import Svg, { Polyline, Line, Circle, G, Text as SvgText } from 'react-native-svg';
 import { Colors } from '@/constants/Colors';
-import { Fonts, FontSizes } from '@/constants/Fonts';
+import { Fonts } from '@/constants/Fonts';
 
-export type WeightPoint = { weight_lb: number; measured_on: string | null; source?: string | null };
+export type WeightPoint = { weight_lb: number | string | null; measured_on: string | null; source?: string | null; bcs?: number | null };
+
+function toNum(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+  return Number.isFinite(n) ? n : null;
+}
 
 export function WeightLineChart({
   points,
@@ -19,8 +24,20 @@ export function WeightLineChart({
 }) {
   const [tip, setTip] = useState<string | null>(null);
   const w = compact ? 280 : 640;
-  const pad = 8;
-  const usable = points.filter((p) => typeof p.weight_lb === 'number');
+  const pad = 18;
+  const usable: { weight_lb: number; measured_on: string | null; source?: string | null; bcs: number | null }[] = [];
+  for (const p of points) {
+    const lb = toNum(p.weight_lb);
+    if (lb == null) continue;
+    usable.push({
+      weight_lb: lb,
+      measured_on: p.measured_on,
+      source: p.source,
+      bcs: toNum(p.bcs),
+    });
+  }
+  usable.sort((a, b) => String(a.measured_on || '').localeCompare(String(b.measured_on || '')));
+  if (typeof console !== 'undefined') console.log('weights.length', usable.length);
   if (usable.length < 1) return null;
   const vals = usable.map((p) => p.weight_lb);
   if (targetLb != null) vals.push(targetLb);
@@ -38,17 +55,26 @@ export function WeightLineChart({
         ) : null}
         <Polyline points={poly} fill="none" stroke={Colors.teal} strokeWidth={2} />
         {usable.map((p, i) => (
-          <G key={i} onPress={() => setTip(`${p.weight_lb} lb · ${p.measured_on || '—'} · ${p.source || 'recorded'}`)}>
+          <G key={i} onPress={() => setTip(`${p.weight_lb} lb${p.bcs != null ? ` · BCS ${p.bcs}` : ''} · ${p.measured_on || '—'} · ${p.source || 'recorded'}`)}>
             <Circle cx={x(i)} cy={y(p.weight_lb)} r={4} fill={Colors.navy} />
+            {p.bcs != null ? (
+              <SvgText x={x(i)} y={y(p.weight_lb) - 8} fontSize="9" fontWeight="700" fill={Colors.navy} textAnchor="middle">
+                {p.bcs}
+              </SvgText>
+            ) : null}
           </G>
         ))}
       </Svg>
       <View style={styles.row}>
         {usable.map((p, i) => (
-          <Pressable key={i} onPress={() => setTip(`${p.weight_lb} lb · ${p.measured_on || '—'} · ${p.source || 'recorded'}`)} style={{ flex: 1, height: 16 }} />
+          <Pressable
+            key={i}
+            onPress={() => setTip(`${p.weight_lb} lb${p.bcs != null ? ` · BCS ${p.bcs}` : ''} · ${p.measured_on || '—'} · ${p.source || 'recorded'}`)}
+            style={{ flex: 1, height: 16 }}
+          />
         ))}
       </View>
-      {tip ? <Text style={styles.tip}>{tip}</Text> : <Text style={styles.hint}>Tap a point for date / source</Text>}
+      {tip ? <Text style={styles.tip}>{tip}</Text> : <Text style={styles.hint}>Tap a point for date / BCS / source</Text>}
     </View>
   );
 }

@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, Image, ActivityIndicator, Share, Platform } from 'react-native';
-import * as Linking from 'expo-linking';
 import { X } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { SHARE_LEVELS, type ShareLevel } from '@/lib/admin-access';
+import { publicShareUrl } from '@/lib/share-invite';
 
 type Rel = {
   id: string;
@@ -55,8 +55,7 @@ export default function SharePetSheet({
     }).select('token').maybeSingle();
     setBusy(false);
     if (e || !data?.token) { setError(e?.message || 'Could not create invite.'); return; }
-    const url = Linking.createURL('/share-accept', { queryParams: { token: data.token } });
-    setLink(url);
+    setLink(publicShareUrl(data.token));
   };
 
   const revoke = async (id: string) => {

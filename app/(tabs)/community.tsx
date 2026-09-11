@@ -27,6 +27,7 @@ import {
   Sparkles,
 } from 'lucide-react-native';
 import { InlineBanner } from '@/components/InlineBanner';
+import { FilterChips, SegmentedTabs } from '@/components/Tabs';
 import { ConfirmDialog, type ConfirmConfig } from '@/components/ConfirmDialog';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
@@ -654,19 +655,17 @@ export default function CommunityScreen() {
           }} />
         }
       >
-      <View style={styles.segmentContainer}>
-        {(['orgs', 'fosters', 'stories', 'services'] as Segment[]).map((seg) => (
-          <TouchableOpacity
-            key={seg}
-            style={[styles.segment, activeSegment === seg && styles.segmentActive]}
-            onPress={() => setActiveSegment(seg)}
-            activeOpacity={0.85}
-          >
-            <Text style={[styles.segmentText, activeSegment === seg && styles.segmentTextActive]}>
-              {seg === 'orgs' ? 'Orgs' : seg === 'fosters' ? 'Fosters' : seg === 'stories' ? 'Stories' : 'Services'}
-            </Text>
-          </TouchableOpacity>
-        ))}
+      <View style={{ marginBottom: 16 }}>
+      <SegmentedTabs
+        items={[
+          { key: 'orgs', label: 'Orgs' },
+          { key: 'fosters', label: 'Fosters' },
+          { key: 'stories', label: 'Stories' },
+          { key: 'services', label: 'Services' },
+        ]}
+        value={activeSegment}
+        onChange={setActiveSegment}
+      />
       </View>
       {(loading && activeSegment !== 'services' && orgs.length === 0) ? (
         <View style={styles.loadingContainer}>
@@ -690,24 +689,13 @@ export default function CommunityScreen() {
                 placeholder="Search shelters, rescues, city…"
                 placeholderTextColor={Colors.textTertiary}
               />
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.filterChipsRow}
-              >
-                {TYPE_FILTERS.map((f) => (
-                  <TouchableOpacity
-                    key={f}
-                    style={[styles.filterChip, typeFilter === f && styles.filterChipActive]}
-                    onPress={() => setTypeFilter(f)}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={[styles.filterChipText, typeFilter === f && styles.filterChipTextActive]}>
-                      {f}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
+              <View style={{ marginBottom: 16 }}>
+              <FilterChips
+                items={TYPE_FILTERS.map((f) => ({ key: f, label: f }))}
+                value={typeFilter}
+                onChange={setTypeFilter}
+              />
+              </View>
               <TouchableOpacity
                 style={styles.orgRegisterCTA}
                 onPress={() => router.push('/register-organization')}
@@ -932,25 +920,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 12, marginBottom: 12,
     fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.text, backgroundColor: Colors.white,
   },
-  segmentContainer: {
-    flexDirection: 'row',
-    backgroundColor: Colors.surfaceAlt,
-    borderRadius: 999,
-    padding: 4,
-    marginHorizontal: 20,
-    marginBottom: 16,
-  },
-  segment: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderRadius: 999,
-  },
-  segmentActive: { backgroundColor: Colors.navy },
-  segmentText: {
-    fontSize: 12, fontFamily: Fonts.semibold, color: Colors.textSecondary,
-  },
-  segmentTextActive: { color: Colors.white },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   scrollContent: { paddingHorizontal: 20, paddingBottom: 100, maxWidth: 720, width: '100%', alignSelf: 'center' },
   apiBanner: {
@@ -970,18 +939,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border,
   },
   showMoreText: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.navy },
-  filterChipsRow: { gap: 8, marginBottom: 16 },
-  filterChip: {
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999,
-    backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border,
-  },
-  filterChipActive: {
-    backgroundColor: Colors.navy, borderColor: Colors.navy,
-  },
-  filterChipText: {
-    fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.textSecondary,
-  },
-  filterChipTextActive: { color: Colors.white },
   registerCTA: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     borderWidth: 1.5, borderColor: Colors.coral, borderStyle: 'dashed',

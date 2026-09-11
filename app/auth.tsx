@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Image, Platform, ScrollView, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -7,11 +7,15 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { isPlatformAdmin } from '@/lib/admin-access';
 import { Page } from '@/components/Page';
+import { consumeAuthNext, peekAuthNext } from '@/lib/share-invite';
 
 function redirectTo() {
+  const pending = peekAuthNext();
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    if (pending) return `${window.location.origin}${pending}`;
     return `${window.location.origin}/`;
   }
+  if (pending) return `https://rescue-army.com${pending}`;
   return 'https://rescue-army.com/';
 }
 
@@ -35,14 +39,14 @@ async function afterLogin(email: string) {
     role = profile?.role || '';
     if (profile && profile.onboarding_done === false) onboarded = false;
   }
-  const dest = onboarded ? '/' : '/onboarding';
+  const dest = consumeAuthNext() || (onboarded ? '/' : '/onboarding');
   const label = isPlatformAdmin(role, loginEmail) ? 'Rescue Army admin' : 'Member';
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
     try { sessionStorage.setItem('ra_login_toast', label); } catch {}
     window.location.assign(dest);
     return;
   }
-  router.replace(onboarded ? '/(tabs)' : '/onboarding');
+  router.replace(dest === '/' ? '/(tabs)' : dest as any);
 }
 
 export default function AuthScreen() {
@@ -54,6 +58,9 @@ export default function AuthScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const resumeHint = Platform.OS === 'web' ? peekAuthNext() : null;
+
+  useEffect(() => { peekAuthNext(); }, []);
 
   const submitEmail = async () => {
     const em = email.trim();
@@ -119,7 +126,9 @@ export default function AuthScreen() {
         )}
         {wide && <Text style={styles.h1}>Sign in</Text>}
         <Text style={styles.lead}>
-          The first person to sign in becomes <Text style={styles.leadEm}>Administrator</Text> and can approve orgs, IDs, and reports.
+          {resumeHint?.includes('share-accept')
+            ? 'Sign in to accept the pet invite. You’ll return to the Accept screen.'
+            : <>The first person to sign in becomes <Text style={styles.leadEm}>Administrator</Text> and can approve orgs, IDs, and reports.</>}
         </Text>
 
         {error ? <Text style={styles.err}>{error}</Text> : null}

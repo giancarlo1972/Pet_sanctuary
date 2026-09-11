@@ -11,6 +11,10 @@ export type NearbyPin = {
   href: string;
   initial?: string;
   count?: number;
+  glyph?: string;
+  tag?: string;
+  tagFg?: string;
+  tagBg?: string;
 };
 
 export type NearbyMapProps = {
@@ -20,4 +24,6 @@ export type NearbyMapProps = {
   pins: NearbyPin[];
   selectedId?: string | null;
   onSelect: (pin: NearbyPin) => void;
+  /** nearby = search radius + pins; pin = coral location only (report step 3). */
+  mode?: 'nearby' | 'pin';
 };

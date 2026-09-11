@@ -9,11 +9,15 @@ function isHttpUrl(value: string): boolean {
 }
 
 async function resolveStorageUrl(path: string): Promise<string | null> {
-  const photo = await supabase.storage.from('pet-photos').createSignedUrl(path, EXPIRY);
-  if (photo.data?.signedUrl) return photo.data.signedUrl;
-  const docs = await supabase.storage.from('pet-documents').createSignedUrl(path, EXPIRY);
-  if (docs.data?.signedUrl) return docs.data.signedUrl;
-  const pub = supabase.storage.from('pet-photos').getPublicUrl(path);
+  const buckets = path.startsWith('reports/')
+    ? ['report-photos', 'pet-photos']
+    : ['pet-photos', 'report-photos', 'pet-documents'];
+  for (const bucket of buckets) {
+    const signed = await supabase.storage.from(bucket).createSignedUrl(path, EXPIRY);
+    if (signed.data?.signedUrl && !signed.error) return signed.data.signedUrl;
+  }
+  const publicBucket = path.startsWith('reports/') ? 'report-photos' : 'pet-photos';
+  const pub = supabase.storage.from(publicBucket).getPublicUrl(path);
   return pub.data?.publicUrl || null;
 }
 

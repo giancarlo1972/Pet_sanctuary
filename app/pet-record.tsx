@@ -3009,9 +3009,9 @@ export default function PetRecordScreen() {
     }
     for (const d of documents) {
       const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
-      const clinic = d.clinic || ai.clinic || ai.clinic_name;
+      const clinic = d.issuing_clinic || d.clinic || ai.issuing_clinic || ai.clinic || ai.clinic_name;
       for (const v of ai.visits || []) {
-        push(v.owner_instructions || v.home_care || v.instructions || v.notes || v.summary, v.date || v.occurred_on, v.clinic || v.clinic_name || null);
+        push(v.owner_instructions || v.home_care || v.instructions || v.notes || v.summary, v.event_date || v.date || v.occurred_on, v.clinic || v.clinic_name || clinic || null);
       }
       for (const n of ai.owner_notes || []) {
         push(typeof n === 'string' ? n : (n.text || n.note), n.date || d.taken_on, clinic);

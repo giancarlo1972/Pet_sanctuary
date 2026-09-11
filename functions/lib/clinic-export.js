@@ -838,10 +838,9 @@ export function harvestIdentity(src, asOf) {
   if (!date_of_birth && age_years && asOf) date_of_birth = dobFromAge(age_years, asOf);
   return {
     ...header,
-    // Age is derived from DOB at display time and is never a stored pet field.
-    age_years: date_of_birth ? null : age_years,
     date_of_birth,
     date_of_birth_estimated: Boolean(!header.date_of_birth && date_of_birth),
+    age_years: null,
   };
 }
 
@@ -1454,8 +1453,10 @@ export function pipelineCode(text) {
   });
   const merged = mergeRowSets(parts);
   const harvested = harvestKnownFacts(text);
+  const header = parsePatientHeader(text);
   if (harvested.lifestyle && !merged.lifestyle) merged.lifestyle = harvested.lifestyle;
-  if (harvested.identity) merged.identity = { ...(merged.identity || {}), ...harvested.identity };
+  merged.identity = { ...header, ...(merged.identity || {}), ...(harvested.identity || {}) };
+  if (merged.identity) merged.identity.age_years = null;
   // Safety net for single-visit prose (e.g. Aurora) if a greedy split hid vaccines/labs.
   if (!merged.vaccinations.length && harvested.vaccinations.length) merged.vaccinations = harvested.vaccinations;
   if (!merged.visits.length && harvested.visits.length) merged.visits = harvested.visits;

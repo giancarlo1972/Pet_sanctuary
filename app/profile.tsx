@@ -189,7 +189,7 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
 
     const petColsFocal = 'id, name, species, main_photo_url, photo_focal, listing_type, status';
     const petCols = 'id, name, species, main_photo_url, listing_type, status';
-    let [relsRes, ownedRes, xfersRes] = await Promise.all([
+    let [relsRes, ownedRes, xfersRes]: any[] = await Promise.all([
       supabase.from('pet_relationships')
         .select(`id, pet_id, relationship, ended_on, pets(${petColsFocal})`)
         .eq('user_id', userId),

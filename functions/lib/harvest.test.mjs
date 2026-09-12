@@ -9,6 +9,9 @@ import {
   itemsTrulyUndated,
   monthEndIso,
   dobFromAge,
+  ageYearsAt,
+  attachDerivedAge,
+  canApplyIdentityField,
   segment,
   classifySegment,
   parseSegmentCode,
@@ -75,6 +78,7 @@ describe('Aurora visit harvest', () => {
     assert.ok(raw.identity?.date_of_birth);
     assert.equal(raw.identity.date_of_birth, dobFromAge(1.2, '2026-09-02'));
     assert.equal(raw.identity.date_of_birth_estimated, true);
+    assert.equal(raw.identity.age_years, 1.2);
   });
 
   it('has 0 undated items', () => {
@@ -293,7 +297,7 @@ Assessment: wellness
     assert.equal(ident.spayed_neutered, true);
     assert.equal(ident.date_of_birth, '2020-06-15');
     assert.equal(ident.microchip, '981020000000001');
-    assert.equal(ident.age_years, null);
+    assert.equal(ident.age_years, 6.2);
     assert.equal(out.issuing_clinic, 'At Home Veterinary');
     assert.equal(detectExportingPractice(GINA_CLINIC_FIXTURE), 'At Home Veterinary');
     for (const v of out.visits) {
@@ -401,7 +405,7 @@ describe('pipeline — Ryan BondVet identity header', () => {
     assert.equal(ident.patient_id, 'BV-10482');
     assert.equal(ident.date_of_birth, '2022-01-15');
     assert.equal(ident.document_date, '2025-01-07');
-    assert.equal(ident.age_years, null);
+    assert.equal(ident.age_years, 3.0);
     assert.equal(out.document_date, '2025-01-07');
   });
 
@@ -438,5 +442,53 @@ Wellness exam
     const vis2 = segment(copy).find((s) => s.type === 'visit');
     assert.match(String(vis2.clinic), /At Home/i);
     assert.doesNotMatch(String(vis2.clinic || ''), /Bond/i);
+  });
+});
+
+describe('ageYearsAt — derived at document_date, never stored', () => {
+  it('Ryan DOB 2022-01-15 at 2025-01-07 is 3.0', () => {
+    assert.equal(ageYearsAt('2022-01-15', '2025-01-07'), 3.0);
+  });
+
+  it('one-decimal example 3.6 (DOB 2021-06-07 at 2025-01-07)', () => {
+    assert.equal(ageYearsAt('2021-06-07', '2025-01-07'), 3.6);
+  });
+
+  it('Gina DOB 2020-06-15 at latest visit 2026-09-02 is 6.2', () => {
+    assert.equal(ageYearsAt('2020-06-15', '2026-09-02'), 6.2);
+  });
+
+  it('null when DOB missing; never invents today', () => {
+    assert.equal(ageYearsAt(null, '2025-01-07'), null);
+    assert.equal(ageYearsAt('2022-01-15', null), null);
+  });
+
+  it('attachDerivedAge uses document_date over fallback', () => {
+    const ident = attachDerivedAge(
+      { date_of_birth: '2022-01-15', document_date: '2025-01-07' },
+      '2026-09-02',
+    );
+    assert.equal(ident.age_years, 3.0);
+  });
+});
+
+describe('canApplyIdentityField — owner-entered always wins', () => {
+  it('writes when current is null', () => {
+    assert.equal(canApplyIdentityField(null, null), true);
+    assert.equal(canApplyIdentityField('', null), true);
+    assert.equal(canApplyIdentityField(null, 'owner'), true);
+  });
+
+  it('blocks when value exists and source is owner or unknown', () => {
+    assert.equal(canApplyIdentityField('2020-06-15', 'owner'), false);
+    assert.equal(canApplyIdentityField('2020-06-15', null), false);
+    assert.equal(canApplyIdentityField('female', undefined), false);
+    assert.equal(canApplyIdentityField(false, 'owner'), false);
+  });
+
+  it('allows overwrite of prior AI/clinic extract', () => {
+    assert.equal(canApplyIdentityField('2020-06-15', 'ai_extracted'), true);
+    assert.equal(canApplyIdentityField('female', 'clinic'), true);
+    assert.equal(canApplyIdentityField(true, 'ai_extracted'), true);
   });
 });

@@ -830,18 +830,43 @@ export function harvestIdentity(src, asOf) {
   const ageHit = text.match(/\bage\s*[:.]?\s*(\d+(?:\.\d+)?)\s*(y(?:ears?)?|yr|yo)\b/i)
     || text.match(/\b(\d+(?:\.\d+)?)\s*[- ]?years?[- ]old\b/i);
   const ageMonths = text.match(/\bage\s*[:.]?\s*(\d+(?:\.\d+)?)\s*(mo|mos|months?)\b/i);
-  let age_years = null;
-  if (ageHit) age_years = parseFloat(ageHit[1]);
-  else if (ageMonths) age_years = parseFloat(ageMonths[1]) / 12;
+  let printedAge = null;
+  if (ageHit) printedAge = parseFloat(ageHit[1]);
+  else if (ageMonths) printedAge = parseFloat(ageMonths[1]) / 12;
   const header = parsePatientHeader(text);
   let date_of_birth = header.date_of_birth || null;
-  if (!date_of_birth && age_years && asOf) date_of_birth = dobFromAge(age_years, asOf);
+  if (!date_of_birth && printedAge && asOf) date_of_birth = dobFromAge(printedAge, asOf);
+  const asOfDate = header.document_date || asOf || null;
   return {
     ...header,
     date_of_birth,
     date_of_birth_estimated: Boolean(!header.date_of_birth && date_of_birth),
-    age_years: null,
+    age_years: ageYearsAt(date_of_birth, asOfDate),
   };
+}
+
+/** Years at asOf from DOB, one decimal. Null only when DOB or asOf is missing. Never persist. */
+export function ageYearsAt(dob, asOf) {
+  const dobIso = toIso(dob);
+  const asOfIso = toIso(asOf);
+  if (!dobIso || !asOfIso) return null;
+  const a = Date.parse(`${dobIso}T12:00:00Z`);
+  const b = Date.parse(`${asOfIso}T12:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return null;
+  return Math.round(((b - a) / (365.25 * 864e5)) * 10) / 10;
+}
+
+export function attachDerivedAge(identity, fallbackDate) {
+  if (!identity) return identity;
+  const asOf = identity.document_date || fallbackDate || null;
+  identity.age_years = ageYearsAt(identity.date_of_birth, asOf);
+  return identity;
+}
+
+/** Write extracted identity only when the field is empty or was not owner-entered. */
+export function canApplyIdentityField(current, source) {
+  if (current == null || current === '') return true;
+  return Boolean(source) && source !== 'owner';
 }
 
 export function dobFromAge(ageYears, asOf) {
@@ -1454,9 +1479,8 @@ export function pipelineCode(text) {
   const merged = mergeRowSets(parts);
   const harvested = harvestKnownFacts(text);
   const header = parsePatientHeader(text);
-  if (harvested.lifestyle && !merged.lifestyle) merged.lifestyle = harvested.lifestyle;
   merged.identity = { ...header, ...(merged.identity || {}), ...(harvested.identity || {}) };
-  if (merged.identity) merged.identity.age_years = null;
+  if (harvested.lifestyle && !merged.lifestyle) merged.lifestyle = harvested.lifestyle;
   // Safety net for single-visit prose (e.g. Aurora) if a greedy split hid vaccines/labs.
   if (!merged.vaccinations.length && harvested.vaccinations.length) merged.vaccinations = harvested.vaccinations;
   if (!merged.visits.length && harvested.visits.length) merged.visits = harvested.visits;
@@ -1477,6 +1501,9 @@ export function pipelineCode(text) {
   merged.date = latest?.event_date || latest?.date || harvested.date || segs[0]?.date || null;
   merged.clinic = latest?.clinic || (datedVisits.length <= 1 ? (harvested.clinic || segs[0]?.clinic || null) : null);
   merged.vet = latest?.vet || null;
+  if (merged.identity) {
+    attachDerivedAge(merged.identity, merged.document_date || latest?.event_date || latest?.date || merged.date);
+  }
   return merged;
 }
 

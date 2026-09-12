@@ -24,6 +24,7 @@ import {
   detectDocumentDate,
   stampEventDates,
   coalesceConditionOnset,
+  attachDerivedAge,
 } from '../lib/clinic-export.js';
 
 function decodedBytes(b64) {
@@ -892,7 +893,6 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
   if (harvested.identity) merged.identity = { ...header, ...(merged.identity || {}), ...harvested.identity };
   else merged.identity = { ...header, ...(merged.identity || {}) };
   if (merged.identity && !merged.identity.document_date) merged.identity.document_date = document_date;
-  if (merged.identity) merged.identity.age_years = null;
   if (!merged.vaccinations.length && harvested.vaccinations.length) merged.vaccinations = harvested.vaccinations;
   if (!merged.visits.length && harvested.visits.length) merged.visits = harvested.visits;
   if (!merged.labs.length && harvested.labs.length) merged.labs = harvested.labs;
@@ -907,6 +907,9 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
   const datedVisits = (merged.visits || []).filter((v) => v && (v.event_date || v.date));
   if (datedVisits.length <= 1) {
     inheritVisitDate(merged, latest?.event_date || latest?.date || segs[0]?.date || harvested.date);
+  }
+  if (merged.identity) {
+    attachDerivedAge(merged.identity, document_date || latest?.event_date || latest?.date);
   }
 
   const dedupeVax = [];

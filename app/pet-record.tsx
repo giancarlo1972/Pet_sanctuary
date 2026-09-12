@@ -210,6 +210,9 @@ interface Pet {
   is_mixed: boolean | null;
   breed_notes: string | null;
   date_of_birth: string | null;
+  date_of_birth_source?: string | null;
+  gender_source?: string | null;
+  spayed_neutered_source?: string | null;
   body_condition_score: number | null;
   target_weight_kg: number | null;
   previous_names: string[] | null;
@@ -412,6 +415,12 @@ function sexToGender(sex: string | null | undefined): 'female' | 'male' | null {
   if (s === 'f' || s === 'female') return 'female';
   if (s === 'm' || s === 'male') return 'male';
   return null;
+}
+
+/** Extraction writes only when the field is empty or was not owner-entered. */
+function canApplyIdentityField(current: unknown, source?: string | null) {
+  if (current == null || current === '') return true;
+  return Boolean(source) && source !== 'owner';
 }
 
 interface ExtractedData {
@@ -986,12 +995,16 @@ export default function PetRecordScreen() {
 
     const petRes = await supabase
       .from('pets')
-      .select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, body_condition_score, target_weight_kg, previous_names, coat, ai_traits, personality, is_public, listing_type, good_with_kids, good_with_dogs, good_with_cats')
+      .select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, date_of_birth_source, gender_source, spayed_neutered_source, body_condition_score, target_weight_kg, previous_names, coat, ai_traits, personality, is_public, listing_type, good_with_kids, good_with_dogs, good_with_cats')
       .eq('id', petId)
       .maybeSingle();
 
     let petData = petRes.data;
     let petErr = petRes.error;
+    if (petErr && /_source/i.test(petErr.message || '')) {
+      const retry = await supabase.from('pets').select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, body_condition_score, target_weight_kg, previous_names, coat, ai_traits, personality, is_public, listing_type, good_with_kids, good_with_dogs, good_with_cats').eq('id', petId).maybeSingle();
+      petData = retry.data as typeof petData; petErr = retry.error;
+    }
     if (petErr && /is_public|listing_type|personality|good_with/i.test(petErr.message || '')) {
       const retry = await supabase.from('pets').select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, body_condition_score, target_weight_kg, previous_names, coat, ai_traits').eq('id', petId).maybeSingle();
       petData = retry.data as typeof petData; petErr = retry.error;
@@ -1541,7 +1554,7 @@ export default function PetRecordScreen() {
     }
     setSavingDetails(true);
     const pair = dedupeBreedPair(breedForm.breed_primary, breedForm.breed_secondary);
-    const { error } = await supabase.from('pets').update({
+    const detailsPatch: Record<string, any> = {
       name,
       breed_primary: pair.primary,
       breed_secondary: pair.secondary,
@@ -1552,11 +1565,20 @@ export default function PetRecordScreen() {
       secondary_color: colorForm.secondary_color || null,
       color_notes: colorForm.color_notes.trim() || null,
       date_of_birth: detailsDob || null,
+      date_of_birth_source: 'owner',
       gender: detailsSex || null,
+      gender_source: 'owner',
       spayed_neutered: detailsSpayed,
+      spayed_neutered_source: 'owner',
       coat: detailsCoat || null,
       personality: detailsTraits,
-    }).eq('id', petId);
+    };
+    let { error } = await supabase.from('pets').update(detailsPatch).eq('id', petId);
+    if (error && /_source/i.test(error.message || '')) {
+      const { date_of_birth_source, gender_source, spayed_neutered_source, ...withoutSource } = detailsPatch;
+      const retry = await supabase.from('pets').update(withoutSource).eq('id', petId);
+      error = retry.error;
+    }
     if (!error && detailsSince) {
       const ownerRel = findOwnerRel(relationships || [], pet?.owner_id);
       const since = detailsSince.slice(0, 10);
@@ -2401,9 +2423,9 @@ export default function PetRecordScreen() {
           };
           if (ident.bcs) petPatch.body_condition_score = ident.bcs;
           if (ident.bcs >= 8 && !pet?.target_weight_kg) petPatch.target_weight_kg = lbToKg(15);
-          // never overwrite an owner-entered DOB
-          if (!pet?.date_of_birth && ident.date_of_birth) {
+          if (canApplyIdentityField(pet?.date_of_birth, pet?.date_of_birth_source) && ident.date_of_birth) {
             petPatch.date_of_birth = parseAnyDate(ident.date_of_birth);
+            petPatch.date_of_birth_source = 'ai_extracted';
           }
           await run('Pet weight', () => supabase.from('pets').update(petPatch).eq('id', petId));
         }
@@ -2411,17 +2433,31 @@ export default function PetRecordScreen() {
 
       const identApply: any = extractionReview.data?.identity || rawDoc.identity || {};
       const petIdentPatch: any = {};
-      if (!pet?.date_of_birth && (identApply.date_of_birth || extractionReview.suggestedDob)) {
+      if (canApplyIdentityField(pet?.date_of_birth, pet?.date_of_birth_source) && (identApply.date_of_birth || extractionReview.suggestedDob)) {
         const dob = parseAnyDate(identApply.date_of_birth || extractionReview.suggestedDob);
-        if (dob) petIdentPatch.date_of_birth = dob;
+        if (dob) {
+          petIdentPatch.date_of_birth = dob;
+          petIdentPatch.date_of_birth_source = 'ai_extracted';
+        }
       }
       const gender = sexToGender(identApply.sex);
-      if (!pet?.gender && gender) petIdentPatch.gender = gender;
-      if (pet?.spayed_neutered == null && typeof identApply.spayed_neutered === 'boolean') {
+      if (canApplyIdentityField(pet?.gender, pet?.gender_source) && gender) {
+        petIdentPatch.gender = gender;
+        petIdentPatch.gender_source = 'ai_extracted';
+      }
+      if (canApplyIdentityField(pet?.spayed_neutered, pet?.spayed_neutered_source) && typeof identApply.spayed_neutered === 'boolean') {
         petIdentPatch.spayed_neutered = identApply.spayed_neutered;
+        petIdentPatch.spayed_neutered_source = 'ai_extracted';
       }
       if (Object.keys(petIdentPatch).length) {
-        await run('Identity', () => supabase.from('pets').update(petIdentPatch).eq('id', petId));
+        const identRes = await run('Identity', () => supabase.from('pets').update(petIdentPatch).eq('id', petId));
+        if (!identRes && /_source/i.test((errors[errors.length - 1] || ''))) {
+          const { date_of_birth_source, gender_source, spayed_neutered_source, ...rest } = petIdentPatch;
+          if (Object.keys(rest).length) {
+            errors.pop();
+            await run('Identity', () => supabase.from('pets').update(rest).eq('id', petId));
+          }
+        }
       }
       const chip = identApply.microchip ? String(identApply.microchip).replace(/\s/g, '') : '';
       if (chip && /^\d{9,15}$/.test(chip) && !chipNumber) {
@@ -4724,7 +4760,9 @@ export default function PetRecordScreen() {
                       : ident.sex || null;
                   const hasIdent = ident.patient || ident.owner || ident.date_of_birth || ident.microchip || ident.patient_id || ident.sex || extractionReview.issuingClinic || extractionReview.documentDate || extractionReview.suggestedDob;
                   if (!hasIdent) return null;
-                  const derivedAge = ident.date_of_birth ? compactAge(ident.date_of_birth, null) : null;
+                  const derivedAge = ident.age_years != null
+                    ? `${ident.age_years} y`
+                    : (ident.date_of_birth ? compactAge(ident.date_of_birth, null) : null);
                   return (
                     <View style={styles.confirmCard}>
                       <Text style={styles.docTitle}>Identity</Text>

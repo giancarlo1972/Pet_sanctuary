@@ -49,13 +49,15 @@ GRANT ALL ON public.pet_invoices TO service_role;
 
 DO $$
 BEGIN
-  IF to_regclass('public.insurance_claims') IS NOT NULL THEN
-    BEGIN
-      EXECUTE 'ALTER TABLE public.insurance_claims ALTER COLUMN policy_id DROP NOT NULL';
-    EXCEPTION WHEN undefined_column THEN NULL;
-    END;
+  IF to_regclass('public.insurance_claims') IS NULL THEN RETURN; END IF;
+  BEGIN
+    EXECUTE 'ALTER TABLE public.insurance_claims ALTER COLUMN policy_id DROP NOT NULL';
+  EXCEPTION WHEN OTHERS THEN NULL;
+  END;
+  BEGIN
     EXECUTE 'ALTER TABLE public.insurance_claims ADD COLUMN IF NOT EXISTS pet_invoice_id uuid REFERENCES public.pet_invoices(id) ON DELETE SET NULL';
-  END IF;
+  EXCEPTION WHEN OTHERS THEN NULL;
+  END;
 END $$;
 
 -- ---------------------------------------------------------------------------

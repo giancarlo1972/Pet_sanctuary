@@ -187,21 +187,49 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
       });
     } else setDuty(null);
 
-    let [{ data: rels }, { data: owned }, { data: xfers }] = await Promise.all([
+    const petColsFocal = 'id, name, species, main_photo_url, photo_focal, listing_type, status';
+    const petCols = 'id, name, species, main_photo_url, listing_type, status';
+    let [relsRes, ownedRes, xfersRes] = await Promise.all([
       supabase.from('pet_relationships')
-        .select('id, pet_id, relationship, ended_on, pets(id, name, species, main_photo_url, photo_focal, listing_type, status)')
+        .select(`id, pet_id, relationship, ended_on, pets(${petColsFocal})`)
         .eq('user_id', userId),
-      supabase.from('pets').select('id, name, species, main_photo_url, photo_focal, listing_type, status').eq('owner_id', userId),
+      supabase.from('pets').select(petColsFocal).eq('owner_id', userId),
       supabase.from('pet_transfers').select('id, pet_id, from_user, to_user, token, status').or(`from_user.eq.${userId},to_user.eq.${userId}`).eq('status', 'pending'),
     ]);
-    if ((rels as any)?.error || !owned) {
-      // ignore
+    const focalMiss = /photo_focal/i.test(relsRes.error?.message || '') || /photo_focal/i.test(ownedRes.error?.message || '');
+    if (focalMiss) {
+      console.warn('[me] pets.photo_focal missing — retrying without it', relsRes.error?.message || ownedRes.error?.message);
+      [relsRes, ownedRes] = await Promise.all([
+        supabase.from('pet_relationships')
+          .select(`id, pet_id, relationship, ended_on, pets(${petCols})`)
+          .eq('user_id', userId),
+        supabase.from('pets').select(petCols).eq('owner_id', userId),
+      ]);
     }
+    if (relsRes.error) console.warn('[me] pet_relationships', relsRes.error.message);
+    if (ownedRes.error) console.warn('[me] pets owned', ownedRes.error.message);
+    if (xfersRes.error) {
+      console.warn('[me] pet_transfers', xfersRes.error.message);
+      xfersRes = { data: [], error: null } as any;
+    }
+    const rels = relsRes.data;
+    const owned = ownedRes.data;
+    const xfers = xfersRes.data;
     const ids = [...new Set([...(rels || []).map((r: any) => r.pet_id), ...(owned || []).map((p: any) => p.id)])].filter(Boolean);
-    let { data: petRows } = ids.length ? await supabase.from('pets').select('id, name, species, main_photo_url, photo_focal, listing_type, status, shelter_id').in('id', ids) : { data: [] as any[] };
-    if (ids.length && (!petRows || (petRows as any).error)) {
-      const retry = await supabase.from('pets').select('id, name, species, main_photo_url, listing_type, status, shelter_id').in('id', ids);
-      petRows = retry.data as any;
+    let petRows: any[] | null = [];
+    if (ids.length) {
+      const full = await supabase.from('pets').select('id, name, species, main_photo_url, photo_focal, listing_type, status, shelter_id').in('id', ids);
+      if (full.error && /photo_focal/i.test(full.error.message || '')) {
+        console.warn('[me] pets by id photo_focal missing — retrying', full.error.message);
+        const retry = await supabase.from('pets').select('id, name, species, main_photo_url, listing_type, status, shelter_id').in('id', ids);
+        petRows = retry.data as any;
+      } else if (full.error) {
+        console.warn('[me] pets by id', full.error.message);
+        const retry = await supabase.from('pets').select('id, name, species, main_photo_url, listing_type, status, shelter_id').in('id', ids);
+        petRows = retry.data as any;
+      } else {
+        petRows = full.data as any;
+      }
     }
     const pmap: Record<string, any> = {};
     (petRows || []).forEach((x: any) => { pmap[x.id] = x; });

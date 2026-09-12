@@ -34,11 +34,11 @@ import SignedImage from '@/components/SignedImage';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 import { DashboardPanel } from '@/components/DashboardPanel';
-import { orgSection, orgTypeLabel, orgTileColor, orgListsPets, type OrgSection } from '@/lib/org-type';
+import { orgSection, orgTypeLabel, orgTileColor, orgListsPets, orgVerifyBadge, type OrgSection } from '@/lib/org-type';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ORG_SELECT_FULL = 'id, name, description, org_type, address, city, state, website, phone, contact_email, status, ein_verified, tax_deductible, donations_enabled, donate_url, data_source, external_id';
-const ORG_SELECT_SLIM = 'id, name, description, org_type, address, city, state, website, phone, contact_email, status';
+const ORG_SELECT_FULL = 'id, name, description, org_type, address, city, state, website, phone, contact_email, status, ein_verified, tax_deductible, donations_enabled, donate_url, data_source, external_id, verification_method';
+const ORG_SELECT_SLIM = 'id, name, description, org_type, address, city, state, website, phone, contact_email, status, ein_verified, data_source, external_id';
 
 function isUuid(value: string) {
   return UUID_RE.test(value);
@@ -68,6 +68,7 @@ interface OrgData {
   ein: string;
   ein_verified: boolean;
   tax_deductible: boolean;
+  verification_method: string;
   address: string;
   website: string;
   phone: string;
@@ -91,6 +92,7 @@ const MOCK_ORG: OrgData = {
   ein: '',
   ein_verified: false,
   tax_deductible: false,
+  verification_method: '',
   address: '',
   website: '',
   phone: '',
@@ -129,6 +131,7 @@ function mapDbOrg(dbOrg: any): OrgData {
     ein: '',
     ein_verified: Boolean(dbOrg.ein_verified),
     tax_deductible: Boolean(dbOrg.tax_deductible),
+    verification_method: dbOrg.verification_method || '',
     address: dbOrg.address || [dbOrg.city, dbOrg.state].filter(Boolean).join(', '),
     website: dbOrg.website || '',
     phone: dbOrg.phone || '',
@@ -162,12 +165,27 @@ function phoneHref(phone: string) {
 }
 
 async function loadOrgRow(rawId: string) {
-  const column = isUuid(rawId) ? 'id' : 'external_id';
-  let res = await supabase.from('organizations').select(ORG_SELECT_FULL).eq(column, rawId).maybeSingle();
-  if (res.error) {
-    res = await supabase.from('organizations').select(ORG_SELECT_SLIM).eq(column, rawId).maybeSingle();
+  const id = String(rawId || '').trim();
+  const attempts: Array<['id' | 'external_id', string]> = [];
+  if (isUuid(id)) attempts.push(['id', id]);
+  const stripped = id.replace(/^rg-/, '');
+  const withPrefix = id.startsWith('rg-') ? id : (stripped ? `rg-${stripped}` : '');
+  for (const val of [id, withPrefix, stripped]) {
+    if (!val || isUuid(val)) continue;
+    if (!attempts.some((a) => a[0] === 'external_id' && a[1] === val)) {
+      attempts.push(['external_id', val]);
+    }
   }
-  return res;
+  let last = { data: null as any, error: null as any };
+  for (const [column, value] of attempts) {
+    let res = await supabase.from('organizations').select(ORG_SELECT_FULL).eq(column, value).maybeSingle();
+    if (res.error) {
+      res = await supabase.from('organizations').select(ORG_SELECT_SLIM).eq(column, value).maybeSingle();
+    }
+    last = res;
+    if (!res.error && res.data) return res;
+  }
+  return last;
 }
 
 function openDonate(org: OrgData) {
@@ -338,15 +356,10 @@ export default function OrganizationDetailsScreen() {
   const listsPets = org.kind === 'shelter' || org.kind === 'rescue';
   const websiteCta = org.kind === 'clinic' ? 'Clinic website' : 'Shelter website';
   const isSponsor = org.kind === 'sponsor';
+  const verify = orgVerifyBadge(org);
   const statusLabel = isSponsor
     ? (org.status === 'approved' ? 'Verified sponsor' : 'Pending')
-    : org.status === 'approved' && org.ein_verified
-      ? '501(c)(3) verified'
-      : org.status === 'approved'
-        ? 'Approved'
-        : org.status === 'pending' || org.status === 'pending_review'
-          ? 'Pending review'
-          : 'Approved';
+    : verify.label;
 
   const partnerMailto = org.contact_email
     ? `mailto:${org.contact_email}?subject=${encodeURIComponent('Become a partner with ' + org.name)}`
@@ -364,7 +377,7 @@ export default function OrganizationDetailsScreen() {
             <View style={styles.headerNameWrap}>
               <View style={styles.headerNameRow}>
                 <Text style={styles.headerName} numberOfLines={1}>{org.name}</Text>
-                {org.status === 'approved' && (org.ein_verified || isSponsor) && (
+                {verify.teal && (
                   <View style={styles.verifiedBadge}>
                     <Shield color={Colors.teal} size={12} />
                     <Text style={styles.verifiedText}>Verified</Text>

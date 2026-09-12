@@ -215,7 +215,10 @@ export default function NearbyScreen() {
       const localOrgs = (orgsRes.data || []) as any[];
       const byName = new Map(localOrgs.map((l) => [String(l.name || '').toLowerCase(), l]));
       const byExt = new Map(localOrgs.filter((l) => l.external_id).map((l) => [String(l.external_id), l]));
-      const remoteOrgs = ((rgOrgs.orgs || []) as any[]).filter((o) => !byExt.has(String(o.id)) && !byName.has(String(o.name || '').toLowerCase()));
+      const remoteOrgs = ((rgOrgs.orgs || []) as any[]).filter((o) => {
+        const id = String(o.id || '');
+        return !byExt.has(id) && !byName.has(String(o.name || '').toLowerCase());
+      });
       const allOrgs = [...localOrgs, ...remoteOrgs];
 
       const spp = (!sppRes.error && sppRes.data) ? (sppRes.data as any[]) : [];

@@ -48,3 +48,22 @@ export function orgListsPets(raw?: string | null): boolean {
   const s = orgSection(raw);
   return s === 'shelter' || s === 'rescue';
 }
+
+export type OrgVerifyKind = 'rg' | 'ein' | 'pending';
+
+const EIN_METHODS = new Set(['propublica', 'irs', 'determination_letter', 'manual', 'guidestar']);
+
+/** Status pill for Community / org detail. Shield only when teal. */
+export function orgVerifyBadge(org: {
+  verification_method?: string | null;
+  ein_verified?: boolean | null;
+  data_source?: string | null;
+}): { kind: OrgVerifyKind; label: string; teal: boolean } {
+  const method = String(org.verification_method || '').toLowerCase();
+  const src = String(org.data_source || '').toLowerCase();
+  const viaRg = method === 'rescuegroups'
+    || (src.includes('rescuegroup') && !EIN_METHODS.has(method));
+  if (viaRg) return { kind: 'rg', label: 'Listed via RescueGroups', teal: true };
+  if (org.ein_verified) return { kind: 'ein', label: '501(c)(3) verified', teal: true };
+  return { kind: 'pending', label: 'Verification pending', teal: false };
+}

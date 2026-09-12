@@ -37,7 +37,7 @@ import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 import SignedImage from '@/components/SignedImage';
 import { PROVIDER_SERVICES } from '@/lib/role-categories';
-import { orgSection, ORG_TILE, ORG_TYPE_LABEL } from '@/lib/org-type';
+import { orgSection, ORG_TILE, ORG_TYPE_LABEL, orgVerifyBadge } from '@/lib/org-type';
 import type { Story } from '@/types';
 
 type Segment = 'orgs' | 'fosters' | 'stories' | 'services';
@@ -53,12 +53,13 @@ interface OrgRow {
   ein_verified: boolean | null;
   tax_deductible: boolean | null;
   data_source?: string | null;
+  verification_method?: string | null;
   updated_at?: string | null;
   pets_count: number;
   fosters_count: number;
 }
 
-const ORG_CACHE_KEY = 'ra_community_orgs_v2';
+const ORG_CACHE_KEY = 'ra_community_orgs_v3';
 const ORG_PAGE = 50;
 const INTER = Platform.OS === 'web' ? 'Inter, system-ui, sans-serif' : Fonts.regular;
 const INTERB = Platform.OS === 'web' ? 'Inter, system-ui, sans-serif' : Fonts.bold;
@@ -105,6 +106,7 @@ function mapOrgRow(o: any): OrgRow {
     ein_verified: o.ein_verified ?? null,
     tax_deductible: o.tax_deductible ?? null,
     data_source: o.data_source || null,
+    verification_method: o.verification_method || null,
     updated_at: o.updated_at || null,
     pets_count: Number(o.pets_count) || 0,
     fosters_count: Number(o.fosters_count) || 0,
@@ -304,8 +306,8 @@ export default function CommunityScreen() {
     const to = from + ORG_PAGE - 1;
     const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     try {
-      const full = 'id, name, org_type, city, state, logo_url, status, data_source, ein_verified, updated_at';
-      const slim = 'id, name, org_type, city, state, logo_url, status, data_source';
+      const full = 'id, name, org_type, city, state, logo_url, status, data_source, ein_verified, verification_method, updated_at, external_id';
+      const slim = 'id, name, org_type, city, state, logo_url, status, data_source, ein_verified';
       let { data, error } = await supabase
         .from('organizations')
         .select(full)
@@ -344,8 +346,10 @@ export default function CommunityScreen() {
             state: o.state,
             logo_url: o.logo_url,
             description: o.description,
-            status: 'approved',
-            data_source: 'rescuegroups',
+            status: o.status || 'approved',
+            data_source: o.data_source || 'rescuegroups',
+            ein_verified: o.ein_verified ?? true,
+            verification_method: o.verification_method || 'rescuegroups',
           }));
         }
       } catch { /* RescueGroups is additive */ }
@@ -467,10 +471,11 @@ export default function CommunityScreen() {
     });
 
   const getStatusPill = (org: OrgRow, section: string) => {
-    if (section === 'clinic') return { label: 'Care Fund partner', bg: '#FCF4DF', color: '#8A5A00' };
-    if (section === 'sponsor') return { label: 'Sponsor', bg: '#FCF4DF', color: '#8A5A00' };
-    if (org.ein_verified) return { label: '501(c)(3) verified', bg: '#E4F3F1', color: '#1D6D66' };
-    return { label: 'Verification pending', bg: '#EFF1F5', color: '#6B7280' };
+    if (section === 'clinic') return { label: 'Care Fund partner', bg: '#FCF4DF', color: '#8A5A00', teal: false };
+    if (section === 'sponsor') return { label: 'Sponsor', bg: '#FCF4DF', color: '#8A5A00', teal: false };
+    const badge = orgVerifyBadge(org);
+    if (badge.teal) return { label: badge.label, bg: '#E4F3F1', color: '#1D6D66', teal: true };
+    return { label: badge.label, bg: '#EFF1F5', color: '#6B7280', teal: false };
   };
 
   const orgSubline = (org: OrgRow, section: string) => {
@@ -489,7 +494,7 @@ export default function CommunityScreen() {
     const section = getSection(org);
     const pill = getStatusPill(org, section);
     const tile = ORG_TILE[section] || ORG_TILE.other;
-    const showShield = org.status === 'approved' || Boolean(org.ein_verified);
+    const showShield = orgVerifyBadge(org).teal;
     return (
       <TouchableOpacity
         key={org.id}

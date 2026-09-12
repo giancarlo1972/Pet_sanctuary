@@ -4,7 +4,7 @@
 
 ## Who runs what
 
-Grok runs **1–5 (public)** and **12** against the local `dist/` export.
+Grok runs **1–5 (public)**, **12**, and **16** against the local `dist/` export.
 It cannot sign in as `giancarlo.pereira@gmail.com` — no password in this
 environment.
 
@@ -30,6 +30,7 @@ are PASS.
 13. **Upload BondVet invoice** → Bills tile shows `1 · $X.XX`. Confirm sheet reads `1 invoice · $X total · N line items` (not a wall of raw numbers).
 14. **Add community pet** → appears in Me → My Pets → Community, and on Nearby → Community (teal outline pin).
 15. **Transfer Nina** to a test account → accept → Nina under the new owner, Gina unaffected.
+16. **Community → Orgs:** open 3 random org cards → each detail loads (not “Organization not found”). Cards link by `organizations.id` uuid.
 
 ## Database
 

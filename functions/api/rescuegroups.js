@@ -1,5 +1,17 @@
 import { geocodeList, placeKey } from './_places.js';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isUuid(value) {
+  return UUID_RE.test(String(value || ''));
+}
+function canonicalOrgType(t) {
+  const s = String(t || '').toLowerCase();
+  if (/shelter/.test(s)) return 'shelter';
+  if (/clinic|vet/.test(s)) return 'clinic';
+  if (/sponsor|business/.test(s)) return 'sponsor';
+  return 'rescue';
+}
+
 function photoFrom(a) {
   const pic = Array.isArray(a.animalPictures) && a.animalPictures[0];
   if (pic) {
@@ -22,9 +34,9 @@ function decode(s) {
     .replace(/&mdash;/g, '—').replace(/&ndash;/g, '–')
     .replace(/&rsquo;/g, "'").replace(/&lsquo;/g, "'")
     .replace(/&rdquo;/g, '"').replace(/&ldquo;/g, '"')
-    .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ')
+    .replace(/"/g, '"').replace(/'/g, "'")
+    .replace(/</g, '<').replace(/>/g, '>')
+    .replace(/&/g, '&').replace(/&nbsp;/g, ' ')
     .replace(/\s+/g, ' ').trim();
 }
 function ageFromDob(dob) {
@@ -40,13 +52,22 @@ function ageFromDob(dob) {
   const rem = months % 12;
   return rem ? years + ' yr ' + rem + ' mo' : years + ' yr';
 }
+function sbHeaders(key, extra) {
+  return {
+    apikey: key,
+    Authorization: 'Bearer ' + key,
+    'Content-Type': 'application/json',
+    Prefer: 'return=minimal',
+    ...(extra || {}),
+  };
+}
 async function attachOrgUuids(env, orgs) {
   const url = env && (env.EXPO_PUBLIC_SUPABASE_URL || env.SUPABASE_URL);
   const key = env && (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY || env.SUPABASE_SECRET_KEY);
   if (!url || !key || !orgs.length) return orgs;
   try {
-    const res = await fetch(url + '/rest/v1/organizations?select=id,name,external_id&status=eq.approved&limit=500', {
-      headers: { apikey: key, Authorization: 'Bearer ' + key },
+    const res = await fetch(url + '/rest/v1/organizations?select=id,name,external_id,data_source,verification_method,status,ein_verified&limit=2000', {
+      headers: sbHeaders(key),
     });
     const rows = await res.json();
     if (!Array.isArray(rows)) return orgs;
@@ -57,23 +78,100 @@ async function attachOrgUuids(env, orgs) {
       if (r.name) byName.set(String(r.name).toLowerCase(), r);
     }
     const patches = [];
+    const inserts = [];
     const out = orgs.map((o) => {
       const hit = byExt.get(o.id) || byName.get(String(o.name || '').toLowerCase());
-      if (!hit) return o;
-      if (!hit.external_id) patches.push({ id: hit.id, external_id: o.id });
-      return { ...o, id: hit.id, external_id: o.id };
+      if (!hit) {
+        inserts.push(o);
+        return o;
+      }
+      const patch = { id: hit.id };
+      let need = false;
+      if (!hit.external_id) {
+        patch.external_id = o.id;
+        patch.data_source = hit.data_source || 'rescuegroups';
+        need = true;
+      }
+      const isRg = String(hit.data_source || '').toLowerCase().includes('rescue')
+        || String(hit.external_id || o.id || '').startsWith('rg-');
+      if (isRg && !hit.verification_method) {
+        patch.status = 'approved';
+        patch.ein_verified = true;
+        patch.verification_method = 'rescuegroups';
+        need = true;
+      }
+      if (need) patches.push(patch);
+      return {
+        ...o,
+        id: hit.id,
+        external_id: hit.external_id || o.id,
+        verification_method: hit.verification_method || (isRg ? 'rescuegroups' : null),
+        ein_verified: hit.ein_verified != null ? hit.ein_verified : (isRg ? true : false),
+        status: hit.status || 'approved',
+      };
     });
-    await Promise.all(patches.map((p) => fetch(url + '/rest/v1/organizations?id=eq.' + p.id, {
-      method: 'PATCH',
-      headers: {
-        apikey: key,
-        Authorization: 'Bearer ' + key,
-        'Content-Type': 'application/json',
-        Prefer: 'return=minimal',
-      },
-      body: JSON.stringify({ external_id: p.external_id, data_source: 'rescuegroups' }),
-    }).catch(() => null)));
-    return out;
+    await Promise.all(patches.map((p) => {
+      const { id, ...body } = p;
+      return fetch(url + '/rest/v1/organizations?id=eq.' + id, {
+        method: 'PATCH',
+        headers: sbHeaders(key),
+        body: JSON.stringify(body),
+      }).catch(() => null);
+    }));
+    const created = new Map();
+    for (const o of inserts) {
+      if (!o.name || !o.id) continue;
+      const payload = {
+        name: o.name,
+        org_type: canonicalOrgType(o.org_type),
+        city: o.city || null,
+        state: o.state || null,
+        website: o.website || null,
+        contact_email: o.email || null,
+        donate_url: o.donation_url || null,
+        external_id: o.id,
+        data_source: 'rescuegroups',
+        status: 'approved',
+        ein_verified: true,
+        verification_method: 'rescuegroups',
+      };
+      let ins = await fetch(url + '/rest/v1/organizations', {
+        method: 'POST',
+        headers: sbHeaders(key, { Prefer: 'return=representation' }),
+        body: JSON.stringify(payload),
+      }).then((r) => r.json()).catch(() => null);
+      if (ins && ins.message) {
+        const slim = { ...payload };
+        delete slim.donate_url;
+        ins = await fetch(url + '/rest/v1/organizations', {
+          method: 'POST',
+          headers: sbHeaders(key, { Prefer: 'return=representation' }),
+          body: JSON.stringify(slim),
+        }).then((r) => r.json()).catch(() => null);
+      }
+      let row = Array.isArray(ins) ? ins[0] : (ins && ins.id ? ins : null);
+      if (!row && o.id) {
+        const existing = await fetch(
+          url + '/rest/v1/organizations?external_id=eq.' + encodeURIComponent(o.id) + '&select=id,external_id,verification_method,ein_verified,status',
+          { headers: sbHeaders(key) },
+        ).then((r) => r.json()).catch(() => null);
+        row = Array.isArray(existing) ? existing[0] : null;
+      }
+      if (row && row.id) created.set(o.id, row);
+    }
+    return out.map((o) => {
+      if (isUuid(o.id)) return o;
+      const row = created.get(o.id);
+      if (!row) return o;
+      return {
+        ...o,
+        id: row.id,
+        external_id: o.id,
+        verification_method: 'rescuegroups',
+        ein_verified: true,
+        status: 'approved',
+      };
+    });
   } catch {
     return orgs;
   }
@@ -227,7 +325,8 @@ export async function onRequestGet(context) {
       logo_url: null,
       description: o.orgWebsiteUrl || null,
       status: 'approved',
-      ein_verified: false,
+      ein_verified: true,
+      verification_method: 'rescuegroups',
       tax_deductible: false,
       website: o.orgWebsiteUrl || null,
       email: o.orgEmail || null,

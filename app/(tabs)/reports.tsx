@@ -7,7 +7,6 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Search, Shield } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
-import { supabase } from '@/lib/supabase';
 import AppHeader from '@/components/AppHeader';
 import { SegmentedTabs } from '@/components/Tabs';
 import { Page } from '@/components/Page';
@@ -16,6 +15,13 @@ import { DashboardPanel } from '@/components/DashboardPanel';
 import { SUPPORT_EMAIL } from '@/lib/contact';
 import { useAuth } from '@/lib/context/AuthContext';
 import { isUsablePhoto } from '@/lib/photos';
+import {
+  type MyReport,
+  loadMyReports,
+  loadPublicReports,
+  reportStatusStyle,
+  reportTitle as titleFor,
+} from '@/lib/my-reports';
 
 const TYPE_LABEL: Record<string, string> = {
   lost: 'Lost pet',
@@ -43,38 +49,13 @@ function timeAgo(dateString: string): string {
   return `${Math.floor(h / 24)} d ago`;
 }
 
-function shortPlace(addr: string) {
-  const s = (addr || '').replace(/^Detected:\s*/i, '').replace(/^Current location.*/, '').trim();
-  if (!s) return '';
-  return s.split(',').slice(0, 2).join(',').trim();
-}
-
-function titleFor(r: {
-  pet_name: string | null;
-  location_address: string;
-  report_type: string;
-  animal_kind?: string | null;
-  ai_species?: string | null;
-}) {
-  const type = TYPE_LABEL[r.report_type] || 'Report';
-  const animal = (r.pet_name || r.animal_kind || r.ai_species || '').trim();
-  const place = shortPlace(r.location_address);
-  if (animal && place) return `${type} — ${animal}, ${place}`;
-  if (animal) return `${type} — ${animal}`;
-  if (place) return `${type} — ${place}`;
-  return type;
-}
-
 function photoOf(r: { photo_url?: string | null; photo_urls?: string[] | null }) {
   const first = r.photo_url || r.photo_urls?.[0] || null;
   return isUsablePhoto(first) ? first : null;
 }
 
 function statusChip(status: string): { label: string; bg: string; color: string } {
-  if (status === 'active' || status === 'open') return { label: 'Active', bg: Colors.tealBg, color: Colors.tealDark };
-  if (status === 'pending_moderation' || status === 'pending') return { label: 'Under review', bg: Colors.surfaceAlt, color: Colors.textSecondary };
-  if (status === 'resolved') return { label: 'Resolved', bg: Colors.tealBg, color: Colors.tealDark };
-  return { label: status.replace(/_/g, ' '), bg: Colors.surface, color: Colors.textSecondary };
+  return reportStatusStyle(status);
 }
 
 type MainTab = 'reports' | 'fund';
@@ -121,7 +102,8 @@ export default function ReportsTabScreen() {
   const [tab, setTab] = useState<MainTab>(params.tab === 'fund' ? 'fund' : 'reports');
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
-  const [reports, setReports] = useState<any[]>([]);
+  const [reports, setReports] = useState<MyReport[]>([]);
+  const [mineReports, setMineReports] = useState<MyReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -131,58 +113,47 @@ export default function ReportsTabScreen() {
 
   const loadReports = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from('reports')
-        .select('id, report_type, severity, status, pet_name, location_address, created_at, description, photo_url, photo_urls, animal_kind, ai_species, user_id')
-        .in('status', ['active', 'open', 'pending_moderation'])
-        .order('created_at', { ascending: false })
-        .limit(80);
-      if (error) throw error;
-      setReports(data || []);
-    } catch {
-      try {
-        const { data } = await supabase
-          .from('reports')
-          .select('id, report_type, severity, status, pet_name, location_address, created_at, description')
-          .in('status', ['active', 'open', 'pending_moderation'])
-          .order('created_at', { ascending: false })
-          .limit(80);
-        setReports(data || []);
-      } catch {
-        setReports([]);
+      const pub = await loadPublicReports();
+      setReports(pub);
+      if (user?.id) {
+        const mine = await loadMyReports(user.id);
+        setMineReports(mine);
+      } else {
+        setMineReports([]);
       }
+    } catch {
+      setReports([]);
+      setMineReports([]);
     }
     setLoading(false);
     setRefreshing(false);
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => { loadReports(); }, [loadReports]);
   useFocusEffect(useCallback(() => { loadReports(); }, [loadReports]));
 
   const counts = useMemo(() => {
-    const sev = (r: any) => String(r.severity || '').toLowerCase();
+    const sev = (r: MyReport) => String(r.severity || '').toLowerCase();
     return {
       all: reports.length,
       critical: reports.filter((r) => sev(r) === 'critical').length,
       urgent: reports.filter((r) => sev(r) === 'urgent').length,
-      mine: user?.id ? reports.filter((r) => r.user_id === user.id).length : 0,
+      mine: user?.id ? mineReports.length : 0,
     };
-  }, [reports, user?.id]);
+  }, [reports, mineReports, user?.id]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return reports.filter((r) => {
+    const source = filter === 'mine' ? mineReports : reports;
+    return source.filter((r) => {
       const sev = String(r.severity || '').toLowerCase();
       if (filter === 'critical' && sev !== 'critical') return false;
       if (filter === 'urgent' && sev !== 'urgent') return false;
-      if (filter === 'mine') {
-        if (!user?.id || r.user_id !== user.id) return false;
-      }
       if (!q) return true;
       const hay = `${titleFor(r)} ${r.description || ''} ${TYPE_LABEL[r.report_type] || ''}`.toLowerCase();
       return hay.includes(q);
     });
-  }, [reports, filter, query, user?.id]);
+  }, [reports, mineReports, filter, query]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -272,7 +243,13 @@ export default function ReportsTabScreen() {
                   <View style={styles.pills}>
                     <View style={styles.pill}><Text style={styles.pillText}>{TYPE_LABEL[r.report_type] || r.report_type}</Text></View>
                     <View style={[styles.pill, { backgroundColor: st.bg }]}><Text style={[styles.pillText, { color: st.color }]}>{st.label}</Text></View>
+                    {r.match_count && r.match_count > 0 ? (
+                      <View style={styles.pill}><Text style={styles.pillText}>{r.match_count} match{r.match_count === 1 ? '' : 'es'}</Text></View>
+                    ) : null}
                   </View>
+                  {filter === 'mine' && (r.status === 'rejected' || r.status === 'dismissed') && r.moderator_note ? (
+                    <Text style={styles.desc} numberOfLines={2}>{r.moderator_note}</Text>
+                  ) : null}
                 </View>
               </TouchableOpacity>
             );

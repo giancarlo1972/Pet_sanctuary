@@ -9,6 +9,8 @@ import {
   ActivityIndicator,
   Share,
   Linking,
+  Modal,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -29,6 +31,10 @@ import {
   Sparkles,
   Navigation,
   ShieldAlert,
+  Pencil,
+  CircleCheck,
+  Ban,
+  Zap,
 } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
@@ -36,6 +42,17 @@ import { supabase } from '@/lib/supabase';
 import SignedImage from '@/components/SignedImage';
 import { InlineBanner } from '@/components/InlineBanner';
 import { useAuth } from '@/lib/context/AuthContext';
+import { DateField } from '@/components/DateField';
+import { pickImage } from '@/lib/pick-image';
+import { encodeGeohash } from '@/lib/geohash';
+import { geocodePlace } from '@/lib/geocode';
+import {
+  boostAvailableAt,
+  ownerActionMessage,
+  outcomeLabel,
+  reportStatusStyle,
+  updateMyReport,
+} from '@/lib/my-reports';
 
 interface ReportDetail {
   id: string;
@@ -77,6 +94,10 @@ interface ReportDetail {
   ai_age_range: string | null;
   ai_analyzed_at: string | null;
   pet_id?: string | null;
+  moderator_note?: string | null;
+  resolution_outcome?: string | null;
+  cancel_reason?: string | null;
+  last_boosted_at?: string | null;
 }
 
 const REPORT_TYPE_LABELS: Record<string, string> = {
@@ -117,11 +138,14 @@ const STATUS_STYLE: Record<string, { bg: string; color: string; label: string }>
   pending_moderation: { bg: Colors.standardBg, color: Colors.accentDark, label: 'Pending moderation' },
   pending: { bg: Colors.standardBg, color: Colors.accentDark, label: 'Pending moderation' },
   resolved: { bg: Colors.tealBg, color: Colors.teal, label: 'Resolved' },
-  closed: { bg: Colors.surface, color: Colors.textSecondary, label: 'Closed' },
+  closed: { bg: Colors.surface, color: Colors.textSecondary, label: 'Cancelled' },
+  cancelled: { bg: Colors.surface, color: Colors.textSecondary, label: 'Cancelled' },
+  rejected: { bg: Colors.criticalBg, color: Colors.critical, label: 'Rejected' },
+  dismissed: { bg: Colors.criticalBg, color: Colors.critical, label: 'Rejected' },
 };
 
 const DETAIL_SELECT =
-  'id, report_type, urgency, incident_category, pet_name, pet_type, breed, description, location_address, latitude, longitude, photo_urls, photo_url, status, severity, created_at, last_seen_at, colors, life_stage, size, gender, animal_kind, approximate_public, allow_direct_contact, user_id, pet_id, ai_summary, ai_species, ai_breed, ai_colors, ai_coat, ai_confidence, ai_priority, ai_risk_tags, ai_age_range, ai_analyzed_at';
+  'id, report_type, urgency, incident_category, pet_name, pet_type, breed, description, location_address, latitude, longitude, photo_urls, photo_url, status, severity, created_at, last_seen_at, colors, life_stage, size, gender, animal_kind, approximate_public, allow_direct_contact, user_id, pet_id, ai_summary, ai_species, ai_breed, ai_colors, ai_coat, ai_confidence, ai_priority, ai_risk_tags, ai_age_range, ai_analyzed_at, moderator_note, resolution_outcome, cancel_reason, last_boosted_at';
 
 const DETAIL_SELECT_SAFE =
   'id, report_type, urgency, incident_category, pet_name, pet_type, breed, description, location_address, latitude, longitude, photo_urls, photo_url, status, severity, created_at, user_id, animal_kind';
@@ -165,6 +189,15 @@ export default function ReportDetailsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [activePhoto, setActivePhoto] = useState(0);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editDesc, setEditDesc] = useState('');
+  const [editLoc, setEditLoc] = useState('');
+  const [editSeen, setEditSeen] = useState('');
+  const [editPhotos, setEditPhotos] = useState<string[]>([]);
+  const [resolveOpen, setResolveOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
 
   useEffect(() => {
     loadReport();
@@ -231,6 +264,101 @@ export default function ReportDetailsScreen() {
     }
   };
 
+  const runAction = async (action: 'edit' | 'resolve' | 'cancel' | 'boost', payload: Record<string, unknown> = {}) => {
+    if (!report) return;
+    setBusy(true);
+    try {
+      const rec = await updateMyReport(report.id, action, payload);
+      setEditOpen(false);
+      setResolveOpen(false);
+      setCancelOpen(false);
+      setCancelReason('');
+      if (action === 'boost') {
+        const n = Number(rec.helpers_notified) || 0;
+        setBanner({
+          kind: 'success',
+          message: n > 0
+            ? `Boosted. ${n} helper${n === 1 ? '' : 's'} on duty nearby ${n === 1 ? 'was' : 'were'} notified.`
+            : 'Boosted. No helpers on duty in this area right now.',
+        });
+      } else if (action === 'edit') {
+        setBanner({ kind: 'success', message: 'Saved. This report is back in moderation.' });
+      } else if (action === 'resolve') {
+        setBanner({ kind: 'success', message: 'Marked resolved.' });
+      } else {
+        setBanner({ kind: 'success', message: 'Report cancelled.' });
+      }
+      await loadReport();
+    } catch (e: any) {
+      setBanner({ kind: 'error', message: ownerActionMessage(e) });
+    }
+    setBusy(false);
+  };
+
+  const openEdit = () => {
+    if (!report) return;
+    setEditDesc(report.description || '');
+    setEditLoc(report.location_address || '');
+    setEditSeen((report.last_seen_at || '').slice(0, 10));
+    const photos = [...(report.photo_urls || []), ...(report.photo_url ? [report.photo_url] : [])].filter(Boolean);
+    setEditPhotos([...new Set(photos)]);
+    setEditOpen(true);
+  };
+
+  const addEditPhoto = async () => {
+    try {
+      const picked = await pickImage();
+      if (!picked) return;
+      const path = `reports/${Date.now()}.jpg`;
+      const up = await supabase.storage.from('report-photos').upload(path, picked.blob, { contentType: 'image/jpeg', upsert: true });
+      if (up.error) {
+        const fallback = await supabase.storage.from('pet-photos').upload(path, picked.blob, { contentType: 'image/jpeg', upsert: true });
+        if (fallback.error) throw fallback.error;
+      }
+      setEditPhotos((p) => [...p, path]);
+    } catch (e: any) {
+      setBanner({ kind: 'error', message: e?.message || 'Could not add photo.' });
+    }
+  };
+
+  const saveEdit = async () => {
+    if (!editDesc.trim() || !editLoc.trim()) {
+      setBanner({ kind: 'error', message: 'Description and location are required.' });
+      return;
+    }
+    let lat = report?.latitude ?? null;
+    let lng = report?.longitude ?? null;
+    if (editLoc.trim() !== (report?.location_address || '').trim()) {
+      try {
+        const hit = await geocodePlace(editLoc.trim());
+        if (hit) { lat = hit.lat; lng = hit.lng; }
+      } catch { /* keep existing coords */ }
+    }
+    await runAction('edit', {
+      description: editDesc.trim(),
+      location_address: editLoc.trim(),
+      last_seen_at: editSeen || null,
+      photo_urls: editPhotos,
+      photo_url: editPhotos[0] || null,
+      latitude: lat,
+      longitude: lng,
+    });
+  };
+
+  const boostReport = async () => {
+    if (!report) return;
+    const next = boostAvailableAt(report.last_boosted_at);
+    if (next) {
+      setBanner({ kind: 'info', message: `You can boost again after ${formatDateTime(next.toISOString())}.` });
+      return;
+    }
+    let gh = '';
+    if (report.latitude != null && report.longitude != null && !(Math.abs(report.latitude) < 0.01 && Math.abs(report.longitude) < 0.01)) {
+      gh = encodeGeohash(report.latitude, report.longitude, 5);
+    }
+    await runAction('boost', { geohash: gh });
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={[styles.container, styles.centered]}>
@@ -259,7 +387,7 @@ export default function ReportDetailsScreen() {
 
   const sev = report.severity || 'standard';
   const sevStyle = SEVERITY_STYLE[sev] || SEVERITY_STYLE.standard;
-  const statusStyle = STATUS_STYLE[report.status] || STATUS_STYLE.active;
+  const statusStyle = STATUS_STYLE[report.status] || reportStatusStyle(report.status);
   const Icon = REPORT_TYPE_ICONS[report.report_type] || AlertTriangle;
   const typeLabel = REPORT_TYPE_LABELS[report.report_type] || report.report_type;
 
@@ -291,6 +419,10 @@ export default function ReportDetailsScreen() {
   const aiDone = report.ai_analyzed_at != null;
   const mine = !!(user?.id && report.user_id && user.id === report.user_id);
   const pending = report.status === 'pending_moderation' || report.status === 'pending';
+  const live = report.status === 'active' || report.status === 'open';
+  const closed = report.status === 'cancelled' || report.status === 'closed';
+  const resolved = report.status === 'resolved';
+  const boostNext = boostAvailableAt(report.last_boosted_at);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -451,6 +583,50 @@ export default function ReportDetailsScreen() {
             {pending ? (
               <Text style={styles.contactNote}>This report is pending moderation. Nearby responders will see it once it is approved.</Text>
             ) : null}
+            {resolved && outcomeLabel(report.resolution_outcome) ? (
+              <Text style={styles.contactNote}>Outcome: {outcomeLabel(report.resolution_outcome)}</Text>
+            ) : null}
+            {(report.status === 'rejected' || report.status === 'dismissed') && report.moderator_note ? (
+              <Text style={styles.contactNote}>Moderator: {report.moderator_note}</Text>
+            ) : null}
+            {(closed && report.cancel_reason) ? (
+              <Text style={styles.contactNote}>Cancelled: {report.cancel_reason}</Text>
+            ) : null}
+          </View>
+        ) : null}
+
+        {mine && !closed ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Your report</Text>
+            <View style={styles.ownerActions}>
+              <TouchableOpacity style={styles.ownerBtn} onPress={openEdit} disabled={busy} activeOpacity={0.85}>
+                <Pencil color={Colors.navy} size={16} />
+                <Text style={styles.ownerBtnTxt}>Edit</Text>
+              </TouchableOpacity>
+              {!resolved ? (
+                <TouchableOpacity style={styles.ownerBtn} onPress={() => setResolveOpen(true)} disabled={busy} activeOpacity={0.85}>
+                  <CircleCheck color={Colors.tealDark} size={16} />
+                  <Text style={styles.ownerBtnTxt}>Mark resolved</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity style={styles.ownerBtn} onPress={() => setCancelOpen(true)} disabled={busy} activeOpacity={0.85}>
+                <Ban color={Colors.critical} size={16} />
+                <Text style={[styles.ownerBtnTxt, { color: Colors.critical }]}>Cancel</Text>
+              </TouchableOpacity>
+              {live ? (
+                <TouchableOpacity style={styles.ownerBtn} onPress={boostReport} disabled={busy || !!boostNext} activeOpacity={0.85}>
+                  <Zap color={boostNext ? Colors.textTertiary : Colors.coral} size={16} />
+                  <Text style={[styles.ownerBtnTxt, boostNext ? { color: Colors.textTertiary } : { color: Colors.coral }]}>
+                    {boostNext ? 'Boosted' : 'Boost'}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            {boostNext ? (
+              <Text style={styles.contactNote}>Boost again after {formatDateTime(boostNext.toISOString())}.</Text>
+            ) : live ? (
+              <Text style={styles.contactNote}>Boost re-notifies helpers on duty nearby. Once per 24 hours.</Text>
+            ) : null}
           </View>
         ) : null}
 
@@ -467,6 +643,115 @@ export default function ReportDetailsScreen() {
         )}
       </ScrollView>
       {banner && <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />}
+
+      <Modal visible={editOpen} animationType="slide" onRequestClose={() => setEditOpen(false)}>
+        <SafeAreaView style={styles.container}>
+          <View style={styles.topBar}>
+            <TouchableOpacity style={styles.topBtn} onPress={() => setEditOpen(false)} activeOpacity={0.75}>
+              <ChevronLeft color={Colors.text} size={22} />
+            </TouchableOpacity>
+            <Text style={styles.topTitle}>Edit report</Text>
+            <View style={styles.topBtn} />
+          </View>
+          <ScrollView contentContainerStyle={{ padding: 20, gap: 12, paddingBottom: 40 }}>
+            <Text style={styles.fieldLabel}>Description</Text>
+            <TextInput
+              style={styles.input}
+              value={editDesc}
+              onChangeText={setEditDesc}
+              multiline
+              placeholder="What happened?"
+              placeholderTextColor={Colors.textTertiary}
+            />
+            <Text style={styles.fieldLabel}>Last-seen location</Text>
+            <TextInput
+              style={styles.input}
+              value={editLoc}
+              onChangeText={setEditLoc}
+              placeholder="Neighborhood or address"
+              placeholderTextColor={Colors.textTertiary}
+            />
+            <DateField label="Last seen" value={editSeen} onChange={setEditSeen} />
+            <Text style={styles.fieldLabel}>Photos</Text>
+            <View style={styles.editPhotos}>
+              {editPhotos.map((p) => (
+                <View key={p} style={styles.editPhotoWrap}>
+                  <SignedImage path={p} style={styles.editPhoto} />
+                  <TouchableOpacity
+                    style={styles.editPhotoX}
+                    onPress={() => setEditPhotos((list) => list.filter((x) => x !== p))}
+                  >
+                    <Text style={styles.editPhotoXTxt}>×</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+              {editPhotos.length < 5 ? (
+                <TouchableOpacity style={styles.addPhoto} onPress={addEditPhoto} activeOpacity={0.85}>
+                  <Text style={styles.addPhotoTxt}>+ Photo</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            <Text style={styles.contactNote}>Edits go back to moderation before they are public again.</Text>
+            <TouchableOpacity style={styles.saveBtn} onPress={saveEdit} disabled={busy} activeOpacity={0.85}>
+              {busy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.saveBtnTxt}>Save changes</Text>}
+            </TouchableOpacity>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+
+      <Modal visible={resolveOpen} transparent animationType="fade" onRequestClose={() => setResolveOpen(false)}>
+        <View style={styles.overlay}>
+          <View style={styles.sheet}>
+            <Text style={styles.sheetTitle}>Mark resolved</Text>
+            <Text style={styles.contactNote}>How did this end?</Text>
+            {([
+              ['found', 'Found'],
+              ['rescued', 'Rescued'],
+              ['no_longer_needed', 'No longer needed'],
+            ] as const).map(([key, label]) => (
+              <TouchableOpacity
+                key={key}
+                style={styles.sheetRow}
+                disabled={busy}
+                onPress={() => runAction('resolve', { outcome: key })}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.sheetRowTxt}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity style={styles.sheetCancel} onPress={() => setResolveOpen(false)}>
+              <Text style={styles.sheetCancelTxt}>Back</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={cancelOpen} transparent animationType="fade" onRequestClose={() => setCancelOpen(false)}>
+        <View style={styles.overlay}>
+          <View style={styles.sheet}>
+            <Text style={styles.sheetTitle}>Cancel report</Text>
+            <Text style={styles.contactNote}>This hides it from the live map. Tell us why.</Text>
+            <TextInput
+              style={styles.input}
+              value={cancelReason}
+              onChangeText={setCancelReason}
+              placeholder="Reason"
+              placeholderTextColor={Colors.textTertiary}
+            />
+            <TouchableOpacity
+              style={[styles.saveBtn, { backgroundColor: Colors.critical }]}
+              disabled={busy || !cancelReason.trim()}
+              onPress={() => runAction('cancel', { reason: cancelReason.trim() })}
+              activeOpacity={0.85}
+            >
+              {busy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.saveBtnTxt}>Cancel report</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.sheetCancel} onPress={() => setCancelOpen(false)}>
+              <Text style={styles.sheetCancelTxt}>Back</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -536,4 +821,41 @@ const styles = StyleSheet.create({
 
   linkedPetCard: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: Colors.white, borderRadius: 14, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: Colors.border },
   linkedPetText: { fontSize: FontSizes.md, fontFamily: Fonts.semibold, color: Colors.coral, flex: 1 },
+
+  ownerActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  ownerBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10,
+    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border,
+  },
+  ownerBtnTxt: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.navy },
+  fieldLabel: { fontFamily: Fonts.extrabold, fontSize: 11, color: Colors.textTertiary, letterSpacing: 0.4, textTransform: 'uppercase' },
+  input: {
+    borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 12,
+    paddingHorizontal: 12, paddingVertical: 10, minHeight: 44,
+    fontFamily: Fonts.regular, fontSize: FontSizes.md, color: Colors.navy,
+    backgroundColor: Colors.white, textAlignVertical: 'top',
+  },
+  editPhotos: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  editPhotoWrap: { width: 72, height: 72, borderRadius: 10, overflow: 'hidden' },
+  editPhoto: { width: 72, height: 72 },
+  editPhotoX: {
+    position: 'absolute', top: 4, right: 4, width: 20, height: 20, borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center',
+  },
+  editPhotoXTxt: { color: Colors.white, fontFamily: Fonts.bold, fontSize: 14, lineHeight: 16 },
+  addPhoto: {
+    width: 72, height: 72, borderRadius: 10, borderWidth: 1.5, borderStyle: 'dashed',
+    borderColor: Colors.coral, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.white,
+  },
+  addPhotoTxt: { fontFamily: Fonts.bold, fontSize: 11, color: Colors.coral },
+  saveBtn: { backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+  saveBtnTxt: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.white },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 },
+  sheet: { backgroundColor: Colors.white, borderRadius: 20, padding: 20, gap: 10 },
+  sheetTitle: { fontFamily: Fonts.extrabold, fontSize: FontSizes.lg, color: Colors.navy },
+  sheetRow: { paddingVertical: 12, borderRadius: 12, backgroundColor: Colors.surface, alignItems: 'center' },
+  sheetRowTxt: { fontFamily: Fonts.bold, fontSize: FontSizes.md, color: Colors.navy },
+  sheetCancel: { paddingVertical: 10, alignItems: 'center' },
+  sheetCancelTxt: { fontFamily: Fonts.semibold, fontSize: FontSizes.sm, color: Colors.textSecondary },
 });

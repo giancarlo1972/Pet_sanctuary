@@ -50,6 +50,7 @@ export const ROLE_CARDS: {
 export const TABS_BY_VIEW: Record<RoleCategory, { key: string; label: string }[]> = {
   owner: [
     { key: 'pets', label: 'My Pets' },
+    { key: 'reports', label: 'My Reports' },
     { key: 'services', label: 'My Services' },
     { key: 'apps', label: 'My Applications' },
     { key: 'campaigns', label: 'My Campaigns' },
@@ -154,6 +155,7 @@ export function normalizeCategories(raw: unknown): RoleCategory[] {
 export function dashAction(tab: string): { label: string; href: string } {
   switch (tab) {
     case 'pets': return { label: 'Add a pet', href: '/add-pet' };
+    case 'reports': return { label: 'File a report', href: '/report' };
     case 'services': return { label: 'Offer a service', href: '/service-provider' };
     case 'apps': return { label: 'Browse pets to apply', href: '/(tabs)/pets' };
     case 'campaigns': return { label: 'Start a campaign', href: '/campaign-new' };

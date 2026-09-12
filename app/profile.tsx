@@ -32,6 +32,8 @@ import { hoursLeft, serviceLabel } from '@/lib/helper-duty';
 import AppHeader from '@/components/AppHeader';
 import { useMeChrome } from '@/lib/context/MeChromeContext';
 import { loadMeView, type MeVisualRole } from '@/lib/me-chrome';
+import MyReportRow from '@/components/MyReportRow';
+import { type MyReport, loadMyReports } from '@/lib/my-reports';
 
 type PetRel = {
   id: string; pet_id: string; pet_name: string; pet_photo: string | null;
@@ -117,6 +119,7 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
   const [helpReqs, setHelpReqs] = useState<any[]>([]);
   const [orgMembers, setOrgMembers] = useState<any[]>([]);
   const [friendCount, setFriendCount] = useState(0);
+  const [myReports, setMyReports] = useState<MyReport[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmConfig, setConfirmConfig] = useState<ConfirmConfig | null>(null);
 
@@ -261,6 +264,13 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
 
     const { data: hr } = await supabase.from('help_requests').select('id, status, service, created_at').eq('helper_id', userId).order('created_at', { ascending: false }).limit(20);
     setHelpReqs((hr as any[]) || []);
+
+    try {
+      const mine = await loadMyReports(userId);
+      setMyReports(mine);
+    } catch {
+      setMyReports([]);
+    }
 
     const [{ count: followN }, { count: shareN }] = await Promise.all([
       supabase.from('follows').select('follower_id', { count: 'exact', head: true }).eq('follower_id', userId),
@@ -522,7 +532,7 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
     return [];
   })();
 
-  const emptyLabel = (subs.find((x) => x.key === sub)?.label || tab).toLowerCase();
+  const emptyLabel = tab === 'reports' ? 'my reports' : (subs.find((x) => x.key === sub)?.label || tab).toLowerCase();
 
   const askSignOut = () => {
     setMenuOpen(false);
@@ -642,6 +652,10 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
             ) : null}
             {tab === 'services' && sub === 'duty' ? (
               <OnDutyCard userId={userId} phoneVerified={verif.phone_verified} onBanner={(kind, message) => setBanner({ kind, message })} />
+            ) : tab === 'reports' ? (
+              loading ? <ActivityIndicator color={Colors.coral} /> : myReports.length === 0 ? (
+                <View style={s.empty}><Text style={s.emptyTxt}>Nothing in my reports yet</Text></View>
+              ) : myReports.map((r) => <MyReportRow key={r.id} report={r} />)
             ) : loading ? <ActivityIndicator color={Colors.coral} /> : rows.length === 0 ? (
               <View style={s.empty}><Text style={s.emptyTxt}>Nothing in {emptyLabel} yet</Text></View>
             ) : rows.map((r: any) => {

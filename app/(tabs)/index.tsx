@@ -59,6 +59,9 @@ interface Report {
   location_address: string | null;
   created_at: string;
   distance_km?: number | null;
+  user_id?: string | null;
+  status?: string | null;
+  minePending?: boolean;
 }
 
 interface CommunityNeed {
@@ -264,34 +267,73 @@ export default function HomeScreen() {
       let flags: HelpFlags | null = null;
       if (user?.id) flags = await loadHelpFlags(user.id);
       setHelpFlags(flags);
-      const { data } = await supabase
-        .from('reports')
-        .select('id, report_type, severity, pet_name, location_address, created_at')
-        .in('status', ['active', 'open'])
-        .order('created_at', { ascending: false })
-        .limit(2);
-      const rows: Report[] = (data || []).map((r: any) => ({
+      const mapRow = (r: any): Report => ({
         id: r.id,
         report_type: r.report_type,
         severity: r.severity,
         pet_name: r.pet_name,
         location_address: r.location_address,
         created_at: r.created_at,
-      }));
+        user_id: r.user_id ?? null,
+        status: r.status ?? null,
+        minePending: Boolean(
+          user?.id && r.user_id === user.id
+          && (r.status === 'pending_moderation' || r.status === 'pending'),
+        ),
+      });
+      let live: Report[] = [];
+      const first = await supabase
+        .from('reports')
+        .select('id, report_type, severity, pet_name, location_address, created_at, user_id, status')
+        .in('status', ['active', 'open'])
+        .order('created_at', { ascending: false })
+        .limit(2);
+      if (first.error) {
+        const retry = await supabase
+          .from('reports')
+          .select('id, report_type, severity, pet_name, location_address, created_at')
+          .in('status', ['active', 'open'])
+          .order('created_at', { ascending: false })
+          .limit(2);
+        live = (retry.data || []).map(mapRow);
+      } else {
+        live = (first.data || []).map(mapRow);
+      }
+      if (user?.id) {
+        try {
+          const own = await supabase
+            .from('reports')
+            .select('id, report_type, severity, pet_name, location_address, created_at, user_id, status')
+            .eq('user_id', user.id)
+            .in('status', ['pending_moderation', 'pending'])
+            .order('created_at', { ascending: false })
+            .limit(2);
+          const pending = (own.data || []).map(mapRow);
+          const seen = new Set<string>();
+          const merged: Report[] = [];
+          for (const r of [...pending, ...live]) {
+            if (seen.has(r.id)) continue;
+            seen.add(r.id);
+            merged.push(r);
+            if (merged.length >= 3) break;
+          }
+          live = merged;
+        } catch { /* own pending is optional */ }
+      }
       const loc = locationRef.current;
-      if (loc && user?.id && rows.length) {
+      if (loc && user?.id && live.length) {
         try {
           const near = await loadHelpAlerts({ lat: loc.lat, lng: loc.lng, flags, limit: 50 });
           const dist: Record<string, number> = {};
           for (const n of near || []) {
             if (n?.id && n.distance_km != null) dist[n.id] = Number(n.distance_km);
           }
-          for (const r of rows) {
+          for (const r of live) {
             if (dist[r.id] != null) r.distance_km = dist[r.id];
           }
         } catch { /* proximity chip is optional */ }
       }
-      setLiveAlerts(rows);
+      setLiveAlerts(live);
     } catch { /* ignore */ }
   }, [user?.id]);
 
@@ -441,7 +483,11 @@ export default function HomeScreen() {
             <Text style={[styles.alertMeta, { color: style.color }]}>
               {REPORT_TYPE_LABELS[report.report_type] || report.report_type} · {style.label}
             </Text>
-            {mi ? (
+            {report.minePending ? (
+              <View style={[styles.miChip, { backgroundColor: Colors.standardBg }]}>
+                <Text style={[styles.miChipText, { color: Colors.accentDark }]}>Your report · Pending</Text>
+              </View>
+            ) : mi ? (
               <View style={styles.miChip}>
                 <Text style={styles.miChipText}>{mi}</Text>
               </View>

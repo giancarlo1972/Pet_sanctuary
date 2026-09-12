@@ -13,6 +13,8 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import SignedImage from '@/components/SignedImage';
 import { isUsablePhoto } from '@/lib/photos';
+import MyReportRow from '@/components/MyReportRow';
+import { type MyReport, loadMyReports } from '@/lib/my-reports';
 
 type PetRow = { id: string; name: string | null; main_photo_url: string | null; species: string | null };
 type AppRow = { id: string; pet_name: string; status: string; application_type: string };
@@ -27,6 +29,7 @@ export default function ManageScreen() {
   const [myApps, setMyApps] = useState<AppRow[]>([]);
   const [fosters, setFosters] = useState<FosterRow[]>([]);
   const [services, setServices] = useState<string[]>([]);
+  const [myReports, setMyReports] = useState<MyReport[]>([]);
 
   const load = useCallback(async () => {
     if (!user) { setLoading(false); return; }
@@ -57,6 +60,12 @@ export default function ManageScreen() {
 
     const { data: duty } = await supabase.from('helper_status').select('services, on_duty').eq('user_id', user.id).maybeSingle();
     setServices((((duty as any)?.services) || []) as string[]);
+
+    try {
+      setMyReports(await loadMyReports(user.id));
+    } catch {
+      setMyReports([]);
+    }
     } catch { /* ignore */ }
     finally { setLoading(false); }
   }, [user]);
@@ -103,6 +112,12 @@ export default function ManageScreen() {
           </TouchableOpacity>
         ))}
         <TouchableOpacity style={styles.ghost} onPress={() => router.push('/add-pet')}><Text style={styles.ghostTxt}>Add a pet</Text></TouchableOpacity>
+
+        <Text style={styles.kicker}>My Reports</Text>
+        {myReports.length === 0 ? <Text style={styles.meta}>No reports filed yet.</Text> : null}
+        {myReports.slice(0, 8).map((r) => <MyReportRow key={r.id} report={r} />)}
+        <TouchableOpacity style={styles.ghost} onPress={() => router.push('/reports-tracking')}><Text style={styles.ghostTxt}>See all reports</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.ghost} onPress={() => router.push('/report')}><Text style={styles.ghostTxt}>File a report</Text></TouchableOpacity>
 
         <Text style={styles.kicker}>My Applications</Text>
         {myApps.length === 0 ? <Text style={styles.meta}>No applications yet.</Text> : null}

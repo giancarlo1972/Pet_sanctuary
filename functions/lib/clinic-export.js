@@ -643,6 +643,10 @@ export function stampEventDates(parsed, documentDate = null) {
   }
   for (const m of parsed.medications || []) setEvent(m, m.given_on, m.administered_on);
   for (const n of parsed.owner_notes || []) setEvent(n, n.date);
+  for (const inv of parsed.invoices || []) {
+    setEvent(inv, inv.invoice_date);
+    if (!inv.invoice_date) inv.invoice_date = inv.event_date || null;
+  }
   return parsed;
 }
 
@@ -1058,28 +1062,166 @@ function applyLabSegmentHeader(seg, visitBlocks, exporting = null) {
   seg.date = date || null;
 }
 
-export const SEGMENT_TYPES = ['visit', 'vitals', 'labs', 'vaccines', 'weights', 'reminders', 'identity', 'narrative'];
-export const TABLE_TYPES = new Set(['weights', 'reminders', 'labs']);
+export function looksLikeInvoice(text) {
+  const src = String(text || '');
+  if (/\binvoice\s*(?:number|no\.?|#)/i.test(src)) return true;
+  if (/\binvoice\s*#?\s*\d{3,}/i.test(src)) return true;
+  // Messy OCR: "Invoice" and "Paid"/"Subtotal" plus money, $ optional.
+  if (/\binvoice\b/i.test(src) && /\b(paid|subtotal|amount due|total due|balance due)\b/i.test(src) && /\d+\.\d{2}/.test(src)) return true;
+  const money = src.match(/\$\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})/g) || [];
+  if (money.length >= 2 && /\b(subtotal|amount due|balance due|sales tax|total due|\bpaid\b)/i.test(src)) return true;
+  return false;
+}
+
+export function classifyInvoiceCategory(desc) {
+  const s = String(desc || '').toLowerCase();
+  if (/\b(rabies|fvrcp|felv|vaccine|vaccin|purevax|bordetella|dhpp|lepto|booster)\b/.test(s)) return 'vaccines';
+  if (/\b(lab|idexx|cbc|chemistry|fecal|urinalys|t4|blood|snap|pcr|panel)\b/.test(s)) return 'labs';
+  if (/\b(sx|surg|spay|neuter|dental|anesthes|mass remov)\b/.test(s)) return 'surgery';
+  if (/\b(board|hospitaliz|kennel)\b/.test(s)) return 'boarding';
+  if (/\b(rx|medicat|antibiotic|prescription|tablet|capsule|convenia|onsior|rimadyl|pain)\b/.test(s)) return 'meds';
+  if (/\b(exam|office visit|consultation|wellness|office call|physical|office)\b/.test(s)) return 'exam';
+  return 'other';
+}
+
+function parseMoney(s) {
+  const n = parseFloat(String(s || '').replace(/[$,]/g, ''));
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+}
+
+function labeledMoney(text, re) {
+  const m = String(text || '').match(re);
+  return m ? parseMoney(m[1]) : null;
+}
+
+/** Invoice / bill block: Invoice #, $ line items, subtotal / tax / total, Paid. */
+export function parseInvoice(src, fallbackDate, fallbackClinic, opts = {}) {
+  const text = String(src || '');
+  const forced = Boolean(opts.forced);
+  if (!forced && !looksLikeInvoice(text)) return [];
+
+  const invoice_no = (text.match(/invoice\s*(?:number|no\.?|#)\s*[:.]?\s*([A-Z0-9\-]{3,})/i) || [])[1]
+    || (text.match(/#\s*(\d{3,8})\b/) || [])[1]
+    || (forced ? ((text.match(/\b(\d{4,6})\b/) || [])[1] || null) : null);
+
+  const service = text.match(/service\s*(?:date|on)\s*[:.]?\s*([A-Za-z0-9,/\s]+?\d{4})/i);
+  const invDate = text.match(/invoice\s*date\s*[:.]?\s*([A-Za-z0-9,/\s]+?\d{4})/i);
+  const due = text.match(/(?:due(?:\s+date)?)\s*[:.]?\s*([A-Za-z0-9,/\s]+?\d{4})/i);
+  const invoice_date = toIso((service && service[1]) || '')
+    || toIso((invDate && invDate[1]) || '')
+    || fallbackDate
+    || detectDocumentDate(text)
+    || toIso((due && due[1]) || '')
+    || null;
+
+  let subtotal = labeledMoney(text, /subtotal\s*[:.]?\s*\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})|\d+\.\d{2})/i);
+  let tax = labeledMoney(text, /(?:sales\s*)?tax\s*[:.]?\s*\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})|\d+\.\d{2})/i);
+  let total = labeledMoney(text, /(?:^|\n)\s*(?:amount\s+due|balance(?:\s+due)?|(?<!sub)total(?:\s+due)?)\s*[:.]?\s*\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})|\d+\.\d{2})/im);
+  const due_date = toIso((due && due[1]) || '') || null;
+
+  const line_items = [];
+  const skipLine = (t) => /\bsubtotal\b|\bamount due\b|\btotal due\b|^\s*total\b|\bbalance(\s+due)?\b|\b(?:sales\s*)?tax\b/i.test(t);
+  for (const rawLine of text.split(/\r?\n/)) {
+    const t = rawLine.trim();
+    if (!t || skipLine(t)) continue;
+    const hit = t.match(/^(.*\S)\s+\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2}))\s*$/)
+      || t.match(/^(.*\S)\s+(\d{1,3}(?:,\d{3})*\.\d{2})\s*$/);
+    if (!hit) continue;
+    let desc = hit[1].replace(/^[\-\*\d.)\s]+/, '').replace(/\s{2,}/g, ' ').trim();
+    if (!desc || desc.length < 2) continue;
+    if (/^(invoice|date|due|patient|owner|page|qty|quantity|#)\b/i.test(desc)) continue;
+    const amount = parseMoney(hit[2]);
+    if (amount == null || amount <= 0) continue;
+    const qtyHit = desc.match(/(\d+(?:\.\d+)?)\s*[x×]\b/i);
+    line_items.push({
+      description: desc,
+      qty: qtyHit ? parseFloat(qtyHit[1]) : 1,
+      amount,
+      category: classifyInvoiceCategory(desc),
+    });
+  }
+
+  if (!line_items.length) {
+    const money = [];
+    const re = /\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2}))|\b(\d+\.\d{2})\b/g;
+    let m;
+    while ((m = re.exec(text))) {
+      const n = parseMoney(m[1] || m[2]);
+      if (n == null || n <= 0 || n > 100000) continue;
+      money.push(n);
+    }
+    const unique = [];
+    for (const n of money) {
+      if (!unique.includes(n)) unique.push(n);
+    }
+    const small = unique.filter((n) => n > 0 && n < 30);
+    const large = unique.filter((n) => n >= 30);
+    if (tax == null && small.length) tax = small[0];
+    if (subtotal == null && large.length) subtotal = large[0];
+    if (total == null && large.length) {
+      const withTax = Math.round(((large[0] + (tax || 0)) * 100)) / 100;
+      total = unique.includes(withTax) ? withTax : large[large.length - 1];
+    }
+    if (large.length) {
+      line_items.push({
+        description: 'Services',
+        qty: 1,
+        amount: large[0],
+        category: 'exam',
+      });
+    }
+  }
+
+  if (subtotal == null && line_items.length) {
+    subtotal = Math.round(line_items.reduce((a, x) => a + Number(x.amount || 0), 0) * 100) / 100;
+  }
+  if (total == null && (subtotal != null || tax != null)) {
+    total = Math.round(((subtotal || 0) + (tax || 0)) * 100) / 100;
+  }
+  const paid = /\bpaid\b/i.test(text) && !/\b(unpaid|not paid|balance due)\b/i.test(text);
+
+  if (!invoice_no && !line_items.length && total == null) return [];
+
+  return [{
+    clinic: fallbackClinic || detectExportingPractice(text) || null,
+    invoice_date,
+    due_date,
+    invoice_no: invoice_no ? String(invoice_no) : null,
+    line_items,
+    subtotal,
+    tax,
+    total,
+    paid,
+    event_date: invoice_date,
+    source: 'ai_extracted',
+  }];
+}
+
+export const SEGMENT_TYPES = ['visit', 'vitals', 'labs', 'vaccines', 'weights', 'reminders', 'identity', 'invoice', 'narrative'];
+export const TABLE_TYPES = new Set(['weights', 'reminders', 'labs', 'invoice']);
 
 const SEGMENT_MARKERS = [
   { re: /Service on\s+(\d{1,2}\/\d{1,2}\/\d{2,4})/gi, type: 'visit', dateGroup: 1 },
   { re: /(?:^|\n)\s*Patient Information\b/gi, type: 'identity' },
   { re: /(?:^|\n)\s*Weight History\b/gi, type: 'weights' },
   { re: /(?:^|\n)\s*Reminders?\b/gi, type: 'reminders' },
+  { re: /(?:^|\n)\s*Invoice\s*(?:#|No\.?|Number)/gi, type: 'invoice' },
   // IDEXX / panel tables only — not inline "Urinalysis: 1+ protein" in a visit note.
   { re: /(?:^|\n)\s*(?:IDEXX(?:\s+Reference(?:\s+Laboratories)?)?|Chemistry Panel|CBC(?:\s+with(?:\s+diff(?:erential)?)?)?)\b/gim, type: 'labs' },
 ];
 
 export function classifySegment(seg) {
-  const head = String(seg?.text || '').slice(0, 280);
+  const text = String(seg?.text || '');
+  const head = text.slice(0, 280);
   if (/weight\s+history/i.test(head)) return 'weights';
   if (/(?:^|\n)\s*reminders?\b/i.test(head) && !/service on/i.test(head)) return 'reminders';
   if (/(?:^|\n)\s*(?:IDEXX|TEST RESULTS?|REFERENCE VALUES?|Reference Ranges?|Chemistry Panel)\b/i.test(head)) return 'labs';
   if (/patient information/i.test(head)) return 'identity';
+  if (looksLikeInvoice(text)) return 'invoice';
   if (/service on/i.test(head)) return 'visit';
-  if (/inventory item/i.test(head) && /purevax|fvrcp|rabies|felv/i.test(seg.text || '')) return 'vaccines';
+  if (/inventory item/i.test(head) && /purevax|fvrcp|rabies|felv/i.test(text)) return 'vaccines';
   if (/(?:^|\n)\s*(?:vaccines?|immunizations?)\b/i.test(head) && !/visit report|service on|reason:/i.test(head)) return 'vaccines';
-  if (/physical exam|\bTPR\b|\bBCS\b/i.test(head) && String(seg.text || '').length < 1800) return 'vitals';
+  if (/physical exam|\bTPR\b|\bBCS\b/i.test(head) && text.length < 1800) return 'vitals';
   if (seg?.type && SEGMENT_TYPES.includes(seg.type)) return seg.type;
   if (/visit report|reason:|findings:|plan:/i.test(head)) return 'visit';
   return 'narrative';
@@ -1221,6 +1363,7 @@ function emptyRows() {
     owner_notes: [],
     identity: null,
     lifestyle: null,
+    invoices: [],
   };
 }
 
@@ -1228,6 +1371,10 @@ export function parseSegmentCode(seg) {
   const rows = emptyRows();
   const t = seg.text || '';
   const type = classifySegment(seg);
+  if (type === 'invoice' || looksLikeInvoice(t)) {
+    rows.invoices = parseInvoice(t, seg.date, seg.clinic);
+    return inheritSegmentHeader(rows, seg);
+  }
   if (type === 'weights' || /weight\s+history/i.test(t.slice(0, 80))) {
     rows.weights = parseWeightHistory(t);
   }
@@ -1329,15 +1476,19 @@ function isoInText(iso, text) {
 export function numbersInText(text) {
   const src = String(text || '');
   const dates = [];
+  const dateSpans = [];
   const dateRe = /\b(\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})\b/g;
   let m;
   while ((m = dateRe.exec(src))) {
     const iso = toIso(m[1]) || monthEndIso(m[1]);
     if (iso) dates.push(iso);
+    dateSpans.push([m.index, m.index + m[0].length]);
   }
+  const inDate = (idx) => dateSpans.some(([a, b]) => idx >= a && idx < b);
   const nums = [];
   const numRe = /\b(\d+\.\d+|\d+)\b/g;
   while ((m = numRe.exec(src))) {
+    if (inDate(m.index)) continue;
     const raw = m[1];
     const start = m.index;
     const before = src.slice(Math.max(0, start - 8), start);
@@ -1438,7 +1589,7 @@ export function mergeRowSets(parts) {
   const out = emptyRows();
   for (const p of parts) {
     if (!p) continue;
-    for (const k of ['vaccinations', 'labs', 'weights', 'visits', 'exams', 'conditions', 'medications', 'vitals_series', 'owner_notes']) {
+    for (const k of ['vaccinations', 'labs', 'weights', 'visits', 'exams', 'conditions', 'medications', 'vitals_series', 'owner_notes', 'invoices']) {
       if (Array.isArray(p[k])) out[k].push(...p[k]);
     }
     if (p.identity) out.identity = { ...(out.identity || {}), ...p.identity };
@@ -1468,6 +1619,7 @@ export function pipelineCode(text) {
         labs: (repaired.labs || []).length,
         weights: (repaired.weights || []).length,
         visits: (repaired.visits || []).length,
+        invoices: (repaired.invoices || []).length,
       },
       missing: check.missing.length,
       ungrounded: check.ungrounded.length,
@@ -1485,6 +1637,10 @@ export function pipelineCode(text) {
   if (!merged.vaccinations.length && harvested.vaccinations.length) merged.vaccinations = harvested.vaccinations;
   if (!merged.visits.length && harvested.visits.length) merged.visits = harvested.visits;
   if (!merged.labs.length && harvested.labs.length) merged.labs = harvested.labs;
+  if (!(merged.invoices || []).length) {
+    const inv = parseInvoice(text, document_date, exporting);
+    if (inv.length) merged.invoices = inv;
+  }
   merged.issuing_clinic = exporting || null;
   merged.document_date = document_date || merged.identity?.document_date || null;
   if (merged.identity && !merged.identity.document_date) merged.identity.document_date = merged.document_date;
@@ -1498,8 +1654,12 @@ export function pipelineCode(text) {
   merged.undated = itemsTrulyUndated(merged);
   merged.segment_stats = stats;
   merged.mentioned_but_missing = parts.flatMap((p) => p.mentioned_but_missing || []);
-  merged.date = latest?.event_date || latest?.date || harvested.date || segs[0]?.date || null;
-  merged.clinic = latest?.clinic || (datedVisits.length <= 1 ? (harvested.clinic || segs[0]?.clinic || null) : null);
+  if ((merged.invoices || []).length) {
+    // Invoice row is the structure — leftover SKUs / page integers are not a gap list.
+    merged.mentioned_but_missing = [];
+  }
+  merged.date = latest?.event_date || latest?.date || harvested.date || segs[0]?.date || merged.invoices?.[0]?.invoice_date || null;
+  merged.clinic = latest?.clinic || (datedVisits.length <= 1 ? (harvested.clinic || segs[0]?.clinic || merged.invoices?.[0]?.clinic || null) : null);
   merged.vet = latest?.vet || null;
   if (merged.identity) {
     attachDerivedAge(merged.identity, merged.document_date || latest?.event_date || latest?.date || merged.date);
@@ -1565,5 +1725,21 @@ DOB: 01/15/2022
 January 7, 2025
 Service on 1/7/2025
 Wellness exam
+`;
+
+export const BONDVET_INVOICE_FIXTURE = `BondVet
+Invoice #13422
+Invoice date: 05/22/2026
+Service date: 05/22/2026
+Due: 05/23/2026
+Patient: Private Ryan
+
+Office visit / exam                         $200.00
+NY sales tax                                  $2.37
+
+Subtotal                                    $200.00
+Tax                                           $2.37
+Total                                       $202.37
+Paid
 `;
 

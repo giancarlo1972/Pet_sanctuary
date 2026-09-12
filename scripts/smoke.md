@@ -9,7 +9,7 @@ It cannot sign in as `giancarlo.pereira@gmail.com` — no password in this
 environment.
 
 **You** run **4 (signed-out submit)** after the matching migration is
-applied, plus **6–11** signed in on hub-preview. Reply with PASS/FAIL
+applied, plus **6–11** and **13** signed in on hub-preview. Reply with PASS/FAIL
 and the value seen, one line each. Grok pushes only after those lines
 are PASS.
 
@@ -27,6 +27,7 @@ are PASS.
 10. **Upload** a 1-page vaccine card image → Confirm sheet shows ≥ 1 vaccine.
 11. **Platform → Pets** search keeps focus while typing.
 12. `npx tsc --noEmit` and `npx expo export --platform web` both exit 0.
+13. **Upload BondVet invoice** → Bills tile shows `1 · $X.XX`. Confirm sheet reads `1 invoice · $X total · N line items` (not a wall of raw numbers).
 
 ## Database
 

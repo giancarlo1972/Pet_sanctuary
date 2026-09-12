@@ -25,6 +25,8 @@ import {
   stampEventDates,
   coalesceConditionOnset,
   attachDerivedAge,
+  parseInvoice,
+  looksLikeInvoice,
 } from '../lib/clinic-export.js';
 
 function decodedBytes(b64) {
@@ -47,7 +49,7 @@ function getSupabase(env) {
   return { url, key };
 }
 
-const ALL_CONTENT_KINDS = ['vaccinations', 'labs', 'exam_visit', 'weight', 'medications', 'imaging', 'insurance', 'other'];
+const ALL_CONTENT_KINDS = ['vaccinations', 'labs', 'exam_visit', 'weight', 'medications', 'imaging', 'insurance', 'invoice', 'other'];
 
 function normalizeKinds(raw) {
   const arr = (Array.isArray(raw) ? raw : String(raw || '').split(',')).map((k) => String(k).trim()).filter(Boolean);
@@ -73,6 +75,7 @@ function detectedContentKinds(out) {
   if (Array.isArray(out.medications) && out.medications.length) k.push('medications');
   if (Array.isArray(out.diagnostics) && out.diagnostics.length) k.push('imaging');
   if (out.insurance && (out.insurance.provider || out.insurance.policy_number || out.insurance.plan)) k.push('insurance');
+  if (Array.isArray(out.invoices) && out.invoices.length) k.push('invoice');
   return k;
 }
 
@@ -97,6 +100,7 @@ function applyKinds(out, kinds) {
     }
     if (!k.has('medications')) out.medications = [];
     if (!k.has('imaging')) out.diagnostics = [];
+    if (!k.has('invoice')) out.invoices = [];
   }
   if (!Array.isArray(out.undated)) out.undated = [];
   if (!Array.isArray(out.mentioned_but_missing)) out.mentioned_but_missing = [];
@@ -118,6 +122,7 @@ const SCHEMA_PARTS = {
   medications: `"medications": [{"name": "", "dose": null, "route": null, "given_on": null, "status": "active|completed"}]`,
   imaging: `"diagnostics": [{"kind": "imaging|pcr|other", "name": "", "result": null, "date": null}]`,
   insurance: `"kind": "insurance"`,
+  invoice: `"invoices": [{"clinic": null, "invoice_date": "YYYY-MM-DD or null", "invoice_no": null, "line_items": [{"description": "", "qty": 1, "amount": 0, "category": "exam|labs|vaccines|meds|surgery|boarding|other"}], "subtotal": null, "tax": null, "total": null, "paid": false}]`,
   other: `"kind": "other"`,
 };
 
@@ -129,6 +134,7 @@ const RULE_PARTS = {
   medications: '- medications: every drug administered or prescribed (name, dose, route PO/SC/IV, date, active vs completed).',
   imaging: '- diagnostics: imaging (x-ray, ultrasound) and PCR/Idexx panels with the printed result text.',
   insurance: '- insurance: extract policy/carrier name into title and clinic; date = policy or letter date.',
+  invoice: '- invoices: Invoice #, line items with $ amounts, subtotal, tax, total, Paid. Classify each line as exam, labs, vaccines, meds, surgery, boarding, or other. Do not dump dollar amounts into labs or vaccines.',
   other: '- other: capture leftover labeled facts in ai_note only.',
 };
 
@@ -267,6 +273,7 @@ const EXTRACTION_SCHEMA = {
     owner_notes: { type: 'array', items: { type: 'object', additionalProperties: true } },
     identity: { type: 'object', additionalProperties: true },
     lifestyle: { type: 'object', additionalProperties: true },
+    invoices: { type: 'array', items: { type: 'object', additionalProperties: true } },
     kind: NULLABLE_STR,
   },
   required: ['ai_note', 'vaccinations', 'labs', 'weights', 'visits', 'undated'],
@@ -305,8 +312,7 @@ const CLASSIFY_TOOL = {
     type: 'object',
     additionalProperties: false,
     properties: {
-      type: { type: 'string', enum: ['visit', 'vitals', 'labs', 'vaccines', 'weights', 'reminders', 'identity', 'narrative'] },
-    },
+      type: { type: 'string', enum: ['visit', 'vitals', 'labs', 'vaccines', 'weights', 'reminders', 'identity', 'invoice', 'narrative'] },    },
     required: ['type'],
   },
 };
@@ -351,6 +357,9 @@ const TYPE_TOOLS = {
   identity: typeTool('extract_identity', 'Extract identity fields from the patient header.', {
     identity: EXTRACTION_SCHEMA.properties.identity,
   }, ['identity']),
+  invoice: typeTool('extract_invoice', 'Extract this invoice only: Invoice #, line items with amounts, subtotal, tax, total, paid.', {
+    invoices: EXTRACTION_SCHEMA.properties.invoices,
+  }, ['invoices']),
 };
 
 function logSegment(stat) {
@@ -542,7 +551,7 @@ function collectUndated(parsed) {
 
 function mergeParsedArrays(base, extra) {
   const out = { ...base };
-  const keys = ['vaccinations', 'labs', 'weights', 'visits', 'undated', 'exams', 'conditions', 'medications', 'diagnostics', 'vitals_series', 'owner_notes'];
+  const keys = ['vaccinations', 'labs', 'weights', 'visits', 'undated', 'exams', 'conditions', 'medications', 'diagnostics', 'vitals_series', 'owner_notes', 'invoices'];
   for (const k of keys) {
     const a = Array.isArray(out[k]) ? out[k] : [];
     const b = Array.isArray(extra?.[k]) ? extra[k] : [];
@@ -669,6 +678,7 @@ function shapeParsed(parsed) {
     owner_notes: Array.isArray(parsed.owner_notes) ? parsed.owner_notes.filter((n) => n && n.text) : [],
     lifestyle: parsed.lifestyle || null,
     identity: parsed.identity || null,
+    invoices: Array.isArray(parsed.invoices) ? parsed.invoices : [],
     issuing_clinic: parsed.issuing_clinic || null,
     document_date: parsed.document_date || parsed.identity?.document_date || null,
   };
@@ -751,19 +761,19 @@ function extractPdfTextNaive(bytes) {
 
 async function classifyWithHaiku(key, seg) {
   const local = classifySegment(seg);
-  if (TABLE_TYPES.has(local) || local === 'visit' || local === 'identity' || local === 'vaccines') return local;
+  if (TABLE_TYPES.has(local) || local === 'visit' || local === 'identity' || local === 'vaccines' || local === 'invoice') return local;
   try {
     const { resp, json, text, toolInput } = await callClaude(
       key,
       HAIKU,
-      [{ type: 'text', text: `Classify this clinic-record segment. Types: visit, vitals, labs, vaccines, weights, reminders, identity, narrative.\n\n${String(seg.text || '').slice(0, 1200)}` }],
+      [{ type: 'text', text: `Classify this clinic-record segment. Types: visit, vitals, labs, vaccines, weights, reminders, identity, invoice, narrative. Use invoice when the page is a bill (Invoice #, $ amounts, subtotal/tax/total, Paid).\n\n${String(seg.text || '').slice(0, 1200)}` }],
       null,
       { tools: [CLASSIFY_TOOL], tool_choice: { type: 'tool', name: 'classify_segment' }, max_tokens: 200 },
     );
     if (!resp.ok) return local;
     const parsed = parseModelResult(text, toolInput);
     const t = parsed?.type;
-    if (t && ['visit', 'vitals', 'labs', 'vaccines', 'weights', 'reminders', 'identity', 'narrative'].includes(t)) return t;
+    if (t && ['visit', 'vitals', 'labs', 'vaccines', 'weights', 'reminders', 'identity', 'invoice', 'narrative'].includes(t)) return t;
   } catch (e) {
     console.log('[parse-pet-document] classify skip', String(e));
   }
@@ -811,10 +821,11 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
 
   const stats = [];
   const parts = [];
+  const forceInvoice = requestedKinds(kinds).length === 1 && requestedKinds(kinds)[0] === 'invoice';
   for (let i = 0; i < segs.length; i++) {
     const seg = segs[i];
-    let type = classifySegment(seg);
-    if (!TABLE_TYPES.has(type) && type === 'narrative') {
+    let type = forceInvoice ? 'invoice' : classifySegment(seg);
+    if (!forceInvoice && !TABLE_TYPES.has(type) && type === 'narrative') {
       type = await classifyWithHaiku(key, seg);
     }
     seg.type = type;
@@ -860,6 +871,7 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
         labs: (rows.labs || []).length,
         weights: (rows.weights || []).length,
         visits: (rows.visits || []).length,
+        invoices: (rows.invoices || []).length,
       },
       missing: check.missing.length,
       ungrounded: check.ungrounded.length,
@@ -896,6 +908,10 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
   if (!merged.vaccinations.length && harvested.vaccinations.length) merged.vaccinations = harvested.vaccinations;
   if (!merged.visits.length && harvested.visits.length) merged.visits = harvested.visits;
   if (!merged.labs.length && harvested.labs.length) merged.labs = harvested.labs;
+  if (!(merged.invoices || []).length) {
+    const inv = parseInvoice(text, document_date, exporting, { forced: forceInvoice });
+    if (inv.length) merged.invoices = inv;
+  }
   merged.issuing_clinic = exporting || null;
   merged.document_date = document_date;
   merged.conditions = coalesceConditionOnset(merged.conditions);
@@ -943,8 +959,9 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
     vitals_series: merged.vitals_series.length ? merged.vitals_series : parseFlowsheet(text),
     lifestyle: merged.lifestyle,
     identity: merged.identity,
-    date: latest?.event_date || latest?.date || harvested.date || segs[0]?.date || null,
-    clinic: latest?.clinic || (datedVisits.length <= 1 ? (harvested.clinic || segs[0]?.clinic || null) : null),
+    invoices: merged.invoices || [],
+    date: latest?.event_date || latest?.date || harvested.date || segs[0]?.date || (merged.invoices && merged.invoices[0]?.invoice_date) || null,
+    clinic: latest?.clinic || (datedVisits.length <= 1 ? (harvested.clinic || segs[0]?.clinic || merged.invoices?.[0]?.clinic || null) : null),
     vet: latest?.vet || null,
     issuing_clinic: exporting || null,
     document_date,
@@ -953,6 +970,7 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
   });
 
   const mentioned_but_missing = parts.flatMap((p) => p.mentioned_but_missing || []);
+  if ((shaped.invoices || []).length) mentioned_but_missing.length = 0;
   const aiStatus = mentioned_but_missing.length ? 'partial' : 'ready';
   const latestW = weights.slice().sort((a, b) => String(b.measured_on || '').localeCompare(String(a.measured_on || '')))[0] || null;
   const logLine = logExtraction({
@@ -968,12 +986,15 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
   logLine.segments = stats;
   console.log('[parse-pet-document] pipeline done', { segments: stats.length, extracted: logLine.extracted, missing: mentioned_but_missing.length });
 
+  const inv0 = (shaped.invoices || [])[0];
+  const invoiceTitle = inv0?.invoice_no ? `Invoice #${inv0.invoice_no}` : (shaped.invoices || []).length ? 'Invoice' : null;
+  const lowConfidence = !shaped.vaccinations.length && !shaped.labs.length && !shaped.visits.length && !shaped.weights.length && !(shaped.invoices || []).length;
   const out = {
     parsed: true,
     source: 'ai_extracted',
     schemaVersion: 3,
-    kind: 'clinic_export',
-    title: 'Clinic export',
+    kind: (shaped.invoices || []).length ? 'invoice' : 'clinic_export',
+    title: invoiceTitle || 'Clinic export',
     clinic: shaped.clinic,
     date: shaped.date,
     vaccinations: shaped.vaccinations,
@@ -985,6 +1006,7 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
     exams: shaped.exams,
     vitals_series: shaped.vitals_series,
     diagnostics: shaped.diagnostics,
+    invoices: shaped.invoices || [],
     weight: latestW,
     identity: shaped.identity,
     lifestyle: shaped.lifestyle,
@@ -997,6 +1019,7 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
     owner_notes: shaped.owner_notes,
     undated: shaped.undated,
     mentioned_but_missing,
+    classifier_confidence: lowConfidence ? 'low' : 'high',
     segment_stats: stats,
     parse_log: logLine,
   };
@@ -1115,7 +1138,7 @@ export async function onRequestPost(context) {
           console.log('[parse-pet-document] naive pdf text', naive.charCount, 'pages', naive.pageCount);
           const naivePer = naive.charCount / Math.max(naive.pageCount || pageCountIn || 1, 1);
           console.log('[parse-pet-document]', { pages: naive.pageCount || pageCountIn, chars: naive.charCount, mode: naivePer < 200 ? 'images' : 'text' });
-          if (naive.charCount >= 80 && (naivePer >= 200 || naive.charCount > 2500 || /Service on\s+\d/i.test(naive.text) || /Visit report|Patient Information|Weight History/i.test(naive.text))) {
+          if (naive.charCount >= 80 && (naivePer >= 200 || naive.charCount > 2500 || /Service on\s+\d/i.test(naive.text) || /Visit report|Patient Information|Weight History|Invoice\s*#/i.test(naive.text) || looksLikeInvoice(naive.text))) {
             return parseClinicExport(env, key, documentId, naive.text, naive.pageCount || pageCountIn, kinds);
           }
           if (naivePer >= 200) {
@@ -1212,6 +1235,8 @@ export async function onRequestPost(context) {
       let shaped = shapeParsed(extracted.parsed);
       if (extractedText) {
         const harvested = harvestKnownFacts(extractedText);
+        const invForced = requestedKinds(kinds)[0] === 'invoice';
+        const inv = parseInvoice(extractedText, harvested.date, harvested.clinic, { forced: invForced });
         shaped = shapeParsed(mergeParsedArrays(shaped, {
           vaccinations: harvested.vaccinations.map(normalizeVax),
           labs: harvested.labs.map(normalizeLab),
@@ -1219,19 +1244,22 @@ export async function onRequestPost(context) {
           visits: harvested.visits.map(normalizeVisit).filter(Boolean),
           lifestyle: harvested.lifestyle,
           identity: harvested.identity,
+          invoices: inv,
           date: harvested.date,
           clinic: harvested.clinic,
           undated: [],
         }));
       }
       const summaryForGaps = `${shaped.ai_note || ''}\n${extractedText ? extractedText.slice(0, 6000) : ''}`;
-      let mentioned_but_missing = await listGaps(key, model, summaryForGaps, {
-        vaccinations: shaped.vaccinations,
-        labs: shaped.labs,
-        weights: shaped.weights,
-        visits: shaped.visits,
-      });
-      if (mentioned_but_missing.length) {
+      let mentioned_but_missing = (shaped.invoices || []).length
+        ? []
+        : await listGaps(key, model, summaryForGaps, {
+          vaccinations: shaped.vaccinations,
+          labs: shaped.labs,
+          weights: shaped.weights,
+          visits: shaped.visits,
+        });
+      if (mentioned_but_missing.length && !(shaped.invoices || []).length) {
         const retry = await extractStructured(
           key,
           model,
@@ -1258,14 +1286,16 @@ export async function onRequestPost(context) {
         mentioned_but_missing,
       });
       const aiStatus = mentioned_but_missing.length ? 'partial' : 'ready';
+      const inv0 = (shaped.invoices || [])[0];
+      const invoiceTitle = inv0?.invoice_no ? `Invoice #${inv0.invoice_no}` : (shaped.invoices || []).length ? 'Invoice' : null;
       const out = applyKinds({
         parsed: true,
         source: 'ai_extracted',
         schemaVersion: 2,
-        title: shaped.title || extracted.parsed.title || null,
-        kind: shaped.kind || extracted.parsed.kind || null,
+        title: invoiceTitle || shaped.title || extracted.parsed.title || null,
+        kind: (shaped.invoices || []).length ? 'invoice' : (shaped.kind || extracted.parsed.kind || null),
         clinic: shaped.clinic || extracted.parsed.clinic || null,
-        date: shaped.date || extracted.parsed.date || null,
+        date: shaped.date || extracted.parsed.date || inv0?.invoice_date || null,
         vaccinations: shaped.vaccinations,
         conditions: shaped.conditions,
         medications: shaped.medications,
@@ -1276,12 +1306,14 @@ export async function onRequestPost(context) {
         exams: shaped.exams,
         diagnostics: shaped.diagnostics,
         vitals_series: shaped.vitals_series,
+        invoices: shaped.invoices || [],
         ai_note: shaped.ai_note || null,
         owner_notes: shaped.owner_notes,
         identity: shaped.identity || extracted.parsed.identity || null,
         lifestyle: shaped.lifestyle || extracted.parsed.lifestyle || null,
         undated: shaped.undated,
         mentioned_but_missing,
+        classifier_confidence: (shaped.invoices || []).length || shaped.vaccinations.length || shaped.labs.length || shaped.visits.length ? 'high' : 'low',
         parse_log: logLine,
         page_count: pageCountIn || incomingImages.length || null,
         char_count: extractedText.length,

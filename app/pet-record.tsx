@@ -571,6 +571,7 @@ const CONTENT_KINDS = [
   { key: 'medications', label: 'Medications' },
   { key: 'imaging', label: 'Imaging' },
   { key: 'insurance', label: 'Insurance' },
+  { key: 'invoice', label: 'Invoice' },
   { key: 'other', label: 'Other' },
 ] as const;
 const ALL_CONTENT_KIND_KEYS = CONTENT_KINDS.map((k) => k.key);
@@ -579,11 +580,19 @@ const DOC_ACCORDIONS = [
   { key: 'exam_visit', label: 'Medical records' },
   { key: 'vaccinations', label: 'Vaccines' },
   { key: 'follow_up', label: 'Follow-ups' },
+  { key: 'invoice', label: 'Bills' },
   { key: 'imaging', label: 'Imaging' },
   { key: 'insurance', label: 'Insurance' },
   { key: 'other', label: 'Other' },
 ] as const;
-const DOC_HEADER_ALWAYS = ['labs', 'exam_visit', 'vaccinations', 'follow_up'] as const;
+const DOC_HEADER_ALWAYS = ['labs', 'exam_visit', 'vaccinations', 'follow_up', 'invoice'] as const;
+const ROUTE_KINDS = [
+  { key: 'invoice', label: 'Invoice' },
+  { key: 'labs', label: 'Lab report' },
+  { key: 'vaccinations', label: 'Vaccine card' },
+  { key: 'exam_visit', label: 'Visit notes' },
+] as const;
+
 
 function isFollowUpDoc(d: { title?: string | null; kind?: string | null; content_kinds?: string[] | null }): boolean {
   if ((d.content_kinds || []).includes('follow_up')) return true;
@@ -604,6 +613,7 @@ function kindFromContent(kinds: string[]) {
     if (kinds[0] === 'labs') return 'lab_result';
     if (kinds[0] === 'imaging') return 'other_imaging';
     if (kinds[0] === 'insurance') return 'other_document';
+    if (kinds[0] === 'invoice') return 'other_document';
   }
   return 'medical_record';
 }
@@ -637,8 +647,49 @@ function detectedContentKinds(parsed: any): string[] {
   if (Array.isArray(parsed.medications) && parsed.medications.length) k.push('medications');
   if (Array.isArray(parsed.diagnostics) && parsed.diagnostics.length) k.push('imaging');
   if (parsed.insurance && (parsed.insurance.provider || parsed.insurance.policy_number || parsed.insurance.plan)) k.push('insurance');
+  if (Array.isArray(parsed.invoices) && parsed.invoices.length) k.push('invoice');
   return k.length ? k : [];
 }
+
+function formatUsd(n: number | null | undefined) {
+  if (n == null || !Number.isFinite(Number(n))) return '$0.00';
+  return `$${Number(n).toFixed(2)}`;
+}
+
+function invoiceLineCount(inv: { line_items?: any[] } | null | undefined) {
+  return Array.isArray(inv?.line_items) ? inv!.line_items.length : 0;
+}
+
+function exportInvoicesCsv(rows: any[], petName?: string | null) {
+  const header = 'date,clinic,invoice_no,category,description,qty,amount,subtotal,tax,total,paid';
+  const lines = [header];
+  for (const inv of rows || []) {
+    const items = Array.isArray(inv.line_items) && inv.line_items.length ? inv.line_items : [{ description: '', qty: '', amount: '', category: '' }];
+    for (const li of items) {
+      const cells = [
+        inv.invoice_date || '',
+        inv.clinic || '',
+        inv.invoice_no || '',
+        li.category || '',
+        String(li.description || '').replace(/"/g, '""'),
+        li.qty ?? '',
+        li.amount ?? '',
+        inv.subtotal ?? '',
+        inv.tax ?? '',
+        inv.total ?? '',
+        inv.paid === true ? 'paid' : inv.paid === false ? 'unpaid' : '',
+      ].map((c) => `"${c}"`);
+      lines.push(cells.join(','));
+    }
+  }
+  const csv = lines.join('\n');
+  if (typeof document === 'undefined') return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = `${(petName || 'pet').replace(/\s+/g, '-').toLowerCase()}-bills.csv`;
+  a.click();
+}
+
 
 function explicitKinds(kinds?: string[] | null): string[] | undefined {
   if (!kinds?.length) return undefined;
@@ -864,6 +915,7 @@ export default function PetRecordScreen() {
   const [documents, setDocuments] = useState<PetDocument[]>([]);
   const [policies, setPolicies] = useState<any[]>([]);
   const [insClaims, setInsClaims] = useState<any[]>([]);
+  const [petInvoices, setPetInvoices] = useState<any[]>([]);
   const [breeds, setBreeds] = useState<BreedOption[]>([]);
   const [colors, setColors] = useState<ColorOption[]>([]);
   const [weightUnit, setWeightUnit] = useState<'kg' | 'lb'>('lb');
@@ -955,6 +1007,8 @@ export default function PetRecordScreen() {
     dobEstimated?: boolean;
     issuingClinic?: string | null;
     documentDate?: string | null;
+    invoices?: any[];
+    classifierConfidence?: string | null;
   } | null>(null);
   const parsedAttempted = useRef<Set<string>>(new Set());
   const [editableVax, setEditableVax] = useState<ExtractedVaccination[]>([]);
@@ -1199,7 +1253,7 @@ export default function PetRecordScreen() {
       const { data: c2 } = await supabase.from('pet_colors').select('id, name, sort_order');
       setColors((c2 as ColorOption[]) || []);
     }
-    const [wRes, labRes, devRes, aiRes, deviceRes, chipRes, examRes, medsRes, diagRes, vitRes, polRes, claimRes] = await Promise.all([
+    const [wRes, labRes, devRes, aiRes, deviceRes, chipRes, examRes, medsRes, diagRes, vitRes, polRes, claimRes, invRes] = await Promise.all([
       supabase.from('weight_entries').select('weight_lb, measured_on, source, created_at, author_id').eq('pet_id', petId).order('measured_on', { ascending: false }).limit(40),
       supabase.from('lab_results').select('*').eq('pet_id', petId).order('created_at', { ascending: false }).limit(400),
       supabase.from('device_readings').select('*').eq('pet_id', petId).order('recorded_at', { ascending: false }).limit(80),
@@ -1212,6 +1266,7 @@ export default function PetRecordScreen() {
       supabase.from('pet_vitals').select('*').eq('pet_id', petId).order('recorded_at', { ascending: true }).limit(200),
       supabase.from('insurance_policies').select('*').eq('pet_id', petId).order('created_at', { ascending: false }),
       supabase.from('insurance_claims').select('*').eq('pet_id', petId).order('created_at', { ascending: false }),
+      supabase.from('pet_invoices').select('*').eq('pet_id', petId).order('invoice_date', { ascending: false }),
     ]);
     setWeightEntries(normalizeWeightRows(wRes.data || [], petData.name, petId));
     let labs = (labRes.data as any[]) || [];
@@ -1240,6 +1295,7 @@ export default function PetRecordScreen() {
     if (!vitRes.error) setVitalRows((vitRes.data as any[]) || []);
     setPolicies(polRes.error ? [] : ((polRes.data as any[]) || []));
     setInsClaims(claimRes.error ? [] : ((claimRes.data as any[]) || []));
+    setPetInvoices(invRes.error ? [] : ((invRes.data as any[]) || []));
     if (chipRes.error) {
       const retry = await supabase.from('pet_identifiers').select('microchip_number').eq('pet_id', petId).maybeSingle();
       if (retry.error) setChipDenied(true);
@@ -2091,14 +2147,20 @@ export default function PetRecordScreen() {
       exams: parsed.exams || [],
       aiNote: parsed.ai_note || parsed.ai_notes || null,
       parseMode: parsed.parse_mode || null,
-      mentionedButMissing: Array.isArray(parsed.mentioned_but_missing) ? parsed.mentioned_but_missing : [],
       undated: Array.isArray(parsed.undated) ? parsed.undated : [],
-      aiStatus: parsed.mentioned_but_missing?.length ? 'partial' : 'ready',
+      aiStatus: (Array.isArray(parsed.invoices) && parsed.invoices.length)
+        ? 'ready'
+        : (parsed.mentioned_but_missing?.length ? 'partial' : 'ready'),
       lifestyle: parsed.lifestyle || null,
       suggestedDob: parsed.identity?.date_of_birth || null,
       dobEstimated: Boolean(parsed.identity?.date_of_birth_estimated),
       issuingClinic: parsed.issuing_clinic || null,
       documentDate: parsed.document_date || parsed.identity?.document_date || null,
+      invoices: Array.isArray(parsed.invoices) ? parsed.invoices : [],
+      classifierConfidence: parsed.classifier_confidence || null,
+      mentionedButMissing: (Array.isArray(parsed.invoices) && parsed.invoices.length)
+        ? []
+        : (Array.isArray(parsed.mentioned_but_missing) ? parsed.mentioned_but_missing : []),
     });
   };
 
@@ -2668,6 +2730,34 @@ export default function PetRecordScreen() {
         }).eq('id', petId);
       }
 
+      const invoicesIn = extractionReview.invoices || rawDoc.invoices || [];
+      for (const inv of invoicesIn) {
+        if (!inv || (inv.total == null && !(inv.line_items || []).length && !inv.invoice_no)) continue;
+        const payload: any = {
+          pet_id: petId,
+          document_id: sourceDocId,
+          clinic: inv.clinic || extractionReview.issuingClinic || rawDoc.issuing_clinic || rawDoc.clinic || null,
+          invoice_date: inv.invoice_date || inv.event_date || extractionReview.documentDate || null,
+          invoice_no: inv.invoice_no || null,
+          line_items: inv.line_items || [],
+          subtotal: inv.subtotal ?? null,
+          tax: inv.tax ?? null,
+          total: inv.total ?? null,
+          paid: typeof inv.paid === 'boolean' ? inv.paid : null,
+          source: 'ai_extracted',
+          author_id: user.id,
+        };
+        let invRes = await supabase.from('pet_invoices').insert(payload);
+        if (invRes.error && /duplicate|unique/i.test(invRes.error.message || '')) invRes = { error: null } as any;
+        else if (invRes.error) errors.push(`Invoice ${payload.invoice_no || payload.invoice_date || ''}: ${invRes.error.message}`);
+      }
+      if (invoicesIn.length) {
+        await supabase.from('pet_documents').update({
+          content_kinds: ['invoice'],
+          kind: 'other_document',
+        }).eq('id', sourceDocId);
+      }
+
       await supabase.from('pet_documents').update({
         ai_status: 'confirmed',
         ai_summary: { ...(documents.find((d) => d.id === sourceDocId)?.ai_summary || {}), applied: true },
@@ -2699,6 +2789,35 @@ export default function PetRecordScreen() {
       showBanner('Could not apply the extracted data. Please try entering details manually.');
     }
     setApplyingExtraction(false);
+  };
+
+  const fileClaimFromInvoice = async (inv: any) => {
+    if (!petId || !inv) return;
+    const policy = policies.find((p) => p.status === 'active') || policies[0] || null;
+    const row: any = {
+      pet_id: petId,
+      policy_id: policy?.id || null,
+      title: inv.invoice_no ? `Invoice #${inv.invoice_no}` : (inv.clinic ? `${inv.clinic} invoice` : 'Clinic invoice'),
+      clinic: inv.clinic || null,
+      service_date: inv.invoice_date || null,
+      invoice_amount: inv.total ?? inv.subtotal ?? null,
+      status: 'draft',
+      invoice_document_id: inv.document_id || null,
+      pet_invoice_id: inv.id || null,
+    };
+    let res = await supabase.from('insurance_claims').insert(row);
+    if (res.error && /policy_id|pet_invoice_id/i.test(res.error.message || '')) {
+      const slim = { ...row };
+      delete slim.pet_invoice_id;
+      if (!policy) delete slim.policy_id;
+      res = await supabase.from('insurance_claims').insert(slim);
+    }
+    if (res.error) showBanner(res.error.message || 'Could not file claim.');
+    else {
+      showBanner('Draft claim created from this invoice.', 'success');
+      setTab('insurance');
+      load();
+    }
   };
 
   const deleteDoc = (doc: PetDocument) => {
@@ -2786,6 +2905,10 @@ export default function PetRecordScreen() {
   const latestLb = latestWeightRow?.weight_lb != null
     ? Math.round(Number(latestWeightRow.weight_lb) * 100) / 100
     : (pet.weight_kg != null ? Math.round(kgToLb(pet.weight_kg) * 100) / 100 : null);
+  const billsTotal = petInvoices.reduce((a, r) => a + Number(r.total || 0), 0);
+  const thisYear = String(new Date().getFullYear());
+  const billsThisYear = petInvoices.filter((r) => String(r.invoice_date || '').startsWith(thisYear)).reduce((a, r) => a + Number(r.total || 0), 0);
+
   const targetLb = pet.target_weight_kg != null ? kgToLb(pet.target_weight_kg) : (pet.body_condition_score != null && pet.body_condition_score >= 8 ? 15 : null);
   const weightDisplay = latestLb != null ? `${latestLb} lb` : '—';
   const currentRels = relationships.filter((r) => !r.ended_on);
@@ -3415,6 +3538,7 @@ export default function PetRecordScreen() {
               { label: 'Records', value: documents.filter((d) => docAccordionKeys(d).includes('exam_visit')).length },
               { label: 'Vaccines', value: documents.filter((d) => docAccordionKeys(d).includes('vaccinations')).length + vaccinations.filter((v) => v.confirmed !== false).length },
               { label: 'Follow-ups', value: documents.filter((d) => docAccordionKeys(d).includes('follow_up')).length },
+              { label: 'Bills', value: petInvoices.length ? `${petInvoices.length} · ${formatUsd(billsTotal)}` : 0 },
             ]}
           />
         ) : null}
@@ -4040,6 +4164,25 @@ export default function PetRecordScreen() {
                       </Text>
                     </Card>
                   ))}
+                  {petInvoices.length ? (
+                    <>
+                      <Text style={styles.ovKicker}>FROM BILLS</Text>
+                      {petInvoices.map((inv: any) => (
+                        <View key={inv.id} style={styles.confirmCard}>
+                          <Text style={styles.docTitle}>
+                            {inv.invoice_no ? `Invoice #${inv.invoice_no}` : 'Invoice'}
+                            {inv.total != null ? ` · ${formatUsd(inv.total)}` : ''}
+                          </Text>
+                          <Text style={styles.confirmLine}>{[inv.clinic, inv.invoice_date ? formatDate(inv.invoice_date) : null].filter(Boolean).join(' · ')}</Text>
+                          {canEdit && !insClaims.some((c: any) => c.pet_invoice_id === inv.id || (c.invoice_document_id && c.invoice_document_id === inv.document_id)) ? (
+                            <TouchableOpacity onPress={() => fileClaimFromInvoice(inv)} style={{ paddingVertical: 8 }} activeOpacity={0.85}>
+                              <Text style={styles.linkTxt}>File claim from this invoice</Text>
+                            </TouchableOpacity>
+                          ) : null}
+                        </View>
+                      ))}
+                    </>
+                  ) : null}
                 </>
               );
             })()}
@@ -4065,7 +4208,9 @@ export default function PetRecordScreen() {
                   const n = documents.filter((d) => docAccordionKeys(d).includes(s.key)).length;
                   return n > 0;
                 }).map((s) => {
-                  const n = documents.filter((d) => docAccordionKeys(d).includes(s.key)).length;
+                  const n = s.key === 'invoice'
+                    ? Math.max(petInvoices.length, documents.filter((d) => docAccordionKeys(d).includes(s.key)).length)
+                    : documents.filter((d) => docAccordionKeys(d).includes(s.key)).length;
                   const on = docOpen[s.key] || docKindFilter === s.key;
                   return (
                     <TouchableOpacity
@@ -4074,7 +4219,9 @@ export default function PetRecordScreen() {
                       onPress={() => setDocOpen((prev) => ({ ...prev, [s.key]: !on }))}
                       activeOpacity={0.85}
                     >
-                      <Text style={[styles.docTileN, on && styles.docTileNOn]}>{n}</Text>
+                      <Text style={[styles.docTileN, on && styles.docTileNOn]} numberOfLines={1}>
+                        {s.key === 'invoice' && petInvoices.length ? `${petInvoices.length} · ${formatUsd(billsTotal)}` : n}
+                      </Text>
                       <Text style={[styles.docTileL, on && styles.docTileLOn]} numberOfLines={1}>{s.label}</Text>
                     </TouchableOpacity>
                   );
@@ -4107,12 +4254,105 @@ export default function PetRecordScreen() {
                     activeOpacity={0.85}
                   >
                     <Text style={styles.docAccordTitle}>{section.label}</Text>
-                    <Text style={styles.docAccordMeta}>{items.length} · {open ? 'Hide' : 'Show'}</Text>
+                    <Text style={styles.docAccordMeta}>
+                      {section.key === 'invoice' && petInvoices.length
+                        ? `${petInvoices.length} · ${formatUsd(billsTotal)} · ${open ? 'Hide' : 'Show'}`
+                        : `${items.length} · ${open ? 'Hide' : 'Show'}`}
+                    </Text>
                   </TouchableOpacity>
                   {open ? (
                     <>
                       {section.key === 'labs' ? <LabsByAnalyte rows={labRows} /> : null}
-                      {items.length === 0 && section.key !== 'labs'
+                      {section.key === 'invoice' ? (
+                        <View style={styles.confirmCard}>
+                          <Text style={styles.docTitle}>Spending</Text>
+                          <Text style={styles.confirmLine}><Text style={styles.confirmK}>Lifetime  </Text>{formatUsd(billsTotal)}</Text>
+                          <Text style={styles.confirmLine}><Text style={styles.confirmK}>This year  </Text>{formatUsd(billsThisYear)}</Text>
+                          {(() => {
+                            const cats: Record<string, number> = {};
+                            const clinics: Record<string, number> = {};
+                            const years: Record<string, number> = {};
+                            for (const inv of petInvoices) {
+                              const clinic = String(inv.clinic || 'Clinic').trim() || 'Clinic';
+                              clinics[clinic] = (clinics[clinic] || 0) + Number(inv.total || 0);
+                              const y = String(inv.invoice_date || '').slice(0, 4) || '—';
+                              years[y] = (years[y] || 0) + Number(inv.total || 0);
+                              for (const li of inv.line_items || []) {
+                                const cat = String(li.category || 'other');
+                                cats[cat] = (cats[cat] || 0) + Number(li.amount || 0);
+                              }
+                            }
+                            const catOrder = ['exam', 'labs', 'vaccines', 'meds', 'surgery', 'boarding', 'other'];
+                            const maxY = Math.max(1, ...Object.values(years));
+                            return (
+                              <>
+                                <Text style={[styles.confirmK, { marginTop: 8 }]}>By category</Text>
+                                {catOrder.filter((c) => cats[c]).map((c) => (
+                                  <Text key={c} style={styles.confirmLine}>{c}  {formatUsd(cats[c])}</Text>
+                                ))}
+                                <Text style={[styles.confirmK, { marginTop: 8 }]}>By clinic</Text>
+                                {Object.entries(clinics).map(([c, v]) => (
+                                  <Text key={c} style={styles.confirmLine}>{c}  {formatUsd(v)}</Text>
+                                ))}
+                                <Text style={[styles.confirmK, { marginTop: 8 }]}>By year</Text>
+                                {Object.entries(years).sort(([a], [b]) => a.localeCompare(b)).map(([y, v]) => (
+                                  <View key={y} style={{ marginTop: 4 }}>
+                                    <Text style={styles.confirmLine}>{y}  {formatUsd(v)}</Text>
+                                    <View style={{ height: 8, backgroundColor: Colors.surface, borderRadius: 4, overflow: 'hidden', marginTop: 2 }}>
+                                      <View style={{ height: 8, width: `${Math.round((v / maxY) * 100)}%`, backgroundColor: Colors.navy, borderRadius: 4 }} />
+                                    </View>
+                                  </View>
+                                ))}
+                              </>
+                            );
+                          })()}
+                          {petInvoices.length ? (
+                            <TouchableOpacity onPress={() => exportInvoicesCsv(petInvoices, pet.name)} style={{ paddingVertical: 10 }} activeOpacity={0.85}>
+                              <Text style={styles.linkTxt}>Export CSV</Text>
+                            </TouchableOpacity>
+                          ) : null}
+                        </View>
+                      ) : null}
+                      {section.key === 'invoice' ? (() => {
+                        const byDate = new Map<string, any[]>();
+                        for (const inv of petInvoices) {
+                          const d = inv.invoice_date || 'undated';
+                          if (!byDate.has(d)) byDate.set(d, []);
+                          byDate.get(d)!.push(inv);
+                        }
+                        const dates = [...byDate.keys()].sort((a, b) => b.localeCompare(a));
+                        if (!dates.length && items.length === 0) {
+                          return <Text style={styles.emptyText}>No bills yet. Upload an invoice.</Text>;
+                        }
+                        return (
+                          <>
+                            {dates.map((d) => (
+                              <View key={d}>
+                                <Text style={styles.ovKicker}>{d === 'undated' ? 'Undated' : formatDate(d)}</Text>
+                                {byDate.get(d)!.map((inv: any) => (
+                                  <View key={inv.id} style={styles.confirmCard}>
+                                    <Text style={styles.docTitle}>
+                                      {inv.invoice_no ? `Invoice #${inv.invoice_no}` : 'Invoice'}
+                                      {inv.total != null ? ` · ${formatUsd(inv.total)}` : ''}
+                                      {inv.paid ? ' · Paid' : ''}
+                                    </Text>
+                                    {inv.clinic ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Clinic  </Text>{inv.clinic}</Text> : null}
+                                    {(inv.line_items || []).map((li: any, i: number) => (
+                                      <Text key={i} style={styles.confirmLine}>{li.description || li.category}  {formatUsd(li.amount)}</Text>
+                                    ))}
+                                    {canEdit ? (
+                                      <TouchableOpacity onPress={() => fileClaimFromInvoice(inv)} style={{ paddingVertical: 8 }} activeOpacity={0.85}>
+                                        <Text style={styles.linkTxt}>File claim from this invoice</Text>
+                                      </TouchableOpacity>
+                                    ) : null}
+                                  </View>
+                                ))}
+                              </View>
+                            ))}
+                            {items.map(renderDocRow)}
+                          </>
+                        );
+                      })() : items.length === 0 && section.key !== 'labs'
                         ? <Text style={styles.emptyText}>No {section.label.toLowerCase()} documents.</Text>
                         : items.map(renderDocRow)}
                     </>
@@ -4707,9 +4947,15 @@ export default function PetRecordScreen() {
               <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8 }}>
                 <Text style={styles.modalTitle}>Review extraction</Text>
                 <Text style={styles.extractionSummary}>
-                  {editableVax.length} vaccine{editableVax.length !== 1 ? 's' : ''} · {extractionReview.visitsCount} visit{extractionReview.visitsCount !== 1 ? 's' : ''} · {extractionReview.labsCount} lab{extractionReview.labsCount !== 1 ? 's' : ''} · {editableWeights.length} weight{editableWeights.length !== 1 ? 's' : ''}
-                  {extractionReview.lifestyle ? ' · 1 diet' : ''}
-                  {extractionReview.pageCount ? ` · ${extractionReview.pageCount} pages` : ''}
+                  {(() => {
+                    const invs = extractionReview.invoices || [];
+                    if (invs.length) {
+                      const total = invs.reduce((a, r) => a + Number(r.total || 0), 0);
+                      const n = invs.reduce((a, r) => a + invoiceLineCount(r), 0);
+                      return `${invs.length} invoice${invs.length !== 1 ? 's' : ''} · ${formatUsd(total)} total · ${n} line item${n !== 1 ? 's' : ''}${extractionReview.pageCount ? ` · ${extractionReview.pageCount} pages` : ''}`;
+                    }
+                    return `${editableVax.length} vaccine${editableVax.length !== 1 ? 's' : ''} · ${extractionReview.visitsCount} visit${extractionReview.visitsCount !== 1 ? 's' : ''} · ${extractionReview.labsCount} lab${extractionReview.labsCount !== 1 ? 's' : ''} · ${editableWeights.length} weight${editableWeights.length !== 1 ? 's' : ''}${extractionReview.lifestyle ? ' · 1 diet' : ''}${extractionReview.pageCount ? ` · ${extractionReview.pageCount} pages` : ''}`;
+                  })()}
                 </Text>
               </View>
               <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24, gap: 12 }} showsVerticalScrollIndicator={false}>
@@ -4719,6 +4965,28 @@ export default function PetRecordScreen() {
                     {extractionReview.mentionedButMissing.map((g, i) => (
                       <Text key={`${g.kind}-${i}`} style={styles.confirmLine}>{g.kind}: {g.mention}</Text>
                     ))}
+                    {(editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) + (extractionReview.lifestyle ? 1 : 0) + (extractionReview.invoices || []).length) === 0 ? (
+                      <>
+                        <Text style={[styles.confirmK, { marginTop: 10 }]}>This is a:</Text>
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+                          {ROUTE_KINDS.map((r) => (
+                            <TouchableOpacity
+                              key={r.key}
+                              style={styles.pill}
+                              onPress={() => {
+                                const id = extractionReview.documentId;
+                                const doc = documents.find((d) => d.id === id);
+                                setExtractionReview(null);
+                                void triggerExtraction(id, { path: doc?.file_path, kinds: [r.key] });
+                              }}
+                              activeOpacity={0.85}
+                            >
+                              <Text style={styles.pillText}>{r.label}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      </>
+                    ) : null}
                   </View>
                 ) : null}
                 {extractionReview.undated && extractionReview.undated.length ? (
@@ -4730,17 +4998,57 @@ export default function PetRecordScreen() {
                   </View>
                 ) : null}
                 {(() => {
-                  const zeroItems = editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) + (extractionReview.lifestyle ? 1 : 0) === 0;
+                  const invs = extractionReview.invoices || [];
+                  const zeroItems = editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) + (extractionReview.lifestyle ? 1 : 0) + invs.length === 0;
                   if (!zeroItems) return null;
+                  if (extractionReview.mentionedButMissing?.length) return null;
                   return (
                     <View style={styles.confirmCard}>
                       <Text style={styles.docTitle}>Nothing extracted</Text>
                       <Text style={styles.confirmLine}>
-                        {extractionReview.aiNote || 'This file looks like a scan. Retry as scan to read the pages as images, or add records manually.'}
+                        {extractionReview.aiNote || 'This file looks like a scan. Retry as scan to read the pages as images, or tell us what it is.'}
                       </Text>
+                      <Text style={[styles.confirmK, { marginTop: 10 }]}>This is a:</Text>
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+                        {ROUTE_KINDS.map((r) => (
+                          <TouchableOpacity
+                            key={r.key}
+                            style={styles.pill}
+                            onPress={() => {
+                              const id = extractionReview.documentId;
+                              const doc = documents.find((d) => d.id === id);
+                              setExtractionReview(null);
+                              void triggerExtraction(id, {
+                                path: doc?.file_path,
+                                kinds: [r.key],
+                              });
+                            }}
+                            activeOpacity={0.85}
+                          >
+                            <Text style={styles.pillText}>{r.label}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
                     </View>
                   );
                 })()}
+                {(extractionReview.invoices || []).map((inv: any, i: number) => (
+                  <View key={`inv-${i}`} style={styles.confirmCard}>
+                    <Text style={styles.docTitle}>
+                      {inv.invoice_no ? `Invoice #${inv.invoice_no}` : 'Invoice'}
+                      {inv.total != null ? ` · ${formatUsd(inv.total)}` : ''}
+                      {inv.paid ? ' · Paid' : ''}
+                    </Text>
+                    {inv.clinic ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Clinic  </Text>{inv.clinic}</Text> : null}
+                    {inv.invoice_date ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Date  </Text>{inv.invoice_date}</Text> : null}
+                    {(inv.line_items || []).map((li: any, j: number) => (
+                      <Text key={j} style={styles.confirmLine}>{li.description || li.category}  {formatUsd(li.amount)}</Text>
+                    ))}
+                    {inv.subtotal != null ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Subtotal  </Text>{formatUsd(inv.subtotal)}</Text> : null}
+                    {inv.tax != null ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Tax  </Text>{formatUsd(inv.tax)}</Text> : null}
+                    {inv.total != null ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Total  </Text>{formatUsd(inv.total)}</Text> : null}
+                  </View>
+                ))}
                 {extractionReview.lifestyle ? (
                   <View style={styles.confirmCard}>
                     <Text style={styles.docTitle}>Food · AI extracted</Text>
@@ -4926,7 +5234,7 @@ export default function PetRecordScreen() {
                 })}
               </ScrollView>
               <View style={styles.confirmFooter}>
-                {editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) + (extractionReview.lifestyle ? 1 : 0) === 0 ? (
+                {(extractionReview.invoices || []).length + editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) + (extractionReview.lifestyle ? 1 : 0) === 0 ? (
                   <>
                     <TouchableOpacity
                       style={styles.aiShareBtn}

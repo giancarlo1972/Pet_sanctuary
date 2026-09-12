@@ -27,7 +27,12 @@ import {
   detectProviderOverride,
   parsePatientHeader,
   latestVisit,
+  looksLikeInvoice,
+  parseInvoice,
+  classifyInvoiceCategory,
+  BONDVET_INVOICE_FIXTURE,
 } from './clinic-export.js';
+
 
 describe('Aurora visit harvest', () => {
   const raw = harvestKnownFacts(AURORA_VISIT_FIXTURE);
@@ -490,5 +495,67 @@ describe('canApplyIdentityField — owner-entered always wins', () => {
     assert.equal(canApplyIdentityField('2020-06-15', 'ai_extracted'), true);
     assert.equal(canApplyIdentityField('female', 'clinic'), true);
     assert.equal(canApplyIdentityField(true, 'ai_extracted'), true);
+  });
+});
+
+describe('pipeline — BondVet invoice #13422', () => {
+  const out = pipelineCode(BONDVET_INVOICE_FIXTURE);
+  const inv = (out.invoices || [])[0];
+
+  it('classifies the document as invoice, not visit/narrative', () => {
+    assert.equal(looksLikeInvoice(BONDVET_INVOICE_FIXTURE), true);
+    assert.equal(classifySegment({ text: BONDVET_INVOICE_FIXTURE }), 'invoice');
+    const types = segment(BONDVET_INVOICE_FIXTURE).map((s) => s.type);
+    assert.ok(types.includes('invoice'), JSON.stringify(types));
+    assert.ok(!types.includes('visit'), JSON.stringify(types));
+  });
+
+  it('extracts invoice #13422, BondVet, 2026-05-22, $200 exam, tax 2.37, total 202.37, paid', () => {
+    assert.ok(inv, JSON.stringify(out.invoices));
+    assert.equal(inv.invoice_no, '13422');
+    assert.match(String(inv.clinic), /BondVet|Bond Vet/i);
+    assert.equal(inv.invoice_date, '2026-05-22');
+    assert.equal(inv.subtotal, 200);
+    assert.equal(inv.tax, 2.37);
+    assert.equal(inv.total, 202.37);
+    assert.equal(inv.paid, true);
+    const exam = (inv.line_items || []).find((l) => l.amount === 200);
+    assert.ok(exam, JSON.stringify(inv.line_items));
+    assert.equal(classifyInvoiceCategory(exam.description), 'exam');
+    assert.equal(out.issuing_clinic, 'BondVet');
+  });
+
+  it('does not dump dates and amounts into mentioned_but_missing', () => {
+    const missing = out.mentioned_but_missing || [];
+    assert.equal(missing.length, 0, JSON.stringify(missing));
+    assert.equal((out.vaccinations || []).length, 0);
+    assert.equal((out.labs || []).length, 0);
+  });
+
+  it('SKU-like integers from a 2-page bill do not become a numbers wall', () => {
+    const messy = `${BONDVET_INVOICE_FIXTURE}
+610 10019 917 443 2152 10128 646 688 3087
+date: 2026-05-23
+number: 5
+number: 23
+number: 52
+`;
+    const messyOut = pipelineCode(messy);
+    assert.equal((messyOut.invoices || [])[0]?.invoice_no, '13422');
+    assert.equal((messyOut.invoices || [])[0]?.total, 202.37);
+    assert.equal((messyOut.mentioned_but_missing || []).length, 0, JSON.stringify(messyOut.mentioned_but_missing));
+  });
+
+  it('clinic charts are not invoices', () => {
+    assert.equal(looksLikeInvoice(GINA_CLINIC_FIXTURE), false);
+    assert.equal(looksLikeInvoice(RYAN_CLINIC_FIXTURE), false);
+    assert.notEqual(classifySegment({ text: GINA_CLINIC_FIXTURE }), 'invoice');
+    assert.notEqual(classifySegment({ text: RYAN_CLINIC_FIXTURE }), 'invoice');
+  });
+
+  it('parseInvoice is forced-mode still returns 13422', () => {
+    const rows = parseInvoice(BONDVET_INVOICE_FIXTURE, null, null, { forced: true });
+    assert.equal(rows[0].invoice_no, '13422');
+    assert.equal(rows[0].total, 202.37);
   });
 });

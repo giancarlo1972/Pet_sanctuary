@@ -6,7 +6,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
-  ChevronLeft, ChevronRight, ShieldCheck, LogOut, Phone, IdCard, GraduationCap,
+  ChevronRight, ShieldCheck, LogOut, Phone, IdCard, GraduationCap,
   PawPrint, Plus, Sparkles, MoreVertical,
 } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
@@ -29,6 +29,9 @@ import {
   dashAction, type RoleCategory,
 } from '@/lib/role-categories';
 import { hoursLeft, serviceLabel } from '@/lib/helper-duty';
+import AppHeader from '@/components/AppHeader';
+import { useMeChrome } from '@/lib/context/MeChromeContext';
+import { loadMeView, type MeVisualRole } from '@/lib/me-chrome';
 
 type PetRel = {
   id: string; pet_id: string; pet_name: string; pet_photo: string | null;
@@ -52,21 +55,34 @@ export default function ProfileScreen() {
   if (!user) {
     return (
       <SafeAreaView style={s.wrap}>
-        {(!mounted || authLoading) ? null : (
+        <AppHeader title="Me" />
+        {(!mounted || authLoading) ? (
+          <View style={[s.wrap, s.center]}><ActivityIndicator color={Colors.coral} /></View>
+        ) : (
           <SignInPrompt title="Sign in to see your profile" message="Pets, applications, favorites, and on-duty settings stay on your account." />
         )}
       </SafeAreaView>
     );
   }
   if (!mounted || authLoading) {
-    return <SafeAreaView style={[s.wrap, s.center]}><ActivityIndicator color={Colors.coral} /></SafeAreaView>;
+    return (
+      <SafeAreaView style={s.wrap}>
+        <AppHeader title="Me" showBack />
+        <View style={[s.wrap, s.center]}><ActivityIndicator color={Colors.coral} /></View>
+      </SafeAreaView>
+    );
   }
   return <Me userId={user.id} email={user.email || ''} signOut={signOut} actingIsPlatform={actingIsPlatform} />;
+}
+
+function visualToView(role: MeVisualRole): RoleCategory {
+  return role === 'platform' ? 'owner' : role;
 }
 
 function Me({ userId, email, signOut, actingIsPlatform }: {
   userId: string; email: string; signOut: () => Promise<void>; actingIsPlatform: boolean;
 }) {
+  const chrome = useMeChrome();
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
   const [name, setName] = useState('Member');
@@ -74,7 +90,7 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
   const [city, setCity] = useState('');
   const [since, setSince] = useState<string | null>(null);
   const [cats, setCats] = useState<RoleCategory[]>(['owner']);
-  const [view, setView] = useState<RoleCategory>('owner');
+  const [view, setView] = useState<RoleCategory>(() => visualToView(loadMeView()));
   const [tab, setTab] = useState('pets');
   const [sub, setSub] = useState('own');
   const [verified, setVerified] = useState(false);
@@ -274,7 +290,18 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
     setLoading(false);
   }, [userId]);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(useCallback(() => { load(); void chrome.refresh(); }, [load, chrome.refresh]));
+
+  const pickView = (v: RoleCategory) => {
+    setView(v);
+    if (v === 'owner' || v === 'provider' || v === 'organization') void chrome.setRole(v);
+  };
+
+  useEffect(() => {
+    if (chrome.role === 'owner' || chrome.role === 'provider' || chrome.role === 'organization') {
+      setView(chrome.role);
+    }
+  }, [chrome.role]);
 
   const uploadId = async () => {
     setIdBusy(true);
@@ -412,7 +439,7 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
     const order: RoleCategory[] = [view, ...cats.filter((c) => c !== view), 'owner', 'provider', 'organization', 'campaign'];
     for (const v of order) {
       const t = TABS_BY_VIEW[v]?.find((x) => x.label === label);
-      if (t) { setView(v); setTab(t.key); return; }
+      if (t) { pickView(v); setTab(t.key); return; }
     }
   };
 
@@ -515,13 +542,11 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
 
   return (
     <SafeAreaView style={s.wrap} edges={['top']}>
+      <AppHeader title="Me" showBack />
       <Page>
         {banner ? <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} /> : null}
 
         <View style={s.header}>
-          <TouchableOpacity style={s.back} onPress={() => router.replace('/(tabs)')} activeOpacity={0.8}>
-            <ChevronLeft color={Colors.navy} size={22} />
-          </TouchableOpacity>
           {isUsablePhoto(avatar) ? <SignedImage path={avatar} style={s.avatar} /> : (
             <View style={[s.avatar, s.avatarFb]}><Text style={s.avTxt}>{name.charAt(0).toUpperCase()}</Text></View>
           )}
@@ -568,7 +593,7 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
                 <TouchableOpacity
                   key={c.key}
                   style={[s.rc, held && s.rcHeld, selected && s.rcOn]}
-                  onPress={() => held ? setView(c.key) : router.push('/onboarding?add=1')}
+                  onPress={() => held ? pickView(c.key) : router.push('/onboarding?add=1')}
                   activeOpacity={0.85}
                 >
                   <Text style={[s.rcTxt, !held && s.rcTxtOff]}>{c.title}</Text>

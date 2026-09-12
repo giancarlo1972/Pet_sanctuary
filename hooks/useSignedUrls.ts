@@ -11,7 +11,7 @@ function isHttpUrl(value: string): boolean {
 async function resolveStorageUrl(path: string): Promise<string | null> {
   const buckets = path.startsWith('reports/')
     ? ['report-photos', 'pet-photos']
-    : ['pet-photos', 'report-photos', 'pet-documents'];
+    : ['avatars', 'pet-photos', 'report-photos', 'pet-documents'];
   for (const bucket of buckets) {
     const signed = await supabase.storage.from(bucket).createSignedUrl(path, EXPIRY);
     if (signed.data?.signedUrl && !signed.error) return signed.data.signedUrl;

@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { Platform } from 'react-native';
 import { useFrameworkReady } from '@/hooks/useFrameworkReady';
 import { AuthProvider } from '@/lib/context/AuthContext';
+import { MeChromeProvider } from '@/lib/context/MeChromeContext';
 import ActingAsBanner from '@/components/ActingAsBanner';
 
 function stripExpoRouterKey() {
@@ -28,7 +29,7 @@ export default function RootLayout() {
 
   return (
     <AuthProvider>
-      <>
+      <MeChromeProvider>
         <ActingAsBanner />
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" />
@@ -44,7 +45,7 @@ export default function RootLayout() {
           <Stack.Screen name="platform" />
         </Stack>
         <StatusBar style="auto" />
-      </>
+      </MeChromeProvider>
     </AuthProvider>
   );
 }

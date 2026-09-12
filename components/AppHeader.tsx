@@ -3,10 +3,10 @@ import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Bell, ChevronLeft } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
-import { useAuth } from '@/lib/context/AuthContext';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { CONTENT_MAX } from '@/components/Page';
+import AvatarButton from '@/components/AvatarButton';
 
 interface AppHeaderProps {
   title: string;
@@ -17,7 +17,6 @@ interface AppHeaderProps {
 
 export default function AppHeader({ title, showBack = false, rightAction, maxWidth = CONTENT_MAX }: AppHeaderProps) {
   const router = useRouter();
-  const { user } = useAuth();
 
   const goBack = () => {
     if (router.canGoBack()) router.back();
@@ -39,16 +38,13 @@ export default function AppHeader({ title, showBack = false, rightAction, maxWid
           </TouchableOpacity>
         )}
         <Text style={styles.title} numberOfLines={1}>{title}</Text>
-        {rightAction ?? (
-          <View style={styles.right}>
-            <TouchableOpacity style={styles.bellBtn} onPress={() => router.push('/updates')} activeOpacity={0.85}>
-              <Bell color={Colors.navy} size={18} />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.meBtn} onPress={() => router.push(user ? '/(tabs)/profile' : '/auth')} activeOpacity={0.85}>
-              <Text style={styles.meText}>{user ? 'Me' : 'Sign in'}</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+        <View style={styles.right}>
+          {rightAction}
+          <TouchableOpacity style={styles.bellBtn} onPress={() => router.push('/updates')} activeOpacity={0.85} accessibilityLabel="Notifications">
+            <Bell color={Colors.navy} size={18} />
+          </TouchableOpacity>
+          <AvatarButton />
+        </View>
       </View>
       </View>
     </SafeAreaView>
@@ -76,13 +72,9 @@ const styles = StyleSheet.create({
   title: {
     flex: 1, fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.navy, textAlign: 'center',
   },
-  right: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  right: { flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 120, justifyContent: 'flex-end' },
   bellBtn: {
     width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.surface,
     justifyContent: 'center', alignItems: 'center',
   },
-  meBtn: {
-    backgroundColor: Colors.coral, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999,
-  },
-  meText: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.white },
 });

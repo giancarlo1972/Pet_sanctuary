@@ -540,6 +540,19 @@ export function harvestKnownFacts(text) {
   const visitDate = detectVisitDate(src);
   const exporting = detectExportingPractice(src);
   const clinic = detectClinic(src, exporting);
+  const identity = harvestIdentity(src, visitDate);
+  if (looksLikeInvoice(src)) {
+    return inheritVisitDate({
+      labs: [],
+      vaccinations: [],
+      weights: [],
+      visits: [],
+      lifestyle: null,
+      identity,
+      date: visitDate,
+      clinic,
+    }, visitDate);
+  }
   const vet = detectVet(src);
   const reason = detectReason(src);
   const findings = detectSection(src, /findings|assessment|physical exam/i);
@@ -563,7 +576,6 @@ export function harvestKnownFacts(text) {
   }
 
   const lifestyle = harvestLifestyle(src);
-  const identity = harvestIdentity(src, visitDate);
 
   return inheritVisitDate({ labs, vaccinations, weights, visits, lifestyle, identity, date: visitDate, clinic }, visitDate);
 }
@@ -793,6 +805,7 @@ function detectSection(src, heading) {
 
 export function harvestLifestyle(src) {
   const text = String(src || '');
+  if (looksLikeInvoice(text)) return null;
   const dietLine = (text.match(/(?:diet|fed|feeding|food)\s*[:.]\s*([^\n]{4,80})/i)
     || text.match(/\b(Purina(?:\s+Pro\s+Plan)?(?:\s+\w+)?(?:\s+(?:dry|wet|canned|kibble))?)\b/i)
     || [])[1];
@@ -1073,6 +1086,28 @@ export function looksLikeInvoice(text) {
   return false;
 }
 
+export function lifestyleHasFields(life) {
+  if (!life || typeof life !== 'object') return false;
+  return ['diet', 'food_brand', 'food_product', 'food_type', 'parasite_prevention'].some((k) => {
+    const v = life[k];
+    return v != null && String(v).trim() !== '' && String(v).toLowerCase() !== 'null';
+  });
+}
+
+/** Invoice # / totals / $ line items beat a food product on the same bill. */
+export function preferInvoiceOverDiet(out) {
+  if (!out || typeof out !== 'object') return out;
+  const inv = Array.isArray(out.invoices) ? out.invoices.filter((row) => row && (row.total != null || row.invoice_no || (row.line_items || []).length)) : [];
+  out.invoices = inv;
+  if (inv.length) {
+    out.lifestyle = null;
+    if (!out.kind || out.kind === 'clinic_export' || out.kind === 'diet' || out.kind === 'exam_visit') out.kind = 'invoice';
+  } else if (!lifestyleHasFields(out.lifestyle)) {
+    out.lifestyle = null;
+  }
+  return out;
+}
+
 export function classifyInvoiceCategory(desc) {
   const s = String(desc || '').toLowerCase();
   if (/\b(rabies|fvrcp|felv|vaccine|vaccin|purevax|bordetella|dhpp|lepto|booster)\b/.test(s)) return 'vaccines';
@@ -1213,11 +1248,11 @@ const SEGMENT_MARKERS = [
 export function classifySegment(seg) {
   const text = String(seg?.text || '');
   const head = text.slice(0, 280);
+  if (looksLikeInvoice(text)) return 'invoice';
   if (/weight\s+history/i.test(head)) return 'weights';
   if (/(?:^|\n)\s*reminders?\b/i.test(head) && !/service on/i.test(head)) return 'reminders';
   if (/(?:^|\n)\s*(?:IDEXX|TEST RESULTS?|REFERENCE VALUES?|Reference Ranges?|Chemistry Panel)\b/i.test(head)) return 'labs';
   if (/patient information/i.test(head)) return 'identity';
-  if (looksLikeInvoice(text)) return 'invoice';
   if (/service on/i.test(head)) return 'visit';
   if (/inventory item/i.test(head) && /purevax|fvrcp|rabies|felv/i.test(text)) return 'vaccines';
   if (/(?:^|\n)\s*(?:vaccines?|immunizations?)\b/i.test(head) && !/visit report|service on|reason:/i.test(head)) return 'vaccines';
@@ -1657,7 +1692,11 @@ export function pipelineCode(text) {
   if ((merged.invoices || []).length) {
     // Invoice row is the structure — leftover SKUs / page integers are not a gap list.
     merged.mentioned_but_missing = [];
+    merged.lifestyle = null;
+  } else if (!lifestyleHasFields(merged.lifestyle)) {
+    merged.lifestyle = null;
   }
+  preferInvoiceOverDiet(merged);
   merged.date = latest?.event_date || latest?.date || harvested.date || segs[0]?.date || merged.invoices?.[0]?.invoice_date || null;
   merged.clinic = latest?.clinic || (datedVisits.length <= 1 ? (harvested.clinic || segs[0]?.clinic || merged.invoices?.[0]?.clinic || null) : null);
   merged.vet = latest?.vet || null;

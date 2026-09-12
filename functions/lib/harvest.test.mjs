@@ -30,6 +30,8 @@ import {
   looksLikeInvoice,
   parseInvoice,
   classifyInvoiceCategory,
+  harvestLifestyle,
+  lifestyleHasFields,
   BONDVET_INVOICE_FIXTURE,
 } from './clinic-export.js';
 
@@ -557,5 +559,22 @@ number: 52
     const rows = parseInvoice(BONDVET_INVOICE_FIXTURE, null, null, { forced: true });
     assert.equal(rows[0].invoice_no, '13422');
     assert.equal(rows[0].total, 202.37);
+  });
+
+  it('invoice beats diet when a food product is a line item', () => {
+    const withFood = `${BONDVET_INVOICE_FIXTURE}
+Hill's Science Diet Adult                           $48.00
+Royal Canin Gastrointestinal                        $36.50
+`;
+    assert.equal(looksLikeInvoice(withFood), true);
+    assert.equal(classifySegment({ text: withFood }), 'invoice');
+    assert.equal(harvestLifestyle(withFood), null);
+    const foodOut = pipelineCode(withFood);
+    assert.equal((foodOut.invoices || []).length, 1, JSON.stringify(foodOut.invoices));
+    assert.equal(foodOut.invoices[0].invoice_no, '13422');
+    assert.equal(foodOut.lifestyle, null);
+    assert.equal(lifestyleHasFields(foodOut.lifestyle), false);
+    const desc = (foodOut.invoices[0].line_items || []).map((l) => l.description).join(' ');
+    assert.match(desc, /Diet|Canin|exam|Office/i);
   });
 });

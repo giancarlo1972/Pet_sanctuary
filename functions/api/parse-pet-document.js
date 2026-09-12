@@ -27,6 +27,8 @@ import {
   attachDerivedAge,
   parseInvoice,
   looksLikeInvoice,
+  lifestyleHasFields,
+  preferInvoiceOverDiet,
 } from '../lib/clinic-export.js';
 
 function decodedBytes(b64) {
@@ -80,11 +82,13 @@ function detectedContentKinds(out) {
 }
 
 function applyKinds(out, kinds) {
+  preferInvoiceOverDiet(out);
   const requested = requestedKinds(kinds);
   const detected = detectedContentKinds(out);
   const use = requested.length ? requested : (detected.length ? detected : ['other']);
+  if ((out.invoices || []).length && !use.includes('invoice')) use.unshift('invoice');
   if (requested.length) {
-    const k = new Set(requested);
+    const k = new Set(use);
     if (!k.has('vaccinations')) out.vaccinations = [];
     if (!k.has('labs')) out.labs = [];
     if (!k.has('exam_visit')) {
@@ -100,8 +104,9 @@ function applyKinds(out, kinds) {
     }
     if (!k.has('medications')) out.medications = [];
     if (!k.has('imaging')) out.diagnostics = [];
-    if (!k.has('invoice')) out.invoices = [];
+    if (!k.has('invoice') && !(out.invoices || []).length) out.invoices = [];
   }
+  if (!lifestyleHasFields(out.lifestyle) || (out.invoices || []).length) out.lifestyle = null;
   if (!Array.isArray(out.undated)) out.undated = [];
   if (!Array.isArray(out.mentioned_but_missing)) out.mentioned_but_missing = [];
   out.content_kinds = use;
@@ -139,7 +144,8 @@ const RULE_PARTS = {
 };
 
 function buildPrompt(kinds) {
-  const k = normalizeKinds(kinds);
+  const requested = normalizeKinds(kinds);
+  const k = requested.length ? requested : ALL_CONTENT_KINDS.filter((x) => x !== 'other');
   const fields = [
     `"title": "short document title"`,
     `"clinic": "string or null"`,
@@ -301,7 +307,7 @@ const GAP_SCHEMA = {
 
 const RECORD_TOOL = {
   name: 'record_extraction',
-  description: 'Store every vaccine, lab, weight, visit, and lifestyle fact printed in the document. A vaccine without a given-date is still a vaccine. Labs in prose count. The report itself is a visit. Inherit the visit date onto undated items in that visit. undated[] only when no date can be inferred.',
+  description: 'Store every vaccine, lab, weight, visit, invoice, and lifestyle fact printed in the document. A page with Invoice #, $ line items, subtotal/tax/total, or Paid is an invoice — not a diet card, even if a food product is a line item. A vaccine without a given-date is still a vaccine. Labs in prose count. The report itself is a visit. Inherit the visit date onto undated items in that visit. undated[] only when no date can be inferred.',
   input_schema: EXTRACTION_SCHEMA,
 };
 
@@ -578,6 +584,7 @@ function logExtraction(meta) {
       labs: (meta.labs || []).length,
       weights: (meta.weights || []).length,
       visits: (meta.visits || []).length,
+      invoices: (meta.invoices || []).length,
     },
     mentioned_but_missing: meta.mentioned_but_missing || [],
   };
@@ -682,6 +689,8 @@ function shapeParsed(parsed) {
     issuing_clinic: parsed.issuing_clinic || null,
     document_date: parsed.document_date || parsed.identity?.document_date || null,
   };
+  preferInvoiceOverDiet(shaped);
+  if (!lifestyleHasFields(shaped.lifestyle)) shaped.lifestyle = null;
   if (visits.filter((v) => v && (v.event_date || v.date)).length <= 1) inheritVisitDate(shaped, shaped.date);
   shaped.undated = collectUndated(shaped);
   const trends = trendLines(labs);
@@ -821,7 +830,7 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
 
   const stats = [];
   const parts = [];
-  const forceInvoice = requestedKinds(kinds).length === 1 && requestedKinds(kinds)[0] === 'invoice';
+  const forceInvoice = requestedKinds(kinds)[0] === 'invoice' || looksLikeInvoice(text);
   for (let i = 0; i < segs.length; i++) {
     const seg = segs[i];
     let type = forceInvoice ? 'invoice' : classifySegment(seg);
@@ -981,6 +990,7 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
     labs: shaped.labs,
     weights: shaped.weights,
     visits: shaped.visits,
+    invoices: shaped.invoices,
     mentioned_but_missing,
   });
   logLine.segments = stats;
@@ -1022,6 +1032,7 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
     classifier_confidence: lowConfidence ? 'low' : 'high',
     segment_stats: stats,
     parse_log: logLine,
+    parse_build: process.env.CF_PAGES_COMMIT_SHA || 'invoice-beats-diet',
   };
   applyKinds(out, kinds);
   if (documentId) {
@@ -1098,6 +1109,11 @@ export async function onRequestPost(context) {
     const pagesGuess = pageCountIn || incomingImages.length || 0;
     const charsPer = extractedText.length / Math.max(pagesGuess || 1, 1);
     const sparseText = pagesGuess > 0 && charsPer < 200;
+    const invoiceText = looksLikeInvoice(extractedText);
+    if (invoiceText && extractedText.trim().length >= 80) {
+      console.log('[parse-pet-document] invoice beats diet/scan', { pages: pagesGuess, chars: extractedText.length });
+      return parseClinicExport(env, key, documentId, extractedText, pageCountIn || splitServiceBlocks(extractedText).length, kinds.length ? kinds : ['invoice']);
+    }
     let mode = body.mode === 'images' || forceScan || incomingImages.length || (sparseText && !/Service on\s+\d/i.test(extractedText))
       ? 'images'
       : 'text';
@@ -1138,8 +1154,8 @@ export async function onRequestPost(context) {
           console.log('[parse-pet-document] naive pdf text', naive.charCount, 'pages', naive.pageCount);
           const naivePer = naive.charCount / Math.max(naive.pageCount || pageCountIn || 1, 1);
           console.log('[parse-pet-document]', { pages: naive.pageCount || pageCountIn, chars: naive.charCount, mode: naivePer < 200 ? 'images' : 'text' });
-          if (naive.charCount >= 80 && (naivePer >= 200 || naive.charCount > 2500 || /Service on\s+\d/i.test(naive.text) || /Visit report|Patient Information|Weight History|Invoice\s*#/i.test(naive.text) || looksLikeInvoice(naive.text))) {
-            return parseClinicExport(env, key, documentId, naive.text, naive.pageCount || pageCountIn, kinds);
+          if (naive.charCount >= 80 && (invoiceText || looksLikeInvoice(naive.text) || naivePer >= 200 || naive.charCount > 2500 || /Service on\s+\d/i.test(naive.text) || /Visit report|Patient Information|Weight History|Invoice\s*#/i.test(naive.text))) {
+            return parseClinicExport(env, key, documentId, naive.text, naive.pageCount || pageCountIn, looksLikeInvoice(naive.text) ? (kinds.length ? kinds : ['invoice']) : kinds);
           }
           if (naivePer >= 200) {
             imgs = [fetched.b64];
@@ -1202,7 +1218,7 @@ export async function onRequestPost(context) {
       }
     }
     console.log('[parse-pet-document]', { pages: content.filter((c) => c.type === 'image' || c.type === 'document').length || pagesGuess, chars: extractedText.length, mode });
-    let prompt = buildPrompt(kinds);
+    let prompt = buildPrompt(invoiceText && !kinds.length ? ['invoice'] : kinds);
     if (documentId && sb.url && sb.key) {
       try {
         const docRow = await fetch(`${sb.url}/rest/v1/pet_documents?id=eq.${documentId}&select=pet_id`, {
@@ -1221,7 +1237,7 @@ export async function onRequestPost(context) {
         console.log('[parse-pet-document] prior labs skip', String(e));
       }
     }
-    content.push({ type: 'text', text: `${prompt}\nCall record_extraction. Labs in prose count. A vaccine without a given-date is still a vaccine. The report itself is a visit. Inherit the visit date. Lifestyle (diet, parasite prevention) and age→DOB go in lifestyle/identity.` });
+    content.push({ type: 'text', text: `${prompt}\nCall record_extraction. If this is a bill (Invoice #, subtotal, tax, total, $ line items, Paid), fill invoices[] and do not emit a diet/lifestyle card for food products on the bill. Labs in prose count. A vaccine without a given-date is still a vaccine. The report itself is a visit. Inherit the visit date. Lifestyle (diet, parasite prevention) and age→DOB go in lifestyle/identity only when this is not an invoice.` });
 
     let lastErr = 'Claude did not respond.';
     for (const model of MODELS) {
@@ -1235,14 +1251,14 @@ export async function onRequestPost(context) {
       let shaped = shapeParsed(extracted.parsed);
       if (extractedText) {
         const harvested = harvestKnownFacts(extractedText);
-        const invForced = requestedKinds(kinds)[0] === 'invoice';
+        const invForced = requestedKinds(kinds)[0] === 'invoice' || looksLikeInvoice(extractedText);
         const inv = parseInvoice(extractedText, harvested.date, harvested.clinic, { forced: invForced });
         shaped = shapeParsed(mergeParsedArrays(shaped, {
           vaccinations: harvested.vaccinations.map(normalizeVax),
           labs: harvested.labs.map(normalizeLab),
           weights: harvested.weights.map(normalizeWeight).filter(Boolean),
           visits: harvested.visits.map(normalizeVisit).filter(Boolean),
-          lifestyle: harvested.lifestyle,
+          lifestyle: inv.length ? null : harvested.lifestyle,
           identity: harvested.identity,
           invoices: inv,
           date: harvested.date,
@@ -1250,6 +1266,7 @@ export async function onRequestPost(context) {
           undated: [],
         }));
       }
+      preferInvoiceOverDiet(shaped);
       const summaryForGaps = `${shaped.ai_note || ''}\n${extractedText ? extractedText.slice(0, 6000) : ''}`;
       let mentioned_but_missing = (shaped.invoices || []).length
         ? []
@@ -1283,6 +1300,7 @@ export async function onRequestPost(context) {
         labs: shaped.labs,
         weights: shaped.weights,
         visits: shaped.visits,
+        invoices: shaped.invoices,
         mentioned_but_missing,
       });
       const aiStatus = mentioned_but_missing.length ? 'partial' : 'ready';
@@ -1310,7 +1328,7 @@ export async function onRequestPost(context) {
         ai_note: shaped.ai_note || null,
         owner_notes: shaped.owner_notes,
         identity: shaped.identity || extracted.parsed.identity || null,
-        lifestyle: shaped.lifestyle || extracted.parsed.lifestyle || null,
+        lifestyle: (shaped.invoices || []).length ? null : (shaped.lifestyle || extracted.parsed.lifestyle || null),
         undated: shaped.undated,
         mentioned_but_missing,
         classifier_confidence: (shaped.invoices || []).length || shaped.vaccinations.length || shaped.labs.length || shaped.visits.length ? 'high' : 'low',
@@ -1333,14 +1351,16 @@ export async function onRequestPost(context) {
     console.log('[parse-pet-document] FAIL model_error', lastErr);
     if (extractedText && extractedText.length > 80) {
       const harvested = harvestKnownFacts(extractedText);
+      const inv = parseInvoice(extractedText, harvested.date, harvested.clinic, { forced: looksLikeInvoice(extractedText) });
       const shaped = shapeParsed({
         ai_note: `Structured model failed (${lastErr}). Harvested printed facts.`,
         vaccinations: harvested.vaccinations,
         labs: harvested.labs.concat(parseLabTables(extractedText)),
         weights: harvested.weights.concat(parseWeightHistory(extractedText)),
         visits: harvested.visits,
-        lifestyle: harvested.lifestyle,
+        lifestyle: inv.length ? null : harvested.lifestyle,
         identity: harvested.identity,
+        invoices: inv,
         date: harvested.date,
         clinic: harvested.clinic,
         undated: [],
@@ -1364,6 +1384,7 @@ export async function onRequestPost(context) {
         labs: shaped.labs,
         weights: shaped.weights,
         visits: shaped.visits,
+        invoices: shaped.invoices || [],
         identity: shaped.identity,
         lifestyle: shaped.lifestyle,
         date: shaped.date,

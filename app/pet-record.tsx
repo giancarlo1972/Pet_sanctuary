@@ -78,6 +78,7 @@ import { DateField } from '@/components/DateField';
 import { matchCatalog, vaccineType, durationYearsFromProduct, addYearsLocal, type CatalogRow } from '@/lib/catalog';
 import { SourceBadge } from '@/components/SourceBadge';
 import SharePetSheet from '@/components/SharePetSheet';
+import { BUILD_SHA, BUILD_PARENT } from '@/lib/build-info';
 import { PET_TRAITS, normalizeTraits, type PetTrait } from '@/lib/pet-traits';
 import SignInPrompt from '@/components/SignInPrompt';
 
@@ -703,6 +704,35 @@ function explicitKinds(kinds?: string[] | null): string[] | undefined {
   return known;
 }
 
+function lifestyleHasFields(life: any): boolean {
+  if (!life || typeof life !== 'object') return false;
+  return ['diet', 'food_brand', 'food_product', 'food_type', 'parasite_prevention'].some((k) => {
+    const v = life[k];
+    return v != null && String(v).trim() !== '' && String(v).toLowerCase() !== 'null';
+  });
+}
+
+function invoiceHasItems(inv: any): boolean {
+  if (!inv) return false;
+  return inv.total != null || inv.subtotal != null || Boolean(inv.invoice_no) || (Array.isArray(inv.line_items) && inv.line_items.length > 0);
+}
+
+function extractionHasApplyable(review: {
+  invoices?: any[];
+  visitsCount?: number;
+  labsCount?: number;
+  exams?: any[];
+  conditions?: any[];
+  lifestyle?: any;
+} | null, vaxLen: number, weightLen: number): boolean {
+  if (!review) return false;
+  if ((review.invoices || []).some(invoiceHasItems)) return true;
+  if (vaxLen || review.visitsCount || review.labsCount || weightLen) return true;
+  if ((review.exams || []).length || (review.conditions || []).length) return true;
+  if (lifestyleHasFields(review.lifestyle)) return true;
+  return false;
+}
+
 const LB_PER_KG = 2.20462;
 
 function kgToLb(kg: number): number {
@@ -1015,6 +1045,7 @@ export default function PetRecordScreen() {
     documentDate?: string | null;
     invoices?: any[];
     classifierConfidence?: string | null;
+    parseBuild?: string | null;
   } | null>(null);
   const parsedAttempted = useRef<Set<string>>(new Set());
   const [editableVax, setEditableVax] = useState<ExtractedVaccination[]>([]);
@@ -2168,13 +2199,16 @@ export default function PetRecordScreen() {
       aiStatus: (Array.isArray(parsed.invoices) && parsed.invoices.length)
         ? 'ready'
         : (parsed.mentioned_but_missing?.length ? 'partial' : 'ready'),
-      lifestyle: parsed.lifestyle || null,
+      lifestyle: (Array.isArray(parsed.invoices) && parsed.invoices.length)
+        ? null
+        : (lifestyleHasFields(parsed.lifestyle) ? parsed.lifestyle : null),
       suggestedDob: parsed.identity?.date_of_birth || null,
       dobEstimated: Boolean(parsed.identity?.date_of_birth_estimated),
       issuingClinic: parsed.issuing_clinic || null,
       documentDate: parsed.document_date || parsed.identity?.document_date || null,
       invoices: Array.isArray(parsed.invoices) ? parsed.invoices : [],
       classifierConfidence: parsed.classifier_confidence || null,
+      parseBuild: parsed.parse_build || null,
       mentionedButMissing: (Array.isArray(parsed.invoices) && parsed.invoices.length)
         ? []
         : (Array.isArray(parsed.mentioned_but_missing) ? parsed.mentioned_but_missing : []),
@@ -2232,6 +2266,7 @@ export default function PetRecordScreen() {
         payload.mode = 'images';
         payload.forceScan = Boolean(extra?.forceScan);
         payload.pageCount = pageCount || images.length;
+        if (extractedText) payload.extractedText = extractedText;
       } else {
         if (!silent && extra?.imageBase64 && !extractedText) payload.imageBase64 = extra.imageBase64;
         if (extractedText) {
@@ -2257,6 +2292,7 @@ export default function PetRecordScreen() {
           labs: result.labs?.length || 0,
           weights: result.weights?.length || 0,
           visits: result.visits?.length || 0,
+          invoices: result.invoices?.length || 0,
         },
         mentioned_but_missing: result.mentioned_but_missing || [],
       });
@@ -4999,7 +5035,7 @@ export default function PetRecordScreen() {
                       const n = invs.reduce((a, r) => a + invoiceLineCount(r), 0);
                       return `${invs.length} invoice${invs.length !== 1 ? 's' : ''} · ${formatUsd(total)} total · ${n} line item${n !== 1 ? 's' : ''}${extractionReview.pageCount ? ` · ${extractionReview.pageCount} pages` : ''}`;
                     }
-                    return `${editableVax.length} vaccine${editableVax.length !== 1 ? 's' : ''} · ${extractionReview.visitsCount} visit${extractionReview.visitsCount !== 1 ? 's' : ''} · ${extractionReview.labsCount} lab${extractionReview.labsCount !== 1 ? 's' : ''} · ${editableWeights.length} weight${editableWeights.length !== 1 ? 's' : ''}${extractionReview.lifestyle ? ' · 1 diet' : ''}${extractionReview.pageCount ? ` · ${extractionReview.pageCount} pages` : ''}`;
+                    return `${editableVax.length} vaccine${editableVax.length !== 1 ? 's' : ''} · ${extractionReview.visitsCount} visit${extractionReview.visitsCount !== 1 ? 's' : ''} · ${extractionReview.labsCount} lab${extractionReview.labsCount !== 1 ? 's' : ''} · ${editableWeights.length} weight${editableWeights.length !== 1 ? 's' : ''}${lifestyleHasFields(extractionReview.lifestyle) ? ' · 1 diet' : ''}${extractionReview.pageCount ? ` · ${extractionReview.pageCount} pages` : ''}`;
                   })()}
                 </Text>
               </View>
@@ -5010,7 +5046,7 @@ export default function PetRecordScreen() {
                     {extractionReview.mentionedButMissing.map((g, i) => (
                       <Text key={`${g.kind}-${i}`} style={styles.confirmLine}>{g.kind}: {g.mention}</Text>
                     ))}
-                    {(editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) + (extractionReview.lifestyle ? 1 : 0) + (extractionReview.invoices || []).length) === 0 ? (
+                    {(editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) + (lifestyleHasFields(extractionReview.lifestyle) ? 1 : 0) + (extractionReview.invoices || []).length) === 0 ? (
                       <>
                         <Text style={[styles.confirmK, { marginTop: 10 }]}>This is a:</Text>
                         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
@@ -5044,7 +5080,7 @@ export default function PetRecordScreen() {
                 ) : null}
                 {(() => {
                   const invs = extractionReview.invoices || [];
-                  const zeroItems = editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) + (extractionReview.lifestyle ? 1 : 0) + invs.length === 0;
+                  const zeroItems = !extractionHasApplyable(extractionReview, editableVax.length, editableWeights.length);
                   if (!zeroItems) return null;
                   if (extractionReview.mentionedButMissing?.length) return null;
                   return (
@@ -5094,16 +5130,19 @@ export default function PetRecordScreen() {
                     {inv.total != null ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Total  </Text>{formatUsd(inv.total)}</Text> : null}
                   </View>
                 ))}
-                {extractionReview.lifestyle ? (
+                {lifestyleHasFields(extractionReview.lifestyle) ? (() => {
+                  const life = extractionReview.lifestyle!;
+                  return (
                   <View style={styles.confirmCard}>
                     <Text style={styles.docTitle}>Food · AI extracted</Text>
-                    {extractionReview.lifestyle.food_brand ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Brand  </Text>{extractionReview.lifestyle.food_brand}</Text> : null}
-                    {extractionReview.lifestyle.food_product ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Product  </Text>{extractionReview.lifestyle.food_product}</Text> : null}
-                    {extractionReview.lifestyle.food_type ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Diet  </Text>{extractionReview.lifestyle.food_type}</Text> : null}
-                    {extractionReview.lifestyle.diet && !extractionReview.lifestyle.food_brand ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Diet  </Text>{extractionReview.lifestyle.diet}</Text> : null}
-                    {extractionReview.lifestyle.parasite_prevention ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Parasite prevention  </Text>{extractionReview.lifestyle.parasite_prevention}</Text> : null}
+                    {life.food_brand ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Brand  </Text>{life.food_brand}</Text> : null}
+                    {life.food_product ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Product  </Text>{life.food_product}</Text> : null}
+                    {life.food_type ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Diet  </Text>{life.food_type}</Text> : null}
+                    {life.diet && !life.food_brand ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Diet  </Text>{life.diet}</Text> : null}
+                    {life.parasite_prevention ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Parasite prevention  </Text>{life.parasite_prevention}</Text> : null}
                   </View>
-                ) : null}
+                  );
+                })() : null}
                 {(() => {
                   const ident: any = extractionReview.data?.identity || {};
                   const sexLabel = ident.sex === 'F' || /female/i.test(ident.sex || '')
@@ -5279,7 +5318,11 @@ export default function PetRecordScreen() {
                 })}
               </ScrollView>
               <View style={styles.confirmFooter}>
-                {(extractionReview.invoices || []).length + editableVax.length + extractionReview.visitsCount + extractionReview.labsCount + editableWeights.length + (extractionReview.exams?.length || 0) + (extractionReview.conditions?.length || 0) + (extractionReview.lifestyle ? 1 : 0) === 0 ? (
+                {extractionHasApplyable(extractionReview, editableVax.length, editableWeights.length) ? (
+                  <TouchableOpacity style={[styles.coralConfirm, applyingExtraction && styles.btnDisabled]} onPress={applyExtraction} disabled={applyingExtraction} activeOpacity={0.85}>
+                    {applyingExtraction ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.coralConfirmTxt}>Apply</Text>}
+                  </TouchableOpacity>
+                ) : (
                   <>
                     <TouchableOpacity
                       style={styles.aiShareBtn}
@@ -5309,11 +5352,10 @@ export default function PetRecordScreen() {
                       <Text style={styles.addLink}>Add manually</Text>
                     </TouchableOpacity>
                   </>
-                ) : (
-                  <TouchableOpacity style={[styles.coralConfirm, applyingExtraction && styles.btnDisabled]} onPress={applyExtraction} disabled={applyingExtraction} activeOpacity={0.85}>
-                    {applyingExtraction ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.coralConfirmTxt}>Confirm all</Text>}
-                  </TouchableOpacity>
                 )}
+                <Text style={[styles.modalCloseText, { opacity: 0.55, fontSize: 11 }]}>
+                  Parse {BUILD_SHA} · {BUILD_PARENT}{extractionReview.parseBuild ? ` · ${String(extractionReview.parseBuild).slice(0, 7)}` : ''}
+                </Text>
                 <TouchableOpacity onPress={() => setExtractionReview(null)} style={{ paddingVertical: 12, alignItems: 'center' }}>
                   <Text style={styles.modalCloseText}>Dismiss</Text>
                 </TouchableOpacity>

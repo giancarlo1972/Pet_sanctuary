@@ -66,7 +66,11 @@ CREATE POLICY pet_invoices_write ON public.pet_invoices
   WITH CHECK (can_write_pet_clinical(pet_id));
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.pet_invoices TO authenticated;
-GRANT ALL ON public.pet_invoices TO service_role;
+DO $$
+BEGIN
+  GRANT ALL ON public.pet_invoices TO service_role;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
 
 DO $$
 BEGIN
@@ -121,22 +125,46 @@ BEGIN
   END LOOP;
 END $$;
 
-UPDATE public.lab_results SET analyte = name WHERE analyte IS NULL AND name IS NOT NULL;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'lab_results' AND column_name = 'name'
+  ) AND EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'lab_results' AND column_name = 'analyte'
+  ) THEN
+    UPDATE public.lab_results SET analyte = name WHERE analyte IS NULL AND name IS NOT NULL;
+  END IF;
+EXCEPTION WHEN undefined_column THEN NULL; WHEN undefined_table THEN NULL;
+END $$;
 
-UPDATE public.pet_vaccinations
-SET document_ids = ARRAY[source_document_id]
-WHERE source_document_id IS NOT NULL
-  AND (document_ids IS NULL OR cardinality(document_ids) = 0);
+DO $$
+BEGIN
+  UPDATE public.pet_vaccinations
+  SET document_ids = ARRAY[source_document_id]
+  WHERE source_document_id IS NOT NULL
+    AND (document_ids IS NULL OR cardinality(document_ids) = 0);
+EXCEPTION WHEN undefined_column THEN NULL; WHEN undefined_table THEN NULL;
+END $$;
 
-UPDATE public.lab_results
-SET document_ids = ARRAY[source_document_id]
-WHERE source_document_id IS NOT NULL
-  AND (document_ids IS NULL OR cardinality(document_ids) = 0);
+DO $$
+BEGIN
+  UPDATE public.lab_results
+  SET document_ids = ARRAY[source_document_id]
+  WHERE source_document_id IS NOT NULL
+    AND (document_ids IS NULL OR cardinality(document_ids) = 0);
+EXCEPTION WHEN undefined_column THEN NULL; WHEN undefined_table THEN NULL;
+END $$;
 
-UPDATE public.pet_exams
-SET document_ids = ARRAY[source_document_id]
-WHERE source_document_id IS NOT NULL
-  AND (document_ids IS NULL OR cardinality(document_ids) = 0);
+DO $$
+BEGIN
+  UPDATE public.pet_exams
+  SET document_ids = ARRAY[source_document_id]
+  WHERE source_document_id IS NOT NULL
+    AND (document_ids IS NULL OR cardinality(document_ids) = 0);
+EXCEPTION WHEN undefined_column THEN NULL; WHEN undefined_table THEN NULL;
+END $$;
 
 DO $$
 BEGIN
@@ -152,7 +180,7 @@ BEGIN
   ALTER TABLE public.pet_exams DROP CONSTRAINT IF EXISTS pet_exams_visit_type_check;
   ALTER TABLE public.pet_exams ADD CONSTRAINT pet_exams_visit_type_check
     CHECK (visit_type IS NULL OR visit_type IN ('in_person', 'telehealth', 'house_call'));
-EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL;
+EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; WHEN undefined_column THEN NULL;
 END $$;
 
 DO $$
@@ -160,20 +188,45 @@ BEGIN
   ALTER TABLE public.medical_records DROP CONSTRAINT IF EXISTS medical_records_visit_type_check;
   ALTER TABLE public.medical_records ADD CONSTRAINT medical_records_visit_type_check
     CHECK (visit_type IS NULL OR visit_type IN ('in_person', 'telehealth', 'house_call'));
-EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL;
+EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; WHEN undefined_column THEN NULL;
 END $$;
 
-CREATE INDEX IF NOT EXISTS lab_results_coalesce_idx
-  ON public.lab_results (pet_id, collected_on, lower(coalesce(analyte, name)));
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'lab_results' AND column_name = 'name'
+  ) THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS lab_results_coalesce_idx ON public.lab_results (pet_id, collected_on, lower(coalesce(analyte, name)))';
+  ELSE
+    EXECUTE 'CREATE INDEX IF NOT EXISTS lab_results_coalesce_idx ON public.lab_results (pet_id, collected_on, lower(analyte))';
+  END IF;
+EXCEPTION WHEN undefined_column THEN NULL; WHEN undefined_table THEN NULL; WHEN duplicate_table THEN NULL;
+END $$;
 
-CREATE INDEX IF NOT EXISTS pet_vaccinations_coalesce_idx
-  ON public.pet_vaccinations (pet_id, vaccine_type, administered_on);
+DO $$
+BEGIN
+  EXECUTE 'CREATE INDEX IF NOT EXISTS pet_vaccinations_coalesce_idx ON public.pet_vaccinations (pet_id, vaccine_type, administered_on)';
+EXCEPTION WHEN undefined_column THEN
+  BEGIN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS pet_vaccinations_coalesce_idx ON public.pet_vaccinations (pet_id, administered_on)';
+  EXCEPTION WHEN OTHERS THEN NULL;
+  END;
+WHEN undefined_table THEN NULL;
+WHEN duplicate_table THEN NULL;
+END $$;
 
-CREATE INDEX IF NOT EXISTS pet_exams_coalesce_idx
-  ON public.pet_exams (pet_id, visit_date, clinic);
+DO $$
+BEGIN
+  EXECUTE 'CREATE INDEX IF NOT EXISTS pet_exams_coalesce_idx ON public.pet_exams (pet_id, visit_date, clinic)';
+EXCEPTION WHEN undefined_column THEN NULL; WHEN undefined_table THEN NULL; WHEN duplicate_table THEN NULL;
+END $$;
 
-CREATE INDEX IF NOT EXISTS medical_records_coalesce_idx
-  ON public.medical_records (pet_id, record_date, clinic);
+DO $$
+BEGIN
+  EXECUTE 'CREATE INDEX IF NOT EXISTS medical_records_coalesce_idx ON public.medical_records (pet_id, record_date, clinic)';
+EXCEPTION WHEN undefined_column THEN NULL; WHEN undefined_table THEN NULL; WHEN duplicate_table THEN NULL;
+END $$;
 
 -- ---------------------------------------------------------------------------
 -- 2. Re-process RPCs — skip any table/column this project does not have

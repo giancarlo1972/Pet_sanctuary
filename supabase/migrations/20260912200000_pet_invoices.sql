@@ -21,9 +21,28 @@ CREATE TABLE IF NOT EXISTS public.pet_invoices (
 );
 
 CREATE INDEX IF NOT EXISTS pet_invoices_pet_date ON public.pet_invoices (pet_id, invoice_date DESC NULLS LAST);
-CREATE UNIQUE INDEX IF NOT EXISTS pet_invoices_pet_no_date
-  ON public.pet_invoices (pet_id, invoice_no, invoice_date)
-  WHERE invoice_no IS NOT NULL AND invoice_date IS NOT NULL;
+
+DO $$
+BEGIN
+  IF to_regclass('public.pet_invoices') IS NULL THEN RETURN; END IF;
+  DELETE FROM public.pet_invoices a
+  USING public.pet_invoices b
+  WHERE a.pet_id = b.pet_id
+    AND a.invoice_no IS NOT NULL
+    AND a.invoice_date IS NOT NULL
+    AND a.invoice_no = b.invoice_no
+    AND a.invoice_date = b.invoice_date
+    AND (a.created_at, a.ctid) < (b.created_at, b.ctid);
+  BEGIN
+    EXECUTE $i$
+      CREATE UNIQUE INDEX IF NOT EXISTS pet_invoices_pet_no_date
+        ON public.pet_invoices (pet_id, invoice_no, invoice_date)
+        WHERE invoice_no IS NOT NULL AND invoice_date IS NOT NULL
+    $i$;
+  EXCEPTION WHEN unique_violation THEN NULL;
+  WHEN duplicate_table THEN NULL;
+  END;
+END $$;
 
 ALTER TABLE public.pet_invoices ENABLE ROW LEVEL SECURITY;
 

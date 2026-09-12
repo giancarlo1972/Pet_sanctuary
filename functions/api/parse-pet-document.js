@@ -29,6 +29,8 @@ import {
   looksLikeInvoice,
   lifestyleHasFields,
   preferInvoiceOverDiet,
+  inferVisitType,
+  stampVisitTypes,
 } from '../lib/clinic-export.js';
 
 function decodedBytes(b64) {
@@ -539,15 +541,17 @@ function normalizeWeight(w) {
 function normalizeVisit(v) {
   if (!v || typeof v !== 'object') return null;
   const date = v.event_date || v.date || v.visit_date || v.occurred_on || null;
+  const clinic = v.clinic || v.clinic_name || null;
   return {
     date,
     event_date: v.event_date || date || null,
-    clinic: v.clinic || v.clinic_name || null,
+    clinic,
     vet: normalizeVetName(v.vet || v.vet_name || v.veterinarian || null),
     reason: v.reason || v.title || null,
     findings: v.findings || null,
     plan: v.plan || null,
     summary: v.summary || v.findings || v.plan || null,
+    visit_type: inferVisitType({ ...v, clinic }, ''),
   };
 }
 
@@ -926,6 +930,7 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
   merged.conditions = coalesceConditionOnset(merged.conditions);
   stampEventDates(merged, document_date);
 
+  stampVisitTypes(merged, text);
   const recAll = reconcileVaxDates(text, merged.vaccinations);
   merged.vaccinations = recAll.vaccinations;
   const latest = latestVisit(merged.visits);
@@ -977,6 +982,7 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
     ai_note: `${segs.length} segments · ${weights.length} weights · ${dedupeVax.length} vaccines · ${dedupeLabs.length} labs`,
     undated: [],
   });
+  stampVisitTypes(shaped, text);
 
   const mentioned_but_missing = parts.flatMap((p) => p.mentioned_but_missing || []);
   if ((shaped.invoices || []).length) mentioned_but_missing.length = 0;

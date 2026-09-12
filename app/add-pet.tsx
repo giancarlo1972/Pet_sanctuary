@@ -14,6 +14,8 @@ import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 import { geocodePlace, reverseGeocode } from '@/lib/geocode';
 import { encodeGeohash } from '@/lib/geohash';
+import PhotoCropSheet from '@/components/PhotoCropSheet';
+import type { Focal } from '@/lib/coalesce';
 
 const SPECIES_OPTIONS = ['Dog', 'Cat', 'Rabbit', 'Bird', 'Other'];
 const TNR = [
@@ -43,6 +45,8 @@ export default function AddPetScreen() {
   const [ai, setAi] = useState<any>(null);
   const [photoFile, setPhotoFile] = useState<any>(null);
   const [photoPath, setPhotoPath] = useState<string | null>(null);
+  const [photoFocal, setPhotoFocal] = useState<Focal | null>(null);
+  const [cropUri, setCropUri] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
@@ -51,17 +55,34 @@ export default function AddPetScreen() {
 
   const pickPhoto = async () => {
     if (!user) { setBanner({ message: 'Please sign in to add a pet.', kind: 'error' }); return; }
-    setAnalyzing(true); setBanner(null);
     try {
       const picked = await pickImage();
-      if (!picked) { setAnalyzing(false); return; }
-      const blob = picked.blob;
+      if (!picked) return;
+      setCropUri(picked.dataUrl || picked.uri);
+    } catch (e: any) {
+      setBanner({ message: e.message || 'Photo analysis failed.', kind: 'error' });
+    }
+  };
+
+  const saveCropped = async (result: { blob: Blob; focal: Focal }) => {
+    if (!user) return;
+    setCropUri(null);
+    setAnalyzing(true); setBanner(null);
+    try {
+      const blob = result.blob;
       const pendingPath = `${user.id}/pending-${Date.now()}.jpg`;
       const { error: upErr } = await supabase.storage.from('pet-photos').upload(pendingPath, blob, { contentType: 'image/jpeg', upsert: true });
       if (upErr) throw upErr;
       setPhotoPath(pendingPath);
+      setPhotoFocal(result.focal);
       setPhotoFile(typeof File !== 'undefined' ? new File([blob], 'pet.jpg', { type: 'image/jpeg' }) : blob);
-      const res = await fetch('/api/analyze-pet-photo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: picked.dataUrl }) });
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result));
+        r.onerror = () => reject(new Error('Could not read photo.'));
+        r.readAsDataURL(blob);
+      });
+      const res = await fetch('/api/analyze-pet-photo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageBase64: dataUrl }) });
       const json = await res.json();
       if (!json.analyzed) throw new Error(json.error || 'AI could not read the photo.');
       setAi(json);
@@ -142,6 +163,7 @@ export default function AddPetScreen() {
         listing_type: isCommunity ? 'community' : 'private',
         owner_id: user.id,
         main_photo_url: photoPath,
+        photo_focal: photoFocal,
         ai_traits: ai ? { ...ai, confirmed: true } : null,
       };
       if (isCommunity) {
@@ -152,32 +174,40 @@ export default function AddPetScreen() {
         row.colony_id = colonyId;
       }
       const { data, error } = await supabase.from('pets').insert(row).select('id').single();
-      if (error) throw error;
+      if (error && /photo_focal/i.test(error.message || '')) {
+        delete row.photo_focal;
+        const retry = await supabase.from('pets').insert(row).select('id').single();
+        if (retry.error) throw retry.error;
+        // continue with retry.data
+        (row as any)._id = retry.data.id;
+      } else if (error) throw error;
+      const petId = data?.id || (row as any)._id;
+      if (!petId) throw new Error('Could not create pet.');
       if (photoPath) {
-        const dest = `${data.id}/${Date.now()}.jpg`;
+        const dest = `${petId}/${Date.now()}.jpg`;
         const moved = await supabase.storage.from('pet-photos').move(photoPath, dest);
         const stored = moved.error ? photoPath : dest;
         if (moved.error) console.warn('[add-pet] move photo', moved.error.message);
-        await supabase.from('pets').update({ main_photo_url: stored }).eq('id', data.id);
+        await supabase.from('pets').update({ main_photo_url: stored, photo_focal: photoFocal }).eq('id', petId);
         await supabase.from('pet_photos').insert({
-          pet_id: data.id, photo_url: stored, is_profile: true, sort_order: 0, uploaded_by: user.id,
+          pet_id: petId, photo_url: stored, is_profile: true, sort_order: 0, uploaded_by: user.id,
         });
       } else if (photoFile) {
-        const path = `${data.id}/${Date.now()}.jpg`;
+        const path = `${petId}/${Date.now()}.jpg`;
         const { error: upErr } = await supabase.storage.from('pet-photos').upload(path, photoFile, { contentType: photoFile.type || 'image/jpeg', upsert: true });
         if (upErr) throw upErr;
-        await supabase.from('pets').update({ main_photo_url: path }).eq('id', data.id);
+        await supabase.from('pets').update({ main_photo_url: path, photo_focal: photoFocal }).eq('id', petId);
         await supabase.from('pet_photos').insert({
-          pet_id: data.id, photo_url: path, is_profile: true, sort_order: 0, uploaded_by: user.id,
+          pet_id: petId, photo_url: path, is_profile: true, sort_order: 0, uploaded_by: user.id,
         });
       }
       await supabase.from('pet_relationships').insert({
-        pet_id: data.id,
+        pet_id: petId,
         user_id: user.id,
         relationship: isCommunity ? 'caretaker' : relationship,
         started_on: new Date().toISOString().slice(0, 10),
       });
-      router.replace(`/pet-record?petId=${data.id}`);
+      router.replace(`/pet-record?petId=${petId}`);
     } catch (err: any) {
       setBanner({ message: err.message || 'Could not add pet. Please try again.', kind: 'error' });
     }
@@ -293,6 +323,7 @@ export default function AddPetScreen() {
         </Page>
       </KeyboardAvoidingView>
       {banner && <InlineBanner message={banner.message} kind={banner.kind} onDismiss={() => setBanner(null)} />}
+      <PhotoCropSheet visible={Boolean(cropUri)} uri={cropUri} onCancel={() => setCropUri(null)} onConfirm={saveCropped} />
     </SafeAreaView>
   );
 }

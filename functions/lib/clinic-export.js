@@ -572,6 +572,7 @@ export function harvestKnownFacts(text) {
       findings,
       plan,
       summary: [reason, findings, plan].filter(Boolean).join(' · ') || null,
+      visit_type: inferVisitType({ clinic, reason }, src),
     });
   }
 
@@ -683,7 +684,7 @@ export function coalesceConditionOnset(conditions) {
 }
 
 const PASSING_CLINIC_LINE = /(?:copy\s*to|cc\s*:|referr(?:ed|al)|ordered\s+by|prior\s+history|previously\s+(?:seen|treated)|outside\s+(?:records?|lab))/i;
-const KNOWN_CLINIC_RE = /\b(BondVet|Bond\s+Vet(?:\s+Hell'?s Kitchen)?|At[- ]Home(?:\s+Veterinary)?|VEG(?:\s+Chelsea)?|VCA[^\n,]{0,40}|Banfield|BluePearl|ASPCA|Animal Medical)\b/i;
+const KNOWN_CLINIC_RE = /\b(BondVet|Bond\s+Vet(?:\s+Hell'?s Kitchen)?|At[- ]Home(?:\s+Veterinary)?|VEG(?:\s+Chelsea)?|VCA[^\n,]{0,40}|Banfield|BluePearl|ASPCA|Animal Medical|Dutch(?:\.com)?|InstaVet|Instavet)\b/i;
 
 function cleanClinicName(s) {
   const name = String(s || '').replace(/\s+/g, ' ').trim().replace(/[.,;]+$/, '');
@@ -1006,6 +1007,14 @@ Findings: intermittent vomiting, otherwise BAR
 Plan: follow-up vaccination in 3 weeks, fecal pending
 `;
 
+export const DUTCH_TELEHEALTH_FIXTURE = `Dutch
+Online visit · video consult
+Patient: Aurora
+Date: March 14, 2025
+Reason: appetite check
+Plan: continue current diet, follow up if vomiting returns
+`;
+
 export function detectVet(src) {
   const text = String(src || '');
   const found = [];
@@ -1056,6 +1065,42 @@ export function latestVisit(visits) {
     .slice()
     .sort((a, b) => String(b.event_date || b.date || '').localeCompare(String(a.event_date || a.date || '')))
     .find((v) => v && (v.event_date || v.date || v.clinic)) || null;
+}
+
+export function inferVisitType(visit, blob) {
+  if (visit?.visit_type === 'telehealth' || visit?.visit_type === 'house_call' || visit?.visit_type === 'in_person') {
+    return visit.visit_type;
+  }
+  const text = `${visit?.clinic || ''} ${visit?.reason || ''} ${visit?.title || ''} ${blob || ''}`.toLowerCase();
+  if (/\bdutch\b|telehealth|tele-health|telemedicine|online visit|virtual (consult|visit|appointment)|video visit/.test(text)) {
+    return 'telehealth';
+  }
+  if (/house\s*call|at[- ]home veterinary|in-home visit/.test(text)) return 'house_call';
+  return 'in_person';
+}
+
+export function stampVisitTypes(merged, text) {
+  const blob = String(text || '');
+  if (!merged.visits) merged.visits = [];
+  for (const v of merged.visits) {
+    v.visit_type = inferVisitType(v, blob);
+  }
+  const wantsTele = /\bdutch\b|telehealth|tele-health|online visit|virtual (consult|visit)/i.test(blob);
+  if (wantsTele && !merged.visits.some((v) => v.visit_type === 'telehealth')) {
+    const clinic = /\bdutch\b/i.test(blob) ? 'Dutch' : (merged.issuing_clinic || merged.clinic || 'Telehealth');
+    const date = merged.document_date || merged.date || null;
+    merged.visits.push({
+      date,
+      event_date: date,
+      clinic,
+      visit_type: 'telehealth',
+      reason: 'Telehealth visit',
+      findings: null,
+      plan: null,
+      summary: 'Telehealth visit',
+    });
+  }
+  return merged;
 }
 
 function applyLabSegmentHeader(seg, visitBlocks, exporting = null) {
@@ -1258,7 +1303,7 @@ export function classifySegment(seg) {
   if (/(?:^|\n)\s*(?:vaccines?|immunizations?)\b/i.test(head) && !/visit report|service on|reason:/i.test(head)) return 'vaccines';
   if (/physical exam|\bTPR\b|\bBCS\b/i.test(head) && text.length < 1800) return 'vitals';
   if (seg?.type && SEGMENT_TYPES.includes(seg.type)) return seg.type;
-  if (/visit report|reason:|findings:|plan:/i.test(head)) return 'visit';
+  if (/visit report|reason:|findings:|plan:|telehealth|online visit|\bdutch\b/i.test(head)) return 'visit';
   return 'narrative';
 }
 
@@ -1703,6 +1748,7 @@ export function pipelineCode(text) {
   if (merged.identity) {
     attachDerivedAge(merged.identity, merged.document_date || latest?.event_date || latest?.date || merged.date);
   }
+  stampVisitTypes(merged, text);
   return merged;
 }
 

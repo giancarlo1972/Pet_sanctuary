@@ -81,6 +81,13 @@ import SharePetSheet from '@/components/SharePetSheet';
 import { BUILD_SHA, BUILD_PARENT } from '@/lib/build-info';
 import { PET_TRAITS, normalizeTraits, type PetTrait } from '@/lib/pet-traits';
 import SignInPrompt from '@/components/SignInPrompt';
+import PhotoCropSheet from '@/components/PhotoCropSheet';
+import {
+  distinctLabCount, distinctVisitCount, filledFieldCount, inferVisitType, isReminderOnly,
+  labsMatch, mergeRicher, unionDocIds, vaxSameDose, visitsMatch, isoDay,
+  type Focal,
+} from '@/lib/coalesce';
+import { releasePicked } from '@/lib/pick-image';
 
 function blobTypeFromName(path: string) {
   if (/\.pdf$/i.test(path)) return 'application/pdf';
@@ -230,6 +237,7 @@ interface Pet {
   feeding_schedule?: string | null;
   tnr_status?: string | null;
   colony_id?: string | null;
+  photo_focal?: Focal | null;
 }
 
 interface Relationship {
@@ -264,6 +272,8 @@ interface Vaccination {
   tag_number: string | null;
   is_booster: boolean | null;
   superseded: boolean | null;
+  superseded_by?: string | null;
+  document_ids?: string[] | null;
   notes: string | null;
   document_url: string | null;
   clinic_id: string | null;
@@ -276,6 +286,9 @@ interface MedicalRecord {
   details: any;
   record_date: string | null;
   source?: string | null;
+  clinic?: string | null;
+  visit_type?: string | null;
+  document_ids?: string[] | null;
 }
 
 interface HistoryEvent {
@@ -1054,6 +1067,16 @@ export default function PetRecordScreen() {
   const [editableWeights, setEditableWeights] = useState<ExtractedWeight[]>([]);
   const [editableProcedures, setEditableProcedures] = useState<ExtractedProcedure[]>([]);
   const [applyingExtraction, setApplyingExtraction] = useState(false);
+  const extractionReviewRef = useRef<typeof extractionReview>(null);
+  const editableVaxRef = useRef<ExtractedVaccination[]>([]);
+  const editableLabsRef = useRef<ExtractedLabPanel[]>([]);
+  const editableWeightsRef = useRef<ExtractedWeight[]>([]);
+  const editableProceduresRef = useRef<ExtractedProcedure[]>([]);
+  extractionReviewRef.current = extractionReview;
+  editableVaxRef.current = editableVax;
+  editableLabsRef.current = editableLabs;
+  editableWeightsRef.current = editableWeights;
+  editableProceduresRef.current = editableProcedures;
   const [confirmEdit, setConfirmEdit] = useState<Set<string>>(new Set());
   const [parseProgress, setParseProgress] = useState<string | null>(null);
   const [openVaxHist, setOpenVaxHist] = useState<Set<string>>(new Set());
@@ -1070,6 +1093,11 @@ export default function PetRecordScreen() {
   const [medCatalog, setMedCatalog] = useState<CatalogRow[]>([]);
 
   const [photoUploading, setPhotoUploading] = useState(false);
+  const [cropUri, setCropUri] = useState<string | null>(null);
+  const [cropPicked, setCropPicked] = useState<{ blob: Blob; uri: string } | null>(null);
+  const [docMenuOpen, setDocMenuOpen] = useState(false);
+  const [reprocessing, setReprocessing] = useState(false);
+  const [reprocessProgress, setReprocessProgress] = useState<string | null>(null);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
   const [confirmConfig, setConfirmConfig] = useState<ConfirmConfig | null>(null);
 
@@ -1086,12 +1114,16 @@ export default function PetRecordScreen() {
 
     const petRes = await supabase
       .from('pets')
-      .select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, date_of_birth_source, gender_source, spayed_neutered_source, body_condition_score, target_weight_kg, previous_names, coat, ai_traits, personality, is_public, listing_type, good_with_kids, good_with_dogs, good_with_cats, territory, geohash, feeding_schedule, tnr_status, colony_id')
+      .select('id, name, breed, species, age_text, gender, status, description, main_photo_url, photo_focal, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, date_of_birth_source, gender_source, spayed_neutered_source, body_condition_score, target_weight_kg, previous_names, coat, ai_traits, personality, is_public, listing_type, good_with_kids, good_with_dogs, good_with_cats, territory, geohash, feeding_schedule, tnr_status, colony_id')
       .eq('id', petId)
       .maybeSingle();
 
     let petData = petRes.data;
     let petErr = petRes.error;
+    if (petErr && /photo_focal/i.test(petErr.message || '')) {
+      const retry = await supabase.from('pets').select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, date_of_birth_source, gender_source, spayed_neutered_source, body_condition_score, target_weight_kg, previous_names, coat, ai_traits, personality, is_public, listing_type, good_with_kids, good_with_dogs, good_with_cats, territory, geohash, feeding_schedule, tnr_status, colony_id').eq('id', petId).maybeSingle();
+      petData = retry.data as typeof petData; petErr = retry.error;
+    }
     if (petErr && /territory|geohash|feeding_schedule|tnr_status|colony_id/i.test(petErr.message || '')) {
       const retry = await supabase.from('pets').select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, date_of_birth_source, gender_source, spayed_neutered_source, body_condition_score, target_weight_kg, previous_names, coat, ai_traits, personality, is_public, listing_type, good_with_kids, good_with_dogs, good_with_cats').eq('id', petId).maybeSingle();
       petData = retry.data as typeof petData; petErr = retry.error;
@@ -1763,12 +1795,26 @@ export default function PetRecordScreen() {
   // === Photo handlers ===
   const uploadPhoto = async () => {
     if (!petId || !user || photos.length >= 10) return;
-    setPhotoUploading(true);
     try {
       const picked = await pickImage();
-      if (!picked) { setPhotoUploading(false); return; }
+      if (!picked) return;
+      setCropPicked({ blob: picked.blob, uri: picked.uri });
+      setCropUri(picked.dataUrl || picked.uri);
+    } catch (e) {
+      console.error('[pet-record] photo pick:', e);
+      showBanner('Could not read that picture.');
+    }
+  };
+
+  const saveCroppedPhoto = async (result: { blob: Blob; focal: Focal }) => {
+    if (!petId || !user) return;
+    setPhotoUploading(true);
+    const src = cropPicked?.uri;
+    setCropUri(null);
+    setCropPicked(null);
+    try {
       const filePath = `${petId}/${Date.now()}.jpg`;
-      const { error: upErr } = await supabase.storage.from('pet-photos').upload(filePath, picked.blob, { contentType: 'image/jpeg', upsert: true });
+      const { error: upErr } = await supabase.storage.from('pet-photos').upload(filePath, result.blob, { contentType: 'image/jpeg', upsert: true });
       if (upErr) { console.error('[pet-record] photo upload:', upErr); showBanner('Could not upload photo.'); setPhotoUploading(false); return; }
       const { error: insErr } = await supabase.from('pet_photos').insert({
         pet_id: petId,
@@ -1778,7 +1824,12 @@ export default function PetRecordScreen() {
         uploaded_by: user.id,
       });
       if (insErr) { console.error('[pet-record] photo insert:', insErr); }
-      await supabase.from('pets').update({ main_photo_url: filePath }).eq('id', petId);
+      let up = await supabase.from('pets').update({ main_photo_url: filePath, photo_focal: result.focal }).eq('id', petId);
+      if (up.error && /photo_focal/i.test(up.error.message || '')) {
+        await supabase.from('pets').update({ main_photo_url: filePath }).eq('id', petId);
+      }
+      setPet((cur) => cur ? { ...cur, main_photo_url: filePath, photo_focal: result.focal } : cur);
+      if (src) releasePicked(src);
       setPhotoUploading(false);
       load();
     } catch (e) {
@@ -2150,6 +2201,7 @@ export default function PetRecordScreen() {
       }
     }
     setEditableVax(vax);
+    editableVaxRef.current = vax;
     const allWeights: ExtractedWeight[] = Array.isArray(parsed.weights) && parsed.weights.length
       ? parsed.weights.map((w: any) => ({
           value: Number(w.value),
@@ -2158,7 +2210,8 @@ export default function PetRecordScreen() {
         }))
       : (wt.value != null ? [wt] : []);
     setEditableWeights(allWeights);
-    setEditableLabs((() => {
+    editableWeightsRef.current = allWeights;
+    const labPanels = (() => {
       if (!labs.length) return [];
       const groups = new Map<string, ExtractedLabPanel>();
       for (const row of labs) {
@@ -2178,11 +2231,14 @@ export default function PetRecordScreen() {
         groups.get(k)!.results.push(row);
       }
       return [...groups.values()];
-    })());
+    })();
+    setEditableLabs(labPanels);
+    editableLabsRef.current = labPanels;
     setEditableWeight(wt);
     setEditableProcedures(visits);
+    editableProceduresRef.current = visits;
     setConfirmEdit(new Set());
-    setExtractionReview({
+    const review = {
       documentId,
       data: { vaccinations: vax, lab_panels: [], weight: wt, procedures: visits, identity: parsed.identity || { microchip: null, date_of_birth: null, sex: null, breed: null, colors: null } },
       extractionId: documentId,
@@ -2212,11 +2268,13 @@ export default function PetRecordScreen() {
       mentionedButMissing: (Array.isArray(parsed.invoices) && parsed.invoices.length)
         ? []
         : (Array.isArray(parsed.mentioned_but_missing) ? parsed.mentioned_but_missing : []),
-    });
+    };
+    extractionReviewRef.current = review;
+    setExtractionReview(review);
   };
 
-  const triggerExtraction = async (documentId: string, extra?: { imageBase64?: string | null; mimeType?: string; path?: string; extractedText?: string; pageCount?: number; kinds?: string[]; images?: string[]; forceScan?: boolean }, silent = false) => {
-    if (!user) return;
+  const triggerExtraction = async (documentId: string, extra?: { imageBase64?: string | null; mimeType?: string; path?: string; extractedText?: string; pageCount?: number; kinds?: string[]; images?: string[]; forceScan?: boolean }, silent = false): Promise<any | null> => {
+    if (!user) return null;
     parsedAttempted.current.add(documentId);
     if (!silent) { setExtracting(true); setParseProgress(extra?.pageCount ? `Reading ${extra.pageCount} pages · parsing visits` : 'Analyzing document…'); }
     await supabase.from('pet_documents').update({ ai_status: 'processing' }).eq('id', documentId);
@@ -2302,7 +2360,7 @@ export default function PetRecordScreen() {
         const summary = { reason, error: result.error, schemaVersion: 2 };
         await supabase.from('pet_documents').update({ ai_status: status, ai_summary: summary }).eq('id', documentId);
         setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: status, ai_summary: summary } : d));
-        return;
+        return null;
       }
       const title = result.title || null;
       const status = Array.isArray(result.mentioned_but_missing) && result.mentioned_but_missing.length ? 'partial' : 'ready';
@@ -2323,17 +2381,24 @@ export default function PetRecordScreen() {
       }
       setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: status, ai_summary: result, title: title || d.title, clinic: result.clinic || d.clinic, issuing_clinic: result.issuing_clinic || d.issuing_clinic, content_kinds: kindsOut.length ? kindsOut : d.content_kinds } : d));
       if (!silent) openConfirmFromParse(documentId, result);
+      return result;
     } catch (err: any) {
       console.error('[parse-pet-document] extraction error:', err);
       const summary = { reason: 'model_error', error: String(err), schemaVersion: 2 };
       await supabase.from('pet_documents').update({ ai_status: 'failed', ai_summary: summary }).eq('id', documentId);
       setDocuments((prev) => prev.map((d) => d.id === documentId ? { ...d, ai_status: 'failed', ai_summary: summary } : d));
+      return null;
     } finally {
       if (!silent) { setExtracting(false); setParseProgress(null); }
     }
   };
 
-  const applyExtraction = async () => {
+  const applyExtraction = async (opts?: { quiet?: boolean }) => {
+    const extractionReview = extractionReviewRef.current;
+    const editableVax = editableVaxRef.current;
+    const editableLabs = editableLabsRef.current;
+    const editableWeights = editableWeightsRef.current;
+    const editableProcedures = editableProceduresRef.current;
     if (!extractionReview || !petId || !user) return;
     if (!canWriteClinical && !canEdit) {
       showBanner('Only the owner or co-owner can apply extracted records.');
@@ -2375,34 +2440,37 @@ export default function PetRecordScreen() {
     }
 
     try {
-      // 1. vaccinations — doses only; reminders update next_due on that type
+      // 1. vaccinations — doses only; reminders update next_due; ±3 day coalesce; later dose supersedes
+      const { data: existingVaxRows } = await supabase.from('pet_vaccinations').select('*').eq('pet_id', petId);
+      let vaxDb: any[] = existingVaxRows || [];
       const seenDose = new Set<string>();
-      const existingVaxKeys = new Set(
-        vaccinations.filter((e) => e.administered_on).map((e) => `${vaccineType(e.vaccine)}|${e.administered_on}`),
-      );
       for (let i = 0; i < editableVax.length; i++) {
-        if (extractionReview.vaxDuplicates.has(i)) continue;
         const v = editableVax[i];
         if (!v.vaccine) continue;
         const matched = matchCatalog(v.vaccine, vaxCatalog);
         const productName = matched.row?.name || v.vaccine;
         const type = vaccineType(productName);
         const years = durationYearsFromProduct(productName, matched.row);
-        if (!v.administered_on && v.next_due_on) {
-          const current = vaccinations
-            .filter((e) => vaccineType(e.vaccine) === type && e.administered_on)
+        if (isReminderOnly(v)) {
+          const current = vaxDb
+            .filter((e) => vaccineType(e.vaccine || e.vaccine_type) === type && e.administered_on)
             .sort((a, b) => String(b.administered_on).localeCompare(String(a.administered_on)))[0];
-          if (current) {
-            console.log('[apply] reminder → next_due', type, v.next_due_on, 'on', current.id);
-            const res = await supabase.from('pet_vaccinations').update({ next_due_on: v.next_due_on }).eq('id', current.id);
-            if (res.error) errors.push(`Reminder ${type}: ${res.error.message}`);
+          if (current && v.next_due_on) {
+            const res = await supabase.from('pet_vaccinations').update({
+              next_due_on: v.next_due_on,
+              document_ids: unionDocIds(current, sourceDocId),
+            }).eq('id', current.id);
+            if (res.error && /document_ids/i.test(res.error.message || '')) {
+              await supabase.from('pet_vaccinations').update({ next_due_on: v.next_due_on }).eq('id', current.id);
+            }
             continue;
           }
+          continue;
         }
-        if (!v.administered_on && String(v.status || '') !== 'current' && String(v.status || '') !== 'overdue' && !v.next_due_on && !v.notes) continue;
-        const key = `${type}|${v.administered_on || v.status || v.next_due_on || 'open'}`;
-        if (seenDose.has(key) || (v.administered_on && existingVaxKeys.has(key))) continue;
+        const key = `${type}|${v.administered_on}`;
+        if (seenDose.has(key)) continue;
         seenDose.add(key);
+        const same = vaxDb.find((e) => vaccineType(e.vaccine || e.vaccine_type) === type && vaxSameDose(e.administered_on, v.administered_on));
         const nextDue = v.administered_on ? (addYearsLocal(v.administered_on, years) || v.next_due_on || null) : (v.next_due_on || null);
         const payload: any = {
           pet_id: petId,
@@ -2419,8 +2487,23 @@ export default function PetRecordScreen() {
           author_id: user.id,
           source: 'ai_extracted',
           superseded: false,
+          source_document_id: sourceDocId,
+          document_ids: unionDocIds(same, sourceDocId),
           notes: v.notes || (v.status && v.status !== 'given' ? `status:${v.status}` : null),
         };
+        if (same) {
+          const merged = mergeRicher(same, payload);
+          merged.document_ids = payload.document_ids;
+          let up = await supabase.from('pet_vaccinations').update(merged).eq('id', same.id);
+          if (up.error) {
+            const slim = { lot_number: payload.lot_number, manufacturer: payload.manufacturer, next_due_on: payload.next_due_on, document_ids: payload.document_ids };
+            up = await supabase.from('pet_vaccinations').update(slim).eq('id', same.id);
+            if (up.error && /document_ids/i.test(up.error.message || '')) {
+              await supabase.from('pet_vaccinations').update({ lot_number: payload.lot_number, next_due_on: payload.next_due_on }).eq('id', same.id);
+            }
+          }
+          continue;
+        }
         console.log('[apply] vax payload', payload);
         let res = await supabase.from('pet_vaccinations').insert(payload).select('id').maybeSingle();
         if (res.error) {
@@ -2428,16 +2511,22 @@ export default function PetRecordScreen() {
           delete slim.notes;
           delete slim.vaccine_type;
           delete slim.duration_years;
+          delete slim.document_ids;
+          delete slim.source_document_id;
           res = await supabase.from('pet_vaccinations').insert(slim).select('id').maybeSingle();
         }
         console.log('[apply] vax result', res.error || res.data);
         if (res.error) { errors.push(`Vaccination "${productName}": ${res.error.message}`); continue; }
         applied.vaccinations++;
-        if (v.administered_on) existingVaxKeys.add(key);
-        if (v.administered_on) {
-          const older = vaccinations.filter((e) => vaccineType(e.vaccine) === type && String(e.administered_on || '') < String(v.administered_on));
+        const newId = res.data?.id;
+        if (newId) vaxDb.push({ ...payload, id: newId });
+        if (v.administered_on && newId) {
+          const older = vaxDb.filter((e) => vaccineType(e.vaccine || e.vaccine_type) === type && e.id !== newId && e.administered_on && String(e.administered_on) < String(v.administered_on) && !vaxSameDose(e.administered_on, v.administered_on));
           if (older.length) {
-            await supabase.from('pet_vaccinations').update({ superseded: true }).in('id', older.map((e) => e.id));
+            let up = await supabase.from('pet_vaccinations').update({ superseded: true, superseded_by: newId }).in('id', older.map((e) => e.id));
+            if (up.error && /superseded_by/i.test(up.error.message || '')) {
+              await supabase.from('pet_vaccinations').update({ superseded: true }).in('id', older.map((e) => e.id));
+            }
           }
         }
       }
@@ -2465,11 +2554,14 @@ export default function PetRecordScreen() {
       };
       for (const panel of editableLabs) (panel.results || []).forEach((r) => pushLab(r, panel.collected_on, panel.clinic_name, panel.vet_name));
       if (!editableLabs.length) (rawDoc.labs || []).forEach((r: any) => pushLab(r, null));
+      const { data: existingLabs } = await supabase.from('lab_results').select('*').eq('pet_id', petId);
+      let labDb: any[] = existingLabs || [];
       const seenLab = new Set<string>();
       for (const row of labFlat) {
-        const key = `${row.analyte}|${row.collected_on}|${row.value_text}`;
+        const key = `${row.analyte}|${row.collected_on}|${row.clinic || ''}`;
         if (seenLab.has(key)) continue;
         seenLab.add(key);
+        const same = labDb.find((e) => labsMatch({ analyte: e.analyte || e.name, collected_on: e.collected_on, clinic: e.clinic }, row));
         const full: any = {
           pet_id: petId,
           name: row.analyte,
@@ -2486,7 +2578,30 @@ export default function PetRecordScreen() {
           ref_high: row.ref_high ?? null,
           source: 'ai_extracted',
           author_id: user.id,
+          source_document_id: sourceDocId,
+          document_ids: unionDocIds(same, sourceDocId),
         };
+        if (same) {
+          const keep = filledFieldCount(same) >= filledFieldCount(full) ? same : full;
+          const patch = mergeRicher(keep === same ? same : full, keep === same ? full : same);
+          patch.document_ids = full.document_ids;
+          let up = await supabase.from('lab_results').update({
+            value: patch.value || patch.value_text,
+            value_text: patch.value_text || patch.value,
+            unit: patch.unit,
+            flag: patch.flag,
+            clinic: patch.clinic,
+            vet: patch.vet,
+            document_ids: patch.document_ids,
+            analyte: patch.analyte || patch.name,
+          }).eq('id', same.id);
+          if (up.error && /document_ids|analyte/i.test(up.error.message || '')) {
+            await supabase.from('lab_results').update({
+              value: patch.value || patch.value_text, unit: patch.unit, flag: patch.flag, clinic: patch.clinic,
+            }).eq('id', same.id);
+          }
+          continue;
+        }
         let res = await supabase.from('lab_results').insert(full).select('id').maybeSingle();
         if (res.error) {
           console.log('[apply] lab fail', row.analyte, res.error.message);
@@ -2498,6 +2613,7 @@ export default function PetRecordScreen() {
             if (res.error) { console.log('[apply] lab slim fail', row.analyte, res.error.message); errors.push(`Lab "${row.analyte}": ${res.error.message}`); continue; }
           }
         }
+        if (res.data?.id) labDb.push({ ...full, id: res.data.id });
         applied.labs++;
       }
 
@@ -2637,72 +2753,131 @@ export default function PetRecordScreen() {
         if (lsRes.error) console.log('[apply] pet_lifestyle', lsRes.error.message);
       }
 
-      // 4. visits — skip undated; never invent today
-      for (const visit of editableProcedures) {
+      // 4. visits — coalesce (pet, clinic, visit_date); telehealth for Dutch / online
+      const { data: existingRecs } = await supabase.from('medical_records').select('*').eq('pet_id', petId);
+      let recDb: any[] = existingRecs || [];
+      const visitRows = editableProcedures.length
+        ? editableProcedures
+        : (rawDoc.visits || []).map((v: any) => ({
+          event_type: 'visit',
+          occurred_on: v.event_date || v.date,
+          title: v.reason || v.clinic || 'Visit',
+          notes: v.summary || [v.findings, v.plan].filter(Boolean).join(' · ') || null,
+          clinic_name: v.clinic || v.clinic_name || rawDoc.clinic || null,
+          visit_type: v.visit_type,
+        }));
+      for (const visit of visitRows) {
         if (!visit.title && !visit.event_type && !visit.occurred_on) continue;
         if (!visit.occurred_on) continue;
-        const visitPayload = {
+        const clinic = (visit as any).clinic_name || (visit as any).clinic || rawDoc.clinic || extractionReview.issuingClinic || null;
+        const vType = inferVisitType({ clinic, reason: visit.title, visit_type: (visit as any).visit_type }, JSON.stringify(rawDoc));
+        const same = recDb.find((e) => visitsMatch({ clinic: e.clinic, record_date: e.record_date }, { clinic, record_date: visit.occurred_on }));
+        const visitPayload: any = {
           pet_id: petId,
           record_type: 'visit',
           title: visit.title || 'Visit',
           details: visit.notes || null,
           record_date: visit.occurred_on,
+          clinic,
+          visit_type: vType,
           source: 'ai_extracted',
           author_id: user.id,
+          source_document_id: sourceDocId,
+          document_ids: unionDocIds(same, sourceDocId),
         };
+        if (same) {
+          const patch: any = {
+            details: visit.notes || same.details,
+            clinic: clinic || same.clinic,
+            visit_type: vType || same.visit_type,
+            document_ids: visitPayload.document_ids,
+          };
+          let up = await supabase.from('medical_records').update(patch).eq('id', same.id);
+          if (up.error && /visit_type|document_ids|clinic/i.test(up.error.message || '')) {
+            await supabase.from('medical_records').update({ details: patch.details }).eq('id', same.id);
+          }
+          continue;
+        }
         console.log('[apply] visit payload', visitPayload);
-        const vRes = await supabase.from('medical_records').insert(visitPayload).select('id').maybeSingle();
+        let vRes = await supabase.from('medical_records').insert(visitPayload).select('id').maybeSingle();
+        if (vRes.error) {
+          const slim = { pet_id: petId, record_type: 'visit', title: visitPayload.title, details: visitPayload.details, record_date: visitPayload.record_date, source: 'ai_extracted', author_id: user.id };
+          vRes = await supabase.from('medical_records').insert(slim).select('id').maybeSingle();
+        }
         console.log('[apply] visit result', vRes.error || vRes.data);
         if (vRes.error) errors.push(`Visit "${visit.title || 'Visit'}": ${vRes.error.message}`);
-        else applied.visits++;
-        await run(`Visit event "${visit.title || 'Visit'}"`, () => supabase.from('pet_care_events').insert({
-          pet_id: petId,
-          event_type: 'visit',
-          occurred_on: visit.occurred_on,
-          title: visit.title || null,
-          notes: visit.notes || null,
-          recorded_by: user.id,
-        }));
+        else {
+          applied.visits++;
+          if (vRes.data?.id) recDb.push({ ...visitPayload, id: vRes.data.id });
+        }
       }
 
       let examsIn = (extractionReview.exams && extractionReview.exams.length)
         ? extractionReview.exams
         : (rawDoc.exams || []);
       if (!examsIn.length) {
-        const visitsSrc = rawDoc.visits || editableProcedures.map((v) => ({ date: v.occurred_on, clinic: null, summary: v.notes }));
+        const visitsSrc = rawDoc.visits || visitRows.map((v: any) => ({ date: v.occurred_on, clinic: v.clinic_name, summary: v.notes, visit_type: v.visit_type }));
         examsIn = visitsSrc.map((v: any) => ({
           visit_date: v.date || v.occurred_on,
           clinic: v.clinic || rawDoc.clinic || null,
+          visit_type: v.visit_type,
           vitals: { bcs: rawDoc.identity?.bcs || pet?.body_condition_score || null },
           systems: [],
+          plan: v.plan || v.summary || null,
         })).filter((e: any) => e.visit_date);
       }
+      const { data: existingExams } = await supabase.from('pet_exams').select('*').eq('pet_id', petId);
+      let examDb: any[] = existingExams || [];
       const seenExam = new Set<string>();
       for (const ex of examsIn) {
         const visitDate = ex.visit_date || ex.date || null;
-        const key = String(visitDate);
+        const clinic = ex.clinic || rawDoc.clinic || extractionReview.issuingClinic || null;
+        const key = `${clinic || ''}|${visitDate}`;
         if (visitDate && seenExam.has(key)) continue;
         if (visitDate) seenExam.add(key);
-        const payload = {
+        const vType = inferVisitType({ clinic, visit_type: ex.visit_type }, JSON.stringify(rawDoc));
+        const same = examDb.find((e) => visitsMatch({ clinic: e.clinic, visit_date: e.visit_date }, { clinic, visit_date: visitDate }));
+        const payload: any = {
           pet_id: petId,
           visit_date: visitDate,
-          clinic: ex.clinic || null,
+          clinic,
+          visit_type: vType,
           vitals: ex.vitals || {},
           systems: ex.systems || [],
+          plan: ex.plan || null,
+          owner_instructions: ex.owner_instructions || ex.plan || null,
           source_document_id: sourceDocId,
+          document_ids: unionDocIds(same, sourceDocId),
           source: 'ai_extracted',
           author_id: user.id,
         };
+        if (same) {
+          const vitals = { ...(same.vitals || {}), ...(ex.vitals || {}) };
+          const systems = [...(same.systems || []), ...(ex.systems || [])];
+          let up = await supabase.from('pet_exams').update({
+            vitals,
+            systems,
+            visit_type: vType || same.visit_type,
+            document_ids: payload.document_ids,
+            plan: payload.plan || same.plan,
+            owner_instructions: payload.owner_instructions || same.owner_instructions,
+          }).eq('id', same.id);
+          if (up.error && /document_ids|visit_type|owner_instructions|plan/i.test(up.error.message || '')) {
+            await supabase.from('pet_exams').update({ vitals, systems }).eq('id', same.id);
+          }
+          continue;
+        }
         const { error, data } = await supabase.from('pet_exams').insert(payload).select('id').maybeSingle();
         if (error) {
           console.log('[apply] exam fail', visitDate, error.message);
-          const slim = { pet_id: petId, visit_date: visitDate, clinic: ex.clinic || null, vitals: ex.vitals || {}, systems: ex.systems || [] };
+          const slim = { pet_id: petId, visit_date: visitDate, clinic, vitals: ex.vitals || {}, systems: ex.systems || [] };
           const retry = await supabase.from('pet_exams').insert(slim).select('id').maybeSingle();
           if (retry.error) errors.push(`Exam ${visitDate || ''}: ${retry.error.message}`);
           else applied.exams = (applied.exams || 0) + 1;
         } else {
           console.log('[apply] exam ok', visitDate, data?.id);
           applied.exams = (applied.exams || 0) + 1;
+          if (data?.id) examDb.push({ ...payload, id: data.id });
         }
         const v = ex.vitals || {};
         if (visitDate && (v.temp_f || v.hr || v.rr || v.bcs || v.weight_lb)) {
@@ -2831,17 +3006,84 @@ export default function PetRecordScreen() {
       console.log('[apply] SQL counts', dbCounts, labsC.error, examsC.error, wC.error);
       const summary = `Applied vax ${applied.vaccinations}, weights ${applied.weights}, labs ${applied.labs}, visits ${applied.visits} · DB labs=${dbCounts.labs} exams=${dbCounts.exams} weights=${dbCounts.weights}`;
       if (errors.length > 0) {
-        showBanner(`${summary}. Some items had errors: ${errors.slice(0, 2).join('; ')}`, 'info');
-      } else {
+        if (!opts?.quiet) showBanner(`${summary}. Some items had errors: ${errors.slice(0, 2).join('; ')}`, 'info');
+      } else if (!opts?.quiet) {
         showBanner(summary, 'success');
       }
-      setExtractionReview(null);
-      load();
+      if (!opts?.quiet) setExtractionReview(null);
+      if (!opts?.quiet) load();
     } catch (err) {
       console.error('[pet-record] apply extraction error:', err);
       showBanner('Could not apply the extracted data. Please try entering details manually.');
     }
     setApplyingExtraction(false);
+  };
+
+  const reprocessOne = async (doc: PetDocument, autoApply: boolean) => {
+    if (!petId || !canEdit) return;
+    setReprocessing(true);
+    setReprocessProgress('Re-reading document…');
+    parsedAttempted.current.delete(doc.id);
+    try {
+      const result = await triggerExtraction(doc.id, { path: doc.file_path, kinds: doc.content_kinds || undefined, forceScan: true }, true);
+      if (!result) { showBanner('Could not re-read that file.'); return; }
+      const det = await supabase.rpc('detach_document_derived', { pid: petId, doc: doc.id });
+      if (det.error) console.log('[reprocess] detach', det.error.message);
+      openConfirmFromParse(doc.id, result);
+      if (autoApply) {
+        await new Promise((r) => setTimeout(r, 40));
+        await applyExtraction({ quiet: true });
+        showBanner('Re-processed and applied.', 'success');
+        load();
+      }
+    } catch (e: any) {
+      showBanner(e.message || 'Re-process failed.');
+    }
+    setReprocessing(false);
+    setReprocessProgress(null);
+  };
+
+  const reprocessAll = async () => {
+    if (!petId || !canEdit) return;
+    setDocMenuOpen(false);
+    setReprocessing(true);
+    const docs = documents.filter((d) => d.file_path);
+    try {
+      const parsed: { id: string; result: any }[] = [];
+      for (let i = 0; i < docs.length; i++) {
+        setReprocessProgress(`Re-reading ${i + 1} of ${docs.length}…`);
+        parsedAttempted.current.delete(docs[i].id);
+        const result = await triggerExtraction(docs[i].id, { path: docs[i].file_path, kinds: docs[i].content_kinds || undefined, forceScan: true }, true);
+        if (result) parsed.push({ id: docs[i].id, result });
+      }
+      setReprocessProgress('Rebuilding records…');
+      const wiped = await supabase.rpc('clear_ai_extracted_for_pet', { pid: petId });
+      if (wiped.error) {
+        console.log('[reprocess] rpc', wiped.error.message);
+        await Promise.all([
+          supabase.from('pet_vaccinations').delete().eq('pet_id', petId).eq('source', 'ai_extracted'),
+          supabase.from('lab_results').delete().eq('pet_id', petId).eq('source', 'ai_extracted'),
+          supabase.from('medical_records').delete().eq('pet_id', petId).eq('source', 'ai_extracted'),
+          supabase.from('pet_exams').delete().eq('pet_id', petId).eq('source', 'ai_extracted'),
+          supabase.from('weight_entries').delete().eq('pet_id', petId).eq('source', 'ai_extracted'),
+          supabase.from('medications_given').delete().eq('pet_id', petId).eq('source', 'ai_extracted'),
+          supabase.from('pet_invoices').delete().eq('pet_id', petId).eq('source', 'ai_extracted'),
+          supabase.from('pet_conditions').delete().eq('pet_id', petId).eq('source', 'ai_extracted'),
+        ]);
+      }
+      for (const p of parsed) {
+        openConfirmFromParse(p.id, p.result);
+        await new Promise((r) => setTimeout(r, 40));
+        await applyExtraction({ quiet: true });
+      }
+      setExtractionReview(null);
+      showBanner(`Re-processed ${parsed.length} document${parsed.length === 1 ? '' : 's'} · derived rows rebuilt.`, 'success');
+      load();
+    } catch (e: any) {
+      showBanner(e.message || 'Re-process failed.');
+    }
+    setReprocessing(false);
+    setReprocessProgress(null);
   };
 
   const fileClaimFromInvoice = async (inv: any) => {
@@ -3102,6 +3344,11 @@ export default function PetRecordScreen() {
             </TouchableOpacity>
           </>
         ) : null}
+        {canEdit && status !== 'processing' ? (
+          <TouchableOpacity style={styles.docDeleteBtn} onPress={() => void reprocessOne(doc, confirmed)} activeOpacity={0.85}>
+            <Text style={{ fontFamily: Fonts.bold, fontSize: 11, color: Colors.navy }}>Re-process</Text>
+          </TouchableOpacity>
+        ) : null}
         {canEdit ? (
           <TouchableOpacity style={styles.docDeleteBtn} onPress={() => deleteDoc(doc)} activeOpacity={0.85}>
             <Trash2 color={Colors.critical} size={14} />
@@ -3207,8 +3454,6 @@ export default function PetRecordScreen() {
     ? pet.main_photo_url
     : (photos.find((g) => isUsablePhoto(g.photo_url))?.photo_url || null);
 
-  const lastExam = petExams[0] || null;
-  const prevExam = petExams[1] || null;
   const visitNotes = (() => {
     const out: { text: string; date: string | null; clinic: string | null }[] = [];
     const push = (text?: any, date?: any, clinic?: any) => {
@@ -3223,7 +3468,7 @@ export default function PetRecordScreen() {
       const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
       const clinic = d.issuing_clinic || d.clinic || ai.issuing_clinic || ai.clinic || ai.clinic_name;
       for (const v of ai.visits || []) {
-        push(v.owner_instructions || v.home_care || v.instructions || v.notes || v.summary, v.event_date || v.date || v.occurred_on, v.clinic || v.clinic_name || clinic || null);
+        push(v.owner_instructions || v.home_care || v.instructions || v.notes || v.plan || v.summary, v.event_date || v.date || v.occurred_on, v.clinic || v.clinic_name || clinic || null);
       }
       for (const n of ai.owner_notes || []) {
         push(typeof n === 'string' ? n : (n.text || n.note), n.date || d.taken_on, clinic);
@@ -3241,10 +3486,30 @@ export default function PetRecordScreen() {
       return true;
     });
   })();
-  const latestVisitDate = visitNotes[0]?.date || lastExam?.visit_date || null;
+  const allVisitDates: { date: string; clinic: string | null }[] = [];
+  const pushVisit = (date?: any, clinic?: any) => {
+    const d = isoDay(date);
+    if (!d) return;
+    allVisitDates.push({ date: d, clinic: clinic ? String(clinic) : null });
+  };
+  for (const e of petExams) pushVisit(e.visit_date, e.clinic);
+  for (const m of medicalRecords) {
+    const t = String(m.record_type || 'visit').toLowerCase();
+    if (t && t !== 'visit') continue;
+    pushVisit(m.record_date, (m as any).clinic);
+  }
+  for (const d of documents) {
+    const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
+    for (const v of ai.visits || []) pushVisit(v.event_date || v.date, v.clinic || d.clinic || d.issuing_clinic);
+    if (docAccordionKeys(d).includes('exam_visit')) pushVisit(d.taken_on || ai.date, d.issuing_clinic || d.clinic || ai.clinic);
+  }
+  allVisitDates.sort((a, b) => b.date.localeCompare(a.date));
+  const latestVisitDate = allVisitDates[0]?.date || visitNotes[0]?.date || petExams[0]?.visit_date || null;
+  const lastExam = petExams.find((e) => isoDay(e.visit_date) === latestVisitDate) || petExams[0] || null;
+  const prevExam = petExams.filter((e) => e !== lastExam)[0] || null;
   const latestVisitNotes = visitNotes.filter((n) => (n.date || '') === (latestVisitDate || ''));
   const pastVisitNotes = visitNotes.filter((n) => (n.date || '') !== (latestVisitDate || ''));
-  const latestVisitClinic = latestVisitNotes[0]?.clinic || lastExam?.clinic || null;
+  const latestVisitClinic = latestVisitNotes[0]?.clinic || allVisitDates[0]?.clinic || lastExam?.clinic || null;
   const dailyRoutine = (() => {
     const items: string[] = [];
     for (const r of routines) {
@@ -3587,9 +3852,12 @@ export default function PetRecordScreen() {
         {tab === 'documents' ? (
           <DashboardPanel
             tiles={[
-              { label: 'Labs', value: documents.filter((d) => docAccordionKeys(d).includes('labs')).length + labRows.length },
-              { label: 'Records', value: documents.filter((d) => docAccordionKeys(d).includes('exam_visit')).length },
-              { label: 'Vaccines', value: documents.filter((d) => docAccordionKeys(d).includes('vaccinations')).length + vaccinations.filter((v) => v.confirmed !== false).length },
+              { label: 'Labs', value: distinctLabCount(labRows) },
+              { label: 'Records', value: distinctVisitCount(petExams, medicalRecords, documents.flatMap((d) => {
+                const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
+                return (ai.visits || []).map((v: any) => ({ clinic: v.clinic || d.clinic, event_date: v.event_date || v.date || d.taken_on }));
+              })) },
+              { label: 'Vaccines', value: vaxCount },
               { label: 'Follow-ups', value: documents.filter((d) => docAccordionKeys(d).includes('follow_up')).length },
               { label: 'Bills', value: petInvoices.length ? `${petInvoices.length} · ${formatUsd(billsTotal)}` : 0 },
             ]}
@@ -3608,7 +3876,7 @@ export default function PetRecordScreen() {
         {/* Pet hero — below the tab dashboard on every tab */}
         <View style={[styles.heroWrap, { height: heroH }]}>
           {displayPhoto ? (
-            <SignedImage path={displayPhoto} style={styles.hero} resizeMode="cover" />
+            <SignedImage path={displayPhoto} style={styles.hero} resizeMode="cover" focal={pet.photo_focal} />
           ) : (
             <View style={[styles.hero, styles.petPhotoFallback]}>
               <PawPrint color={Colors.textTertiary} size={48} />
@@ -3682,7 +3950,7 @@ export default function PetRecordScreen() {
           <View style={styles.tabContent}>
             <View style={styles.chipFrame}>
               {displayPhoto ? (
-                <SignedImage path={displayPhoto} style={styles.chipThumb} />
+                <SignedImage path={displayPhoto} style={styles.chipThumb} focal={pet.photo_focal} />
               ) : (
                 <View style={[styles.chipThumb, styles.petPhotoFallback]}>
                   <PawPrint color={Colors.textTertiary} size={20} />
@@ -4273,6 +4541,12 @@ export default function PetRecordScreen() {
 
         {tab === 'documents' && (
             <View style={styles.tabContent}>
+            {reprocessing && reprocessProgress ? (
+              <View style={styles.reviewBanner}>
+                <ActivityIndicator color={Colors.navy} size="small" />
+                <Text style={styles.reviewBannerTxt}>{reprocessProgress}</Text>
+              </View>
+            ) : null}
             {canEdit && pendingDocs.length > 0 ? (
               <TouchableOpacity style={styles.reviewBanner} onPress={() => {
                 const d = pendingDocs[0];
@@ -4291,7 +4565,16 @@ export default function PetRecordScreen() {
                 }).map((s) => {
                   const n = s.key === 'invoice'
                     ? Math.max(petInvoices.length, documents.filter((d) => docAccordionKeys(d).includes(s.key)).length)
-                    : documents.filter((d) => docAccordionKeys(d).includes(s.key)).length;
+                    : s.key === 'labs'
+                      ? distinctLabCount(labRows)
+                      : s.key === 'vaccinations'
+                        ? vaxCount
+                        : s.key === 'exam_visit'
+                          ? distinctVisitCount(petExams, medicalRecords, documents.flatMap((d) => {
+                            const ai = d.ai_summary && typeof d.ai_summary === 'object' ? d.ai_summary as any : {};
+                            return (ai.visits || []).map((v: any) => ({ clinic: v.clinic || d.clinic, event_date: v.event_date || v.date || d.taken_on }));
+                          }))
+                          : documents.filter((d) => docAccordionKeys(d).includes(s.key)).length;
                   const on = docOpen[s.key] || docKindFilter === s.key;
                   return (
                     <TouchableOpacity
@@ -4309,9 +4592,19 @@ export default function PetRecordScreen() {
                 })}
               </View>
               {canEdit ? (
-                <TouchableOpacity style={styles.docUploadBtn} onPress={openAddDoc} activeOpacity={0.85}>
-                  <Text style={styles.docUploadTxt}>Upload</Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <TouchableOpacity style={styles.docUploadBtn} onPress={openAddDoc} activeOpacity={0.85}>
+                    <Text style={styles.docUploadTxt}>Upload</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.headIcon}
+                    onPress={() => setDocMenuOpen(true)}
+                    activeOpacity={0.85}
+                    accessibilityLabel="Document actions"
+                  >
+                    <MoreVertical color={Colors.navy} size={18} />
+                  </TouchableOpacity>
+                </View>
               ) : null}
             </View>
             {documents.length === 0 ? (
@@ -5020,6 +5313,40 @@ export default function PetRecordScreen() {
 
       <ConfirmDialog config={confirmConfig} onClose={() => setConfirmConfig(null)} />
 
+      <PhotoCropSheet
+        visible={Boolean(cropUri)}
+        uri={cropUri}
+        onCancel={() => { if (cropPicked?.uri) releasePicked(cropPicked.uri); setCropUri(null); setCropPicked(null); }}
+        onConfirm={saveCroppedPhoto}
+        onPickDifferent={() => { if (cropPicked?.uri) releasePicked(cropPicked.uri); setCropUri(null); setCropPicked(null); void uploadPhoto(); }}
+      />
+
+      <Modal visible={docMenuOpen} animationType="fade" transparent onRequestClose={() => setDocMenuOpen(false)}>
+        <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setDocMenuOpen(false)}>
+          <View style={styles.menuCard}>
+            <Text style={styles.menuTitle}>Documents</Text>
+            <TouchableOpacity
+              style={styles.menuRow}
+              onPress={() => {
+                setDocMenuOpen(false);
+                setConfirmConfig({
+                  title: 'Re-process all documents?',
+                  message: 'Re-reads every file for this pet, deletes AI-extracted labs/vaccines/visits, and rebuilds them from the new extracts. Owner-entered rows stay.',
+                  confirmText: 'Re-process all',
+                  onConfirm: () => { void reprocessAll(); },
+                });
+              }}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.menuRowTxt}>Re-process all</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuRow} onPress={() => { setDocMenuOpen(false); setDashMenu(true); }} activeOpacity={0.85}>
+              <Text style={styles.menuRowTxt}>Export record</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       {/* === Extraction Review Modal === */}
       {extractionReview && (
         <Modal visible animationType="slide" onRequestClose={() => setExtractionReview(null)}>
@@ -5319,7 +5646,7 @@ export default function PetRecordScreen() {
               </ScrollView>
               <View style={styles.confirmFooter}>
                 {extractionHasApplyable(extractionReview, editableVax.length, editableWeights.length) ? (
-                  <TouchableOpacity style={[styles.coralConfirm, applyingExtraction && styles.btnDisabled]} onPress={applyExtraction} disabled={applyingExtraction} activeOpacity={0.85}>
+                  <TouchableOpacity style={[styles.coralConfirm, applyingExtraction && styles.btnDisabled]} onPress={() => { void applyExtraction(); }} disabled={applyingExtraction} activeOpacity={0.85}>
                     {applyingExtraction ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.coralConfirmTxt}>Apply</Text>}
                   </TouchableOpacity>
                 ) : (

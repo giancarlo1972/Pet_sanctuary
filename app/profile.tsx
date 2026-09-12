@@ -39,6 +39,7 @@ type PetRel = {
   id: string; pet_id: string; pet_name: string; pet_photo: string | null;
   species: string | null; relationship: string; ended_on: string | null; listing?: string | null; status?: string | null;
   pendingTransfer?: { id: string; token: string; direction: 'in' | 'out' } | null;
+  photo_focal?: { x: number; y: number } | null;
 };
 
 function statusTone(st: string) {
@@ -186,15 +187,22 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
       });
     } else setDuty(null);
 
-    const [{ data: rels }, { data: owned }, { data: xfers }] = await Promise.all([
+    let [{ data: rels }, { data: owned }, { data: xfers }] = await Promise.all([
       supabase.from('pet_relationships')
-        .select('id, pet_id, relationship, ended_on, pets(id, name, species, main_photo_url, listing_type, status)')
+        .select('id, pet_id, relationship, ended_on, pets(id, name, species, main_photo_url, photo_focal, listing_type, status)')
         .eq('user_id', userId),
-      supabase.from('pets').select('id, name, species, main_photo_url, listing_type, status').eq('owner_id', userId),
+      supabase.from('pets').select('id, name, species, main_photo_url, photo_focal, listing_type, status').eq('owner_id', userId),
       supabase.from('pet_transfers').select('id, pet_id, from_user, to_user, token, status').or(`from_user.eq.${userId},to_user.eq.${userId}`).eq('status', 'pending'),
     ]);
+    if ((rels as any)?.error || !owned) {
+      // ignore
+    }
     const ids = [...new Set([...(rels || []).map((r: any) => r.pet_id), ...(owned || []).map((p: any) => p.id)])].filter(Boolean);
-    const { data: petRows } = ids.length ? await supabase.from('pets').select('id, name, species, main_photo_url, listing_type, status, shelter_id').in('id', ids) : { data: [] as any[] };
+    let { data: petRows } = ids.length ? await supabase.from('pets').select('id, name, species, main_photo_url, photo_focal, listing_type, status, shelter_id').in('id', ids) : { data: [] as any[] };
+    if (ids.length && (!petRows || (petRows as any).error)) {
+      const retry = await supabase.from('pets').select('id, name, species, main_photo_url, listing_type, status, shelter_id').in('id', ids);
+      petRows = retry.data as any;
+    }
     const pmap: Record<string, any> = {};
     (petRows || []).forEach((x: any) => { pmap[x.id] = x; });
     const mapped: PetRel[] = [];
@@ -204,7 +212,7 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
       mapped.push({
         id: r.id, pet_id: r.pet_id, pet_name: pet?.name || 'Pet', pet_photo: pet?.main_photo_url || null,
         species: pet?.species || null, relationship: r.relationship, ended_on: r.ended_on,
-        listing: pet?.listing_type, status: pet?.status,
+        listing: pet?.listing_type, status: pet?.status, photo_focal: pet?.photo_focal || null,
       });
     }
     for (const o of owned || []) {
@@ -212,6 +220,7 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
       mapped.push({
         id: 'own-' + o.id, pet_id: o.id, pet_name: o.name || 'Pet', pet_photo: o.main_photo_url,
         species: o.species, relationship: o.listing_type === 'community' ? 'caretaker' : 'own', ended_on: null, listing: o.listing_type, status: o.status,
+        photo_focal: (o as any).photo_focal || null,
       });
     }
     const pending = ((xfers || []) as any[]).filter((t) => t.status === 'pending');
@@ -476,7 +485,7 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
       href: r.pendingTransfer?.direction === 'in'
         ? `/share-accept?token=${encodeURIComponent(r.pendingTransfer.token)}&kind=transfer`
         : `/pet-record?petId=${r.pet_id}`,
-      color: r.listing === 'community' ? Colors.teal : Colors.coral, photo: r.pet_photo,
+      color: r.listing === 'community' ? Colors.teal : Colors.coral, photo: r.pet_photo, photo_focal: r.photo_focal,
     }));
     if (tab === 'apps') return appRows.map((a) => ({
       key: a.id, title: a.pet_name, sub: a.application_type, status: a.status, href: '/(tabs)/pets', color: Colors.navy,
@@ -662,7 +671,7 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
               const tone = statusTone(r.status);
               return (
                 <TouchableOpacity key={r.key} style={s.row} onPress={() => r.href && router.push(r.href as any)} activeOpacity={0.85} disabled={!r.href && !r.booking}>
-                  {r.photo && isUsablePhoto(r.photo) ? <SignedImage path={r.photo} style={s.tileImg} /> : (
+                  {r.photo && isUsablePhoto(r.photo) ? <SignedImage path={r.photo} style={s.tileImg} focal={r.photo_focal} /> : (
                     <View style={[s.tile, { backgroundColor: r.color }]}>
                       {tab === 'services' ? <Sparkles color={Colors.white} size={16} /> : <PawPrint color={Colors.white} size={16} />}
                     </View>

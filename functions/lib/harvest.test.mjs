@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   AURORA_VISIT_FIXTURE,
+  DUTCH_TELEHEALTH_FIXTURE,
   GINA_CLINIC_FIXTURE,
   RYAN_CLINIC_FIXTURE,
   harvestKnownFacts,
@@ -27,6 +28,8 @@ import {
   detectProviderOverride,
   parsePatientHeader,
   latestVisit,
+  inferVisitType,
+  stampVisitTypes,
   looksLikeInvoice,
   parseInvoice,
   classifyInvoiceCategory,
@@ -90,6 +93,29 @@ describe('Aurora visit harvest', () => {
 
   it('has 0 undated items', () => {
     assert.equal(undated.length, 0, JSON.stringify(undated));
+  });
+});
+
+describe('Dutch telehealth visit', () => {
+  it('stamps visit_type=telehealth and clinic Dutch', () => {
+    const out = stampVisitTypes({ visits: [], document_date: '2025-03-14' }, DUTCH_TELEHEALTH_FIXTURE);
+    assert.ok(out.visits.length >= 1, JSON.stringify(out.visits));
+    const v = out.visits.find((x) => x.visit_type === 'telehealth') || out.visits[0];
+    assert.equal(v.visit_type, 'telehealth');
+    assert.match(String(v.clinic), /Dutch/i);
+    assert.equal(v.date || v.event_date, '2025-03-14');
+    assert.equal(inferVisitType({ clinic: 'Dutch' }, ''), 'telehealth');
+  });
+
+  it('latest visit prefers BondVet 2026 over Dutch 2025', () => {
+    const visits = [
+      { date: '2025-03-14', clinic: 'Dutch', visit_type: 'telehealth' },
+      { date: '2025-06-01', clinic: 'InstaVet' },
+      { date: '2026-09-02', clinic: "Bond Vet Hell's Kitchen" },
+    ];
+    const latest = latestVisit(visits);
+    assert.equal(latest.date, '2026-09-02');
+    assert.match(String(latest.clinic), /Bond Vet/i);
   });
 });
 

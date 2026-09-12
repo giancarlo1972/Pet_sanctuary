@@ -15,7 +15,12 @@ BEGIN
       EXECUTE 'ALTER TABLE public.insurance_claims ALTER COLUMN policy_id DROP NOT NULL';
     EXCEPTION WHEN undefined_column THEN NULL;
     END;
-    EXECUTE 'ALTER TABLE public.insurance_claims ADD COLUMN IF NOT EXISTS pet_invoice_id uuid REFERENCES public.pet_invoices(id) ON DELETE SET NULL';
+    IF EXISTS (
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'pet_invoices'
+    ) THEN
+      EXECUTE 'ALTER TABLE public.insurance_claims ADD COLUMN IF NOT EXISTS pet_invoice_id uuid REFERENCES public.pet_invoices(id) ON DELETE SET NULL';
+    END IF;
   END IF;
 END $$;
 

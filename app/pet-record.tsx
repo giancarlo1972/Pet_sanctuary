@@ -2964,6 +2964,7 @@ export default function PetRecordScreen() {
         const payload: any = {
           pet_id: petId,
           document_id: sourceDocId,
+          document_ids: sourceDocId ? [sourceDocId] : [],
           clinic: inv.clinic || extractionReview.issuingClinic || rawDoc.issuing_clinic || rawDoc.clinic || null,
           invoice_date: inv.invoice_date || inv.event_date || extractionReview.documentDate || null,
           invoice_no: inv.invoice_no || null,
@@ -2976,6 +2977,10 @@ export default function PetRecordScreen() {
           author_id: user.id,
         };
         let invRes = await supabase.from('pet_invoices').insert(payload);
+        if (invRes.error && /document_ids/i.test(invRes.error.message || '')) {
+          delete payload.document_ids;
+          invRes = await supabase.from('pet_invoices').insert(payload);
+        }
         if (invRes.error && /duplicate|unique/i.test(invRes.error.message || '')) invRes = { error: null } as any;
         else if (invRes.error) errors.push(`Invoice ${payload.invoice_no || payload.invoice_date || ''}: ${invRes.error.message}`);
       }

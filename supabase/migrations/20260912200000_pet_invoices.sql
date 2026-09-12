@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS public.pet_invoices (
   paid boolean,
   source text,
   author_id uuid,
+  document_ids uuid[] NOT NULL DEFAULT '{}',
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -40,6 +41,8 @@ CREATE POLICY pet_invoices_write ON public.pet_invoices
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.pet_invoices TO authenticated;
 GRANT ALL ON public.pet_invoices TO service_role;
 
+ALTER TABLE public.pet_invoices ADD COLUMN IF NOT EXISTS document_ids uuid[] NOT NULL DEFAULT '{}';
+
 -- insurance_claims lives in a later insurance migration and may not exist yet.
 DO $$
 BEGIN
@@ -47,7 +50,10 @@ BEGIN
     SELECT 1 FROM information_schema.tables
     WHERE table_schema = 'public' AND table_name = 'insurance_claims'
   ) THEN
-    EXECUTE 'ALTER TABLE public.insurance_claims ALTER COLUMN policy_id DROP NOT NULL';
+    BEGIN
+      EXECUTE 'ALTER TABLE public.insurance_claims ALTER COLUMN policy_id DROP NOT NULL';
+    EXCEPTION WHEN undefined_column THEN NULL;
+    END;
     EXECUTE 'ALTER TABLE public.insurance_claims ADD COLUMN IF NOT EXISTS pet_invoice_id uuid REFERENCES public.pet_invoices(id) ON DELETE SET NULL';
   END IF;
 END $$;

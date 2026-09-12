@@ -22,6 +22,7 @@ import {
   Lock,
   Phone,
   Mail,
+  MessageCircle,
 } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
@@ -57,6 +58,11 @@ interface PetRecord {
   org_name?: string | null;
   listing_phone?: string | null;
   listing_email?: string | null;
+  listing_type?: string | null;
+  territory?: string | null;
+  tnr_status?: string | null;
+  feeding_schedule?: string | null;
+  owner_id?: string | null;
   size?: string | null;
   coat?: string | null;
   house_trained?: string | null;
@@ -277,6 +283,8 @@ export default function PetDetailsScreen() {
   const [microchipAccessRequest, setMicrochipAccessRequest] = useState<AccessRequest | null>(null);
   const [medicalAccessRequest, setMedicalAccessRequest] = useState<AccessRequest | null>(null);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
+  const [caretakerFirst, setCaretakerFirst] = useState<string | null>(null);
+  const [messaging, setMessaging] = useState(false);
 
   // Application state
   const [existingApps, setExistingApps] = useState<{ foster: string | null; adopt: string | null }>({ foster: null, adopt: null });
@@ -370,35 +378,50 @@ export default function PetDetailsScreen() {
     // --- Phase 1: the pet row itself must ALWAYS load ---
     const { data, error: petError } = await supabase
       .from('pets')
-      .select('id, name, breed, species, age_text, gender, status, availability, description, main_photo_url, location, personality, good_with_kids, good_with_dogs, good_with_cats, vaccinated, spayed_neutered, microchipped, shelter_id')
+      .select('id, name, breed, species, age_text, gender, status, availability, description, main_photo_url, location, personality, good_with_kids, good_with_dogs, good_with_cats, vaccinated, spayed_neutered, microchipped, shelter_id, listing_type, territory, tnr_status, feeding_schedule, owner_id')
       .eq('id', id)
       .maybeSingle();
-    if (petError) {
-      console.error('[pet-details] pet query failed:', petError.message);
+    let row = data;
+    let err = petError;
+    if (err && /listing_type|territory|tnr_status|feeding_schedule/i.test(err.message || '')) {
+      const retry = await supabase
+        .from('pets')
+        .select('id, name, breed, species, age_text, gender, status, availability, description, main_photo_url, location, personality, good_with_kids, good_with_dogs, good_with_cats, vaccinated, spayed_neutered, microchipped, shelter_id')
+        .eq('id', id)
+        .maybeSingle();
+      row = retry.data as typeof data;
+      err = retry.error;
+    }
+    if (err) {
+      console.error('[pet-details] pet query failed:', err.message);
       setError('We could not load this pet\'s details.');
       setLoading(false);
       return;
     }
-    if (!data) {
+    if (!row) {
       setLoading(false);
       return;
     }
-    setPet({ ...data, description: decodeHtml(data.description) });
+    setPet({ ...row, description: decodeHtml(row.description) });
     setLoading(false);
+    if ((row as any).listing_type === 'community') {
+      const { data: first } = await supabase.rpc('community_caretaker_name', { pid: row.id });
+      if (typeof first === 'string' && first) setCaretakerFirst(first);
+    }
 
     // --- Phase 2: gated extras — any failure must never block rendering ---
     try {
-      if (data.shelter_id) {
+      if (row.shelter_id) {
         const { data: shelter } = await supabase
           .from('shelters')
           .select('name')
-          .eq('id', data.shelter_id)
+          .eq('id', row.shelter_id)
           .maybeSingle();
         if (shelter) setShelterName(shelter.name);
         const { data: org } = await supabase
           .from('organizations')
           .select('status, name, phone, contact_email')
-          .eq('id', data.shelter_id)
+          .eq('id', row.shelter_id)
           .maybeSingle();
         if (org && org.status === 'approved') setShelterVerified(true);
         if (org?.name && !shelterName) setShelterName(org.name);
@@ -408,11 +431,11 @@ export default function PetDetailsScreen() {
 
       // Check org membership
       let localIsMember = false;
-      if (user && data.shelter_id) {
+      if (user && row.shelter_id) {
         const { data: sm } = await supabase
           .from('shelter_members')
           .select('shelter_id')
-          .eq('shelter_id', data.shelter_id)
+          .eq('shelter_id', row.shelter_id)
           .eq('user_id', user.id)
           .maybeSingle();
         if (sm) { localIsMember = true; setIsOrgMember(true); }
@@ -420,7 +443,7 @@ export default function PetDetailsScreen() {
         const { data: om } = await supabase
           .from('organization_members')
           .select('organization_id')
-          .eq('organization_id', data.shelter_id)
+          .eq('organization_id', row.shelter_id)
           .eq('user_id', user.id)
           .maybeSingle();
         if (om) { localIsMember = true; setIsOrgMember(true); }
@@ -436,7 +459,7 @@ export default function PetDetailsScreen() {
 
       // Fetch microchip via RPC — only if confirmed org member
       if (user && localIsMember) {
-        const { data: mc, error: mcErr } = await supabase.rpc('get_pet_microchip', { p_pet_id: data.id });
+        const { data: mc, error: mcErr } = await supabase.rpc('get_pet_microchip', { p_pet_id: row.id });
         if (mcErr) {
           console.warn('[pet-details] get_pet_microchip failed:', mcErr.message);
         } else if (mc) {
@@ -446,7 +469,7 @@ export default function PetDetailsScreen() {
 
       // Fetch medical records via RPC — only if confirmed member or has approved access
       if (user && (localIsMember || medicalAccess)) {
-        const { data: medRecords, error: medErr } = await supabase.rpc('get_medical_records', { p_pet_id: data.id });
+        const { data: medRecords, error: medErr } = await supabase.rpc('get_medical_records', { p_pet_id: row.id });
         if (medErr) {
           console.warn('[pet-details] get_medical_records failed:', medErr.message);
         } else if (medRecords) {
@@ -457,7 +480,7 @@ export default function PetDetailsScreen() {
 
       // Fetch adoption history via RPC — org members only
       if (user && localIsMember) {
-        const { data: ah, error: ahErr } = await supabase.rpc('get_adoption_history', { p_pet_id: data.id });
+        const { data: ah, error: ahErr } = await supabase.rpc('get_adoption_history', { p_pet_id: row.id });
         if (ahErr) {
           console.warn('[pet-details] get_adoption_history failed:', ahErr.message);
         } else if (ah) {
@@ -466,14 +489,14 @@ export default function PetDetailsScreen() {
       }
 
       // Fetch adoption count (public)
-      const { data: ac } = await supabase.rpc('get_adoption_count', { p_pet_id: data.id });
+      const { data: ac } = await supabase.rpc('get_adoption_count', { p_pet_id: row.id });
       if (ac !== null) setAdoptionCount(ac);
 
       // Fetch linked reports
       const { data: reports } = await supabase
         .from('reports')
         .select('id, report_type, severity, status')
-        .eq('pet_id', data.id)
+        .eq('pet_id', row.id)
         .order('created_at', { ascending: false })
         .limit(5);
       if (reports) setLinkedReports(reports);
@@ -483,7 +506,7 @@ export default function PetDetailsScreen() {
         const { data: apps } = await supabase
           .from('foster_applications')
           .select('id, application_type, status')
-          .eq('pet_id', data.id)
+          .eq('pet_id', row.id)
           .eq('applicant_id', user.id);
         if (apps) {
           const fosterApp = apps.find((a: { application_type: string; status: string; id: string }) => a.application_type === 'foster');
@@ -500,7 +523,7 @@ export default function PetDetailsScreen() {
         const { data: rars } = await supabase
           .from('record_access_requests')
           .select('id, status, scope')
-          .eq('pet_id', data.id)
+          .eq('pet_id', row.id)
           .eq('requester_id', user.id);
         if (rars) {
           const mcReq = rars.find((r: AccessRequest) => r.scope === 'microchip');
@@ -693,7 +716,7 @@ export default function PetDetailsScreen() {
             {compactAge(pet.age_text, pet.dob) ? <Text style={styles.petAge}>{compactAge(pet.age_text, pet.dob)}</Text> : null}
           </View>
           <Text style={styles.petBreedLocation}>
-            {[pet.breed, pet.location].filter(Boolean).join(' · ')}
+            {[pet.breed, pet.listing_type === 'community' ? pet.territory : pet.location].filter(Boolean).join(' · ')}
           </Text>
 
           {chips.length ? (
@@ -720,7 +743,23 @@ export default function PetDetailsScreen() {
               {pet.description ? (
                 <Text style={styles.description}>{inferListing(pet.description).about}</Text>
               ) : null}
-              {phone ? (
+              {pet.listing_type === 'community' ? (
+                <View style={styles.shelterCard}>
+                  <View style={{ flex: 1, gap: 4 }}>
+                    <Text style={styles.shelterName}>Community pet</Text>
+                    <Text style={styles.verifiedText}>
+                      Caretaker {caretakerFirst || 'on Rescue Army'} · approximate area only
+                    </Text>
+                    {pet.territory ? <Text style={styles.shelterLocation}>{pet.territory}</Text> : null}
+                    {pet.feeding_schedule ? <Text style={styles.shelterLocation}>Feeding · {pet.feeding_schedule}</Text> : null}
+                    <Text style={styles.shelterLocation}>
+                      TNR · {pet.tnr_status === 'done' ? 'done (ear-tip)' : pet.tnr_status === 'scheduled' ? 'scheduled' : 'unknown'}
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
+
+              {phone && pet.listing_type !== 'community' ? (
                 <TouchableOpacity
                   style={styles.contactBtn}
                   onPress={() => Linking.openURL('tel:' + phone.replace(/[^\d+]/g, ''))}
@@ -730,7 +769,7 @@ export default function PetDetailsScreen() {
                   <Text style={styles.contactBtnText} numberOfLines={1}>Call {phone}</Text>
                 </TouchableOpacity>
               ) : null}
-              {email ? (
+              {email && pet.listing_type !== 'community' ? (
                 <TouchableOpacity
                   style={styles.contactBtn}
                   onPress={() => Linking.openURL(`mailto:${email}?subject=${encodeURIComponent('Adoption inquiry: ' + pet.name)}`)}
@@ -741,6 +780,8 @@ export default function PetDetailsScreen() {
                 </TouchableOpacity>
               ) : null}
 
+              {pet.listing_type !== 'community' ? (
+              <>
               <View style={styles.healthRow}>
                 <HealthTile label="Vaccinated" done={pet.vaccinated} />
                 <HealthTile label="Spayed/Neutered" done={pet.spayed_neutered} />
@@ -759,6 +800,8 @@ export default function PetDetailsScreen() {
                   <Text style={microchipValue && microchipFullAccess ? styles.identityValueMono : styles.identityValueEmpty}>{chipDisplay}</Text>
                 </View>
               </View>
+              </>
+              ) : null}
 
               {shelterName ? (
                 <View style={styles.shelterCard}>
@@ -779,6 +822,41 @@ export default function PetDetailsScreen() {
                 </View>
               ) : null}
 
+              {pet.listing_type === 'community' ? (
+                <View style={styles.ctaRow}>
+                  <TouchableOpacity
+                    style={[styles.fosterButton, { flexDirection: 'row', gap: 8 }]}
+                    onPress={async () => {
+                      if (!user) { router.push('/auth'); return; }
+                      setMessaging(true);
+                      const { data: cid, error: cErr } = await supabase.rpc('get_or_create_conversation', {
+                        p_subject_type: 'pet',
+                        p_subject_id: pet.id,
+                      });
+                      setMessaging(false);
+                      if (cErr || !cid) {
+                        setBanner({ message: cErr?.message || 'Could not open a conversation with the caretaker.', kind: 'error' });
+                        return;
+                      }
+                      router.push(`/chat?conversationId=${cid}`);
+                    }}
+                    disabled={messaging}
+                    activeOpacity={0.85}
+                  >
+                    {messaging ? <ActivityIndicator color={Colors.navy} /> : (
+                      <>
+                        <MessageCircle color={Colors.navy} size={16} />
+                        <Text style={styles.fosterText}>Message caretaker</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                  {user && pet.owner_id === user.id ? (
+                    <TouchableOpacity style={styles.adoptButton} onPress={() => router.push(`/pet-record?petId=${pet.id}`)} activeOpacity={0.85}>
+                      <Text style={styles.adoptText}>Open record</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : (
               <View style={styles.ctaRow}>
                 <TouchableOpacity style={styles.fosterButton} onPress={() => openAppForm('foster')} activeOpacity={0.85}>
                   <Text style={styles.fosterText}>Foster</Text>
@@ -787,6 +865,7 @@ export default function PetDetailsScreen() {
                   <Text style={styles.adoptText}>Adopt</Text>
                 </TouchableOpacity>
               </View>
+              )}
             </>
           ) : (
             <View style={{ gap: 10 }}>

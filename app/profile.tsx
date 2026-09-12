@@ -33,6 +33,7 @@ import { hoursLeft, serviceLabel } from '@/lib/helper-duty';
 type PetRel = {
   id: string; pet_id: string; pet_name: string; pet_photo: string | null;
   species: string | null; relationship: string; ended_on: string | null; listing?: string | null; status?: string | null;
+  pendingTransfer?: { id: string; token: string; direction: 'in' | 'out' } | null;
 };
 
 function statusTone(st: string) {
@@ -166,11 +167,12 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
       });
     } else setDuty(null);
 
-    const [{ data: rels }, { data: owned }] = await Promise.all([
+    const [{ data: rels }, { data: owned }, { data: xfers }] = await Promise.all([
       supabase.from('pet_relationships')
         .select('id, pet_id, relationship, ended_on, pets(id, name, species, main_photo_url, listing_type, status)')
         .eq('user_id', userId),
       supabase.from('pets').select('id, name, species, main_photo_url, listing_type, status').eq('owner_id', userId),
+      supabase.from('pet_transfers').select('id, pet_id, from_user, to_user, token, status').or(`from_user.eq.${userId},to_user.eq.${userId}`).eq('status', 'pending'),
     ]);
     const ids = [...new Set([...(rels || []).map((r: any) => r.pet_id), ...(owned || []).map((p: any) => p.id)])].filter(Boolean);
     const { data: petRows } = ids.length ? await supabase.from('pets').select('id, name, species, main_photo_url, listing_type, status, shelter_id').in('id', ids) : { data: [] as any[] };
@@ -190,8 +192,33 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
       if (mapped.some((m) => m.pet_id === o.id && !m.ended_on)) continue;
       mapped.push({
         id: 'own-' + o.id, pet_id: o.id, pet_name: o.name || 'Pet', pet_photo: o.main_photo_url,
-        species: o.species, relationship: 'own', ended_on: null, listing: o.listing_type, status: o.status,
+        species: o.species, relationship: o.listing_type === 'community' ? 'caretaker' : 'own', ended_on: null, listing: o.listing_type, status: o.status,
       });
+    }
+    const pending = ((xfers || []) as any[]).filter((t) => t.status === 'pending');
+    const incoming = pending.filter((t) => t.to_user === userId);
+    if (incoming.length) {
+      const idsIn = incoming.map((t) => t.pet_id);
+      const { data: more } = await supabase.from('pets').select('id, name, species, main_photo_url, listing_type, status').in('id', idsIn);
+      const extra: Record<string, any> = {};
+      (more || []).forEach((p: any) => { extra[p.id] = p; });
+      for (const t of incoming) {
+        if (mapped.some((m) => m.pet_id === t.pet_id && !m.ended_on)) {
+          const hit = mapped.find((m) => m.pet_id === t.pet_id);
+          if (hit) hit.pendingTransfer = { id: t.id, token: t.token, direction: 'in' };
+          continue;
+        }
+        const p = extra[t.pet_id] || {};
+        mapped.push({
+          id: 'xfer-' + t.id, pet_id: t.pet_id, pet_name: p.name || 'Pet', pet_photo: p.main_photo_url || null,
+          species: p.species || null, relationship: 'owner', ended_on: null, listing: p.listing_type, status: 'Transfer pending',
+          pendingTransfer: { id: t.id, token: t.token, direction: 'in' },
+        });
+      }
+    }
+    for (const t of pending.filter((x) => x.from_user === userId)) {
+      const hit = mapped.find((m) => m.pet_id === t.pet_id && !m.ended_on);
+      if (hit) hit.pendingTransfer = { id: t.id, token: t.token, direction: 'out' };
     }
     setPets(mapped);
 
@@ -299,6 +326,7 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
   };
 
   const petBucket = (r: PetRel) => {
+    if ((r.listing || '').toLowerCase() === 'community') return 'community';
     const rel = (r.relationship || '').toLowerCase();
     if (rel === 'foster') return 'foster';
     if (rel === 'own' || rel === 'owner') return 'own';
@@ -403,8 +431,15 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
 
   const rows = (() => {
     if (tab === 'pets') return petRows.map((r) => ({
-      key: r.id, title: r.pet_name, sub: [r.species, r.relationship].filter(Boolean).join(' · '),
-      status: r.ended_on ? 'Past' : 'Active', href: `/pet-record?petId=${r.pet_id}`, color: Colors.coral, photo: r.pet_photo,
+      key: r.id, title: r.pet_name,
+      sub: r.pendingTransfer?.direction === 'in'
+        ? 'Transfer pending — Accept'
+        : [r.species, r.listing === 'community' ? 'Caretaker' : r.relationship].filter(Boolean).join(' · '),
+      status: r.pendingTransfer?.direction === 'in' ? 'Transfer pending' : r.pendingTransfer?.direction === 'out' ? 'Transfer sent' : (r.ended_on ? 'Past' : 'Active'),
+      href: r.pendingTransfer?.direction === 'in'
+        ? `/share-accept?token=${encodeURIComponent(r.pendingTransfer.token)}&kind=transfer`
+        : `/pet-record?petId=${r.pet_id}`,
+      color: r.listing === 'community' ? Colors.teal : Colors.coral, photo: r.pet_photo,
     }));
     if (tab === 'apps') return appRows.map((a) => ({
       key: a.id, title: a.pet_name, sub: a.application_type, status: a.status, href: '/(tabs)/pets', color: Colors.navy,
@@ -571,6 +606,15 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
               </ScrollView>
             ) : null}
 
+            {tab === 'pets' && pets.some((p) => p.pendingTransfer && !p.ended_on) ? (
+              <View style={{ backgroundColor: Colors.standardBg, borderRadius: 12, padding: 12, marginBottom: 8 }}>
+                <Text style={{ fontFamily: Fonts.bold, color: Colors.navy }}>
+                  {pets.some((p) => p.pendingTransfer?.direction === 'in')
+                    ? 'Transfer pending — Accept from the pet card below.'
+                    : 'A transfer you started is waiting for the recipient.'}
+                </Text>
+              </View>
+            ) : null}
             {tab === 'services' && sub === 'duty' ? (
               <OnDutyCard userId={userId} phoneVerified={verif.phone_verified} onBanner={(kind, message) => setBanner({ kind, message })} />
             ) : loading ? <ActivityIndicator color={Colors.coral} /> : rows.length === 0 ? (

@@ -40,9 +40,14 @@ CREATE POLICY pet_invoices_write ON public.pet_invoices
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.pet_invoices TO authenticated;
 GRANT ALL ON public.pet_invoices TO service_role;
 
--- File a claim from an invoice even when no policy is on file yet.
-ALTER TABLE public.insurance_claims
-  ALTER COLUMN policy_id DROP NOT NULL;
-
-ALTER TABLE public.insurance_claims
-  ADD COLUMN IF NOT EXISTS pet_invoice_id uuid REFERENCES public.pet_invoices(id) ON DELETE SET NULL;
+-- insurance_claims lives in a later insurance migration and may not exist yet.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'insurance_claims'
+  ) THEN
+    EXECUTE 'ALTER TABLE public.insurance_claims ALTER COLUMN policy_id DROP NOT NULL';
+    EXECUTE 'ALTER TABLE public.insurance_claims ADD COLUMN IF NOT EXISTS pet_invoice_id uuid REFERENCES public.pet_invoices(id) ON DELETE SET NULL';
+  END IF;
+END $$;

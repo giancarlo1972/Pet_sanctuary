@@ -14,7 +14,8 @@ import { InlineBanner } from '@/components/InlineBanner';
 import NearbyMap from '@/components/NearbyMap';
 import { CONTENT_MAX } from '@/components/Page';
 import { pickImage, releasePicked, imageFromFile, PickImageError, type PickedImage } from '@/lib/pick-image';
-import { reverseGeocode, geocodePlace } from '@/lib/geocode';
+import { geocodePlace, reverseGeocode } from '@/lib/geocode';
+import { encodeGeohash, decodeGeohash, geohashNeighbors, haversineMi } from '@/lib/geohash';
 
 const INTER = Platform.OS === 'web' ? 'Inter, system-ui, sans-serif' : Fonts.regular;
 const INTERB = Platform.OS === 'web' ? 'Inter, system-ui, sans-serif' : Fonts.bold;
@@ -170,6 +171,7 @@ export default function NewReportScreen() {
   const [analyzeMs, setAnalyzeMs] = useState<number | null>(null);
   const [ai, setAi] = useState<AiDraft | null>(null);
   const [matchCount, setMatchCount] = useState<number | null>(null);
+  const [communityHits, setCommunityHits] = useState<{ id: string; name: string; territory?: string | null; tnr_status?: string | null; species?: string | null }[]>([]);
   const [petName, setPetName] = useState('');
   const [description, setDescription] = useState('');
   const [phone, setPhone] = useState('');
@@ -252,6 +254,32 @@ export default function NewReportScreen() {
     setAnalyzing(false);
   };
 
+  const loadCommunityHits = async (la?: number | null, ln?: number | null) => {
+    if (kind !== 'lost_found') { setCommunityHits([]); return; }
+    const a = la ?? lat;
+    const b = ln ?? lng;
+    if (a == null || b == null || !user) { setCommunityHits([]); return; }
+    try {
+      const hashes = geohashNeighbors(encodeGeohash(a, b, 5));
+      const { data } = await supabase
+        .from('pets')
+        .select('id, name, species, territory, geohash, tnr_status')
+        .eq('listing_type', 'community')
+        .in('geohash', hashes)
+        .limit(12);
+      const rows = (data || []).filter((p: any) => {
+        if (!p.geohash) return false;
+        try {
+          const c = decodeGeohash(p.geohash);
+          return haversineMi({ lat: a, lng: b }, c) <= 10;
+        } catch { return false; }
+      });
+      setCommunityHits(rows);
+    } catch {
+      setCommunityHits([]);
+    }
+  };
+
   const applyPicked = async (picked: PickedImage) => {
     setBanner(null);
     setPhotoError(null);
@@ -321,6 +349,7 @@ export default function NewReportScreen() {
         const ln = pos.coords.longitude;
         setLat(la);
         setLng(ln);
+        void loadCommunityHits(la, ln);
         const rev = await reverseGeocode(la, ln);
         const label = shortNominatim(rev?.label) || [rev?.city, rev?.stateCode || rev?.state].filter(Boolean).join(', ');
         setLocation(label ? `Detected: ${label}` : `Dropped pin (${la.toFixed(4)}, ${ln.toFixed(4)})`);
@@ -343,6 +372,7 @@ export default function NewReportScreen() {
       if (hit) {
         setLat(hit.lat);
         setLng(hit.lng);
+        void loadCommunityHits(hit.lat, hit.lng);
       }
     }, 700);
     return () => clearTimeout(t);
@@ -680,6 +710,26 @@ export default function NewReportScreen() {
                     </Text>
                   </View>
                 ) : null}
+                {kind === 'lost_found' && communityHits.length ? (
+                  <View style={styles.matchNote}>
+                    <Text style={styles.matchText}>
+                      <Text style={styles.matchEm}>Is this a known community pet nearby?</Text>
+                    </Text>
+                    {communityHits.map((p) => (
+                      <TouchableOpacity
+                        key={p.id}
+                        onPress={() => router.push(`/pet-details?id=${p.id}`)}
+                        style={{ paddingVertical: 8 }}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={styles.matchEm}>{p.name}</Text>
+                        <Text style={styles.matchText}>
+                          {[p.species, p.territory, p.tnr_status === 'done' ? 'TNR' : null].filter(Boolean).join(' · ')}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : null}
                 <Text style={styles.fieldLabel}>Your phone (for follow-up, never public)</Text>
                 <TextInput
                   style={styles.input}
@@ -712,6 +762,19 @@ export default function NewReportScreen() {
             {step === 3 && (
               <>
                 <Text style={styles.heroTitle}>Location & privacy</Text>
+                {kind === 'lost_found' && communityHits.length ? (
+                  <View style={styles.matchNote}>
+                    <Text style={styles.matchText}>
+                      <Text style={styles.matchEm}>Is this a known community pet nearby?</Text>
+                    </Text>
+                    {communityHits.map((p) => (
+                      <TouchableOpacity key={p.id} onPress={() => router.push(`/pet-details?id=${p.id}`)} style={{ paddingVertical: 8 }} activeOpacity={0.85}>
+                        <Text style={styles.matchEm}>{p.name}</Text>
+                        <Text style={styles.matchText}>{[p.species, p.territory, p.tnr_status === 'done' ? 'TNR' : null].filter(Boolean).join(' · ')}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : null}
                 {lat != null && lng != null ? (
                   <LocationPreview lat={lat} lng={lng} />
                 ) : (

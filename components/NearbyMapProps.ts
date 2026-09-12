@@ -1,4 +1,4 @@
-export type NearbyLayer = 'reports' | 'pets' | 'clinics' | 'providers';
+export type NearbyLayer = 'reports' | 'pets' | 'clinics' | 'providers' | 'community';
 
 export type NearbyPin = {
   id: string;
@@ -15,6 +15,8 @@ export type NearbyPin = {
   tag?: string;
   tagFg?: string;
   tagBg?: string;
+  /** Teal-outline community pin (white fill, colored stroke). */
+  outline?: boolean;
 };
 
 export type NearbyMapProps = {

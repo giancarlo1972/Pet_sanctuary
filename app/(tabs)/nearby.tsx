@@ -126,7 +126,7 @@ function viewForPins(
     }
     return null;
   };
-  const hits = [cover('pets', loc), cover('clinics', loc), cover('providers', loc)].filter((n): n is number => n != null);
+  const hits = [cover('pets', loc), cover('clinics', loc), cover('providers', loc), cover('community', loc)].filter((n): n is number => n != null);
   if (hits.length) return { center: loc, mi: Math.max(...hits) };
 
   const focus = pins.filter((p) => p.layer !== 'reports');
@@ -135,7 +135,7 @@ function viewForPins(
       lat: focus.reduce((s, p) => s + p.lat, 0) / focus.length,
       lng: focus.reduce((s, p) => s + p.lng, 0) / focus.length,
     };
-    const around = [cover('pets', center), cover('clinics', center), cover('providers', center)].filter((n): n is number => n != null);
+    const around = [cover('pets', center), cover('clinics', center), cover('providers', center), cover('community', center)].filter((n): n is number => n != null);
     return { center, mi: around.length ? Math.max(...around) : 25 };
   }
   return { center: loc, mi: preferredMi };
@@ -188,7 +188,7 @@ export default function NearbyScreen() {
         ? await supabase.from('organizations').select('id, name, org_type, city, state, address').eq('status', 'approved').limit(200)
         : orgsFull;
 
-      const [reportsRes, petsLocal, petsRemote, rgOrgs, clinicsJson, sppRes] = await Promise.all([
+      const [reportsRes, petsLocal, petsRemote, rgOrgs, clinicsJson, sppRes, communityRes] = await Promise.all([
         supabase
           .from('reports')
           .select('id, report_type, severity, status, pet_name, location_address, description, created_at, latitude, longitude')
@@ -206,6 +206,9 @@ export default function NearbyScreen() {
         fetchJson(`/api/nearby-clinics?kind=clinic&lat=${here.lat}&lng=${here.lng}`),
         user
           ? supabase.from('service_provider_profiles').select('user_id, services, radius_mi, rating, show_on_map').eq('show_on_map', true).limit(80)
+          : Promise.resolve({ data: [] as any[], error: null }),
+        user
+          ? supabase.from('pets').select('id, name, breed, species, territory, geohash, tnr_status, main_photo_url, listing_type').eq('listing_type', 'community').limit(120)
           : Promise.resolve({ data: [] as any[], error: null }),
       ]);
 
@@ -411,6 +414,29 @@ export default function NearbyScreen() {
           initial: '✦',
         });
       }
+
+      const communityPets = (!communityRes.error && communityRes.data) ? (communityRes.data as any[]) : [];
+      for (const p of communityPets) {
+        if (!p.geohash) continue;
+        let c: { lat: number; lng: number } | null = null;
+        try { c = decodeGeohash(String(p.geohash)); } catch { /* ignore */ }
+        if (!c) continue;
+        const tnr = p.tnr_status === 'done' ? 'TNR' : p.tnr_status === 'scheduled' ? 'TNR scheduled' : 'Community';
+        next.push({
+          id: 'comm-' + p.id,
+          layer: 'community',
+          lat: c.lat, lng: c.lng,
+          title: p.name || 'Community pet',
+          subtitle: [p.territory, tnr].filter(Boolean).join(' · '),
+          color: Colors.teal,
+          href: `/pet-details?id=${p.id}`,
+          glyph: 'C',
+          tag: 'COMMUNITY',
+          tagFg: Colors.tealDark,
+          tagBg: Colors.tealBg,
+          outline: true,
+        });
+      }
       paint();
     } catch {
       setPins([]);
@@ -442,6 +468,7 @@ export default function NearbyScreen() {
     pets: 'Adoptable pets',
     clinics: 'Shelters & clinics',
     providers: 'Providers',
+    community: 'Community',
   };
 
   const toggle = (key: NearbyLayer) => setLayer(key);
@@ -463,6 +490,7 @@ export default function NearbyScreen() {
             items={[
               { key: 'reports', label: 'Reports' },
               { key: 'pets', label: 'Adoptable pets' },
+              { key: 'community', label: 'Community' },
               { key: 'clinics', label: 'Shelters & clinics' },
               { key: 'providers', label: 'Providers' },
             ]}

@@ -30,10 +30,14 @@ function circlePoly(lat: number, lng: number, meters: number, n = 64) {
   return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [coords] }, properties: {} };
 }
 
-function teardropEl(color: string, glyph: string) {
+function teardropEl(color: string, glyph: string, outline?: boolean) {
   const el = document.createElement('div');
   el.className = 'ra-pin-icon';
-  el.innerHTML = `<div class="ra-pin-drop" style="background:${esc(color)}"><span>${esc(glyph)}</span></div>`;
+  if (outline) {
+    el.innerHTML = `<div class="ra-pin-drop ra-pin-outline" style="background:#fff;border-color:${esc(color)}"><span style="color:${esc(color)}">${esc(glyph)}</span></div>`;
+  } else {
+    el.innerHTML = `<div class="ra-pin-drop" style="background:${esc(color)}"><span>${esc(glyph)}</span></div>`;
+  }
   return el;
 }
 
@@ -63,6 +67,8 @@ function ensureCss() {
         display:flex;align-items:center;justify-content:center;transform:rotate(-45deg);
       }
       .ra-pin-drop span{transform:rotate(45deg);color:#fff;font:700 13px/1 Inter,system-ui,sans-serif}
+      .ra-pin-drop.ra-pin-outline{border-width:3px}
+      .ra-pin-drop.ra-pin-outline span{color:inherit}
       .maplibregl-ctrl-attrib{font-size:10px}
     `;
     document.head.appendChild(s);
@@ -127,7 +133,7 @@ export default function NearbyMap(props: NearbyMapProps) {
         if (mode === 'nearby') {
           for (const pin of props.pins) {
             const glyph = pinGlyph(pin);
-            const el = teardropEl(pin.color, glyph || '•');
+            const el = teardropEl(pin.color, glyph || '•', pin.outline);
             el.style.cursor = 'pointer';
             el.addEventListener('click', (e) => {
               e.stopPropagation();

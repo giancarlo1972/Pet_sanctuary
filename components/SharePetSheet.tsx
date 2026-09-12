@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Image, ActivityIndicator, Share, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Image, ActivityIndicator, Share, Platform, ScrollView } from 'react-native';
 import { X } from 'lucide-react-native';
 import { Colors } from '@/constants/Colors';
 import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { SHARE_LEVELS, type ShareLevel } from '@/lib/admin-access';
-import { publicShareUrl } from '@/lib/share-invite';
+import { publicShareUrl, publicTransferUrl } from '@/lib/share-invite';
 
 type Rel = {
   id: string;
@@ -16,14 +16,20 @@ type Rel = {
 };
 
 export default function SharePetSheet({
-  visible, petId, petName, onClose,
-}: { visible: boolean; petId: string; petName: string; onClose: () => void }) {
+  visible, petId, petName, listingType, onClose,
+}: { visible: boolean; petId: string; petName: string; listingType?: string | null; onClose: () => void }) {
   const [level, setLevel] = useState<ShareLevel>('caretaker');
   const [email, setEmail] = useState('');
   const [link, setLink] = useState<string | null>(null);
   const [people, setPeople] = useState<Rel[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [xferEmail, setXferEmail] = useState('');
+  const [xferNote, setXferNote] = useState('');
+  const [xferLink, setXferLink] = useState<string | null>(null);
+  const [pendingXfer, setPendingXfer] = useState<{ id: string; invited_email: string | null; status: string } | null>(null);
+
+  const isCommunity = listingType === 'community';
 
   const load = useCallback(async () => {
     const { data } = await supabase
@@ -40,6 +46,14 @@ export default function SharePetSheet({
       (ppl || []).forEach((p: any) => { names[p.id] = { full_name: p.full_name, email: p.email }; });
     }
     setPeople(rows.map((r) => ({ ...r, profiles: names[r.user_id] || null })));
+    const { data: xf } = await supabase
+      .from('pet_transfers')
+      .select('id, invited_email, status, token')
+      .eq('pet_id', petId)
+      .eq('status', 'pending')
+      .maybeSingle();
+    setPendingXfer(xf || null);
+    if (xf?.token) setXferLink(publicTransferUrl((xf as any).token));
   }, [petId]);
 
   useEffect(() => { if (visible) { setLink(null); setError(null); load(); } }, [visible, load]);
@@ -58,6 +72,33 @@ export default function SharePetSheet({
     setLink(publicShareUrl(data.token));
   };
 
+  const createTransfer = async () => {
+    setBusy(true); setError(null); setXferLink(null);
+    const { data, error: e } = await supabase.rpc('create_pet_transfer', {
+      p_pet_id: petId,
+      p_email: xferEmail.trim() || null,
+      p_note: xferNote.trim() || null,
+    });
+    setBusy(false);
+    const payload = (data || {}) as { ok?: boolean; error?: string; token?: string };
+    if (e || !payload?.ok || !payload.token) {
+      const code = payload?.error || e?.message || 'Could not start transfer.';
+      setError(code === 'not_owner' ? 'Only the current owner can transfer.' : code === 'self' ? 'Pick a different person.' : code);
+      return;
+    }
+    setXferLink(publicTransferUrl(payload.token));
+    load();
+  };
+
+  const cancelTransfer = async () => {
+    if (!pendingXfer) return;
+    setBusy(true);
+    await supabase.from('pet_transfers').update({ status: 'cancelled' }).eq('id', pendingXfer.id);
+    setBusy(false);
+    setPendingXfer(null);
+    setXferLink(null);
+  };
+
   const revoke = async (id: string) => {
     setBusy(true);
     await supabase.from('pet_relationships').update({ ended_on: new Date().toISOString().slice(0, 10) }).eq('id', id);
@@ -65,15 +106,16 @@ export default function SharePetSheet({
     load();
   };
 
-  const shareLink = async () => {
-    if (!link) return;
+  const shareLink = async (url: string, msg: string) => {
+    if (!url) return;
     try {
-      await Share.share({ message: `Join ${petName} on Rescue Army as ${level}: ${link}`, url: link });
+      await Share.share({ message: msg, url });
     } catch {}
   };
 
   if (!visible) return null;
   const qr = link ? `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(link)}` : null;
+  const xqr = xferLink ? `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(xferLink)}` : null;
 
   return (
     <View style={styles.scrim}>
@@ -82,12 +124,13 @@ export default function SharePetSheet({
           <Text style={styles.title}>Share {petName}</Text>
           <TouchableOpacity onPress={onClose} style={styles.close}><X color={Colors.navy} size={18} /></TouchableOpacity>
         </View>
+        <ScrollView style={{ maxHeight: 560 }} showsVerticalScrollIndicator={false}>
         <Text style={styles.hint}>Owner-only. They get access at the level you pick. You can revoke anytime.</Text>
         <View style={styles.levels}>
           {SHARE_LEVELS.map((l) => (
             <TouchableOpacity key={l.key} onPress={() => setLevel(l.key)} style={[styles.level, level === l.key && styles.levelOn]}>
               <Text style={[styles.levelT, level === l.key && styles.levelTOn]}>{l.label}</Text>
-              <Text style={styles.levelH}>{l.hint}</Text>
+              <Text style={styles.levelH}>{isCommunity && l.key === 'caretaker' ? 'Co-caretaker · read + feeding, weight, notes' : l.hint}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -103,7 +146,7 @@ export default function SharePetSheet({
           <View style={styles.linkBox}>
             {qr ? <Image source={{ uri: qr }} style={styles.qr} /> : null}
             <Text selectable style={styles.link}>{link}</Text>
-            <TouchableOpacity onPress={shareLink}><Text style={styles.copy}>Share link / QR</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => shareLink(link, `Join ${petName} on Rescue Army as ${level}: ${link}`)}><Text style={styles.copy}>Share link / QR</Text></TouchableOpacity>
           </View>
         ) : null}
         <Text style={styles.kicker}>People with access</Text>
@@ -112,13 +155,57 @@ export default function SharePetSheet({
           <View key={p.id} style={styles.row}>
             <View style={{ flex: 1 }}>
               <Text style={styles.name}>{p.profiles?.full_name || p.profiles?.email || 'Person'}</Text>
-              <Text style={styles.meta}>{p.relationship}{p.started_on ? ` · since ${p.started_on}` : ''}</Text>
+              <Text style={styles.meta}>{p.relationship === 'caretaker' && isCommunity ? 'Caretaker' : p.relationship}{p.started_on ? ` · since ${p.started_on}` : ''}</Text>
             </View>
             {p.relationship !== 'owner' && p.relationship !== 'own' ? (
               <TouchableOpacity onPress={() => revoke(p.id)} disabled={busy}><Text style={styles.revoke}>Revoke</Text></TouchableOpacity>
-            ) : <Text style={styles.meta}>Owner</Text>}
+            ) : <Text style={styles.meta}>{isCommunity ? 'Caretaker' : 'Owner'}</Text>}
           </View>
         ))}
+
+        <Text style={[styles.kicker, { marginTop: 16 }]}>Transfer ownership</Text>
+        <Text style={styles.hint}>
+          {isCommunity
+            ? 'Pass the responsible-caretaker role. Other caretakers stay unless the new caretaker removes them. You keep read access for 30 days.'
+            : 'The recipient accepts, then they become owner. Co-owners, caretakers, and vets stay unless they remove them. You keep read access for 30 days.'}
+        </Text>
+        {pendingXfer ? (
+          <View style={styles.linkBox}>
+            <Text style={styles.name}>Transfer pending{pendingXfer.invited_email ? ` · ${pendingXfer.invited_email}` : ''}</Text>
+            {xqr ? <Image source={{ uri: xqr }} style={styles.qr} /> : null}
+            {xferLink ? <Text selectable style={styles.link}>{xferLink}</Text> : null}
+            {xferLink ? (
+              <TouchableOpacity onPress={() => shareLink(xferLink, `Accept ownership of ${petName} on Rescue Army: ${xferLink}`)}>
+                <Text style={styles.copy}>Share transfer link</Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity onPress={cancelTransfer} disabled={busy}><Text style={styles.revoke}>Cancel transfer</Text></TouchableOpacity>
+          </View>
+        ) : (
+          <>
+            <TextInput
+              value={xferEmail} onChangeText={setXferEmail} autoCapitalize="none" keyboardType="email-address"
+              placeholder="Recipient email" placeholderTextColor={Colors.textTertiary} style={styles.input}
+            />
+            <TextInput
+              value={xferNote} onChangeText={setXferNote}
+              placeholder="Optional note" placeholderTextColor={Colors.textTertiary} style={styles.input}
+            />
+            <TouchableOpacity style={styles.navy} onPress={createTransfer} disabled={busy}>
+              {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryT}>Create transfer link</Text>}
+            </TouchableOpacity>
+            {xferLink ? (
+              <View style={styles.linkBox}>
+                {xqr ? <Image source={{ uri: xqr }} style={styles.qr} /> : null}
+                <Text selectable style={styles.link}>{xferLink}</Text>
+                <TouchableOpacity onPress={() => shareLink(xferLink, `Accept ownership of ${petName} on Rescue Army: ${xferLink}`)}>
+                  <Text style={styles.copy}>Share transfer link</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+          </>
+        )}
+        </ScrollView>
       </View>
     </View>
   );
@@ -137,11 +224,12 @@ const styles = StyleSheet.create({
   levelT: { fontFamily: Fonts.bold, fontSize: 13, color: Colors.navy },
   levelTOn: { color: Colors.navy },
   levelH: { fontFamily: Fonts.regular, fontSize: 11, color: Colors.textTertiary, marginTop: 2 },
-  input: { borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 12, paddingHorizontal: 12, paddingVertical: Platform.OS === 'web' ? 10 : 12, fontFamily: Fonts.regular, color: Colors.text },
-  primary: { backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+  input: { borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 12, paddingHorizontal: 12, paddingVertical: Platform.OS === 'web' ? 10 : 12, fontFamily: Fonts.regular, color: Colors.text, marginTop: 8 },
+  primary: { backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 8 },
+  navy: { backgroundColor: Colors.navy, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 8 },
   primaryT: { color: Colors.white, fontFamily: Fonts.bold },
-  err: { color: Colors.critical, fontFamily: Fonts.medium, fontSize: 12 },
-  linkBox: { alignItems: 'center', gap: 8, backgroundColor: Colors.surface, borderRadius: 12, padding: 12 },
+  err: { color: Colors.critical, fontFamily: Fonts.medium, fontSize: 12, marginTop: 6 },
+  linkBox: { alignItems: 'center', gap: 8, backgroundColor: Colors.surface, borderRadius: 12, padding: 12, marginTop: 8 },
   qr: { width: 180, height: 180 },
   link: { fontFamily: Fonts.regular, fontSize: 11, color: Colors.navy, textAlign: 'center' },
   copy: { fontFamily: Fonts.bold, color: Colors.coral },

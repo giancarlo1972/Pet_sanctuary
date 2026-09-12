@@ -224,6 +224,11 @@ interface Pet {
   good_with_kids?: boolean | null;
   good_with_dogs?: boolean | null;
   good_with_cats?: boolean | null;
+  territory?: string | null;
+  geohash?: string | null;
+  feeding_schedule?: string | null;
+  tnr_status?: string | null;
+  colony_id?: string | null;
 }
 
 interface Relationship {
@@ -924,6 +929,7 @@ export default function PetRecordScreen() {
   const [canWriteClinical, setCanWriteClinical] = useState(false);
   const [isPetOwner, setIsPetOwner] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [pendingTransfer, setPendingTransfer] = useState<{ id: string; invited_email?: string | null; from_user?: string; to_user?: string | null } | null>(null);
   const [visOpen, setVisOpen] = useState(false);
   const [detailsTraits, setDetailsTraits] = useState<string[]>([]);
   const [traitCatalog, setTraitCatalog] = useState<PetTrait[]>(PET_TRAITS);
@@ -1049,12 +1055,16 @@ export default function PetRecordScreen() {
 
     const petRes = await supabase
       .from('pets')
-      .select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, date_of_birth_source, gender_source, spayed_neutered_source, body_condition_score, target_weight_kg, previous_names, coat, ai_traits, personality, is_public, listing_type, good_with_kids, good_with_dogs, good_with_cats')
+      .select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, date_of_birth_source, gender_source, spayed_neutered_source, body_condition_score, target_weight_kg, previous_names, coat, ai_traits, personality, is_public, listing_type, good_with_kids, good_with_dogs, good_with_cats, territory, geohash, feeding_schedule, tnr_status, colony_id')
       .eq('id', petId)
       .maybeSingle();
 
     let petData = petRes.data;
     let petErr = petRes.error;
+    if (petErr && /territory|geohash|feeding_schedule|tnr_status|colony_id/i.test(petErr.message || '')) {
+      const retry = await supabase.from('pets').select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, date_of_birth_source, gender_source, spayed_neutered_source, body_condition_score, target_weight_kg, previous_names, coat, ai_traits, personality, is_public, listing_type, good_with_kids, good_with_dogs, good_with_cats').eq('id', petId).maybeSingle();
+      petData = retry.data as typeof petData; petErr = retry.error;
+    }
     if (petErr && /_source/i.test(petErr.message || '')) {
       const retry = await supabase.from('pets').select('id, name, breed, species, age_text, gender, status, description, main_photo_url, location, shelter_id, owner_id, vaccinated, spayed_neutered, microchipped, weight_kg, weight_measured_on, primary_color, secondary_color, color_notes, breed_primary, breed_secondary, is_mixed, breed_notes, date_of_birth, body_condition_score, target_weight_kg, previous_names, coat, ai_traits, personality, is_public, listing_type, good_with_kids, good_with_dogs, good_with_cats').eq('id', petId).maybeSingle();
       petData = retry.data as typeof petData; petErr = retry.error;
@@ -1107,6 +1117,8 @@ export default function PetRecordScreen() {
     setCanCare(isOwner || isCoOwner || isCurrentFoster || isOrgStaff);
     setIsPetOwner(isOwner);
     setCanWriteClinical(isOwner || isCoOwner);
+    const { data: xf } = await supabase.from('pet_transfers').select('id, invited_email, from_user, to_user, status').eq('pet_id', petId).eq('status', 'pending').maybeSingle();
+    setPendingTransfer(xf || null);
     try {
       const { data: clinicalOk } = await supabase.rpc('can_write_pet_clinical', { pid: petId });
       if (clinicalOk === true) {
@@ -1686,6 +1698,11 @@ export default function PetRecordScreen() {
 
   const saveVisibility = async (makePublic: boolean) => {
     if (!petId) return;
+    if (pet?.listing_type === 'community') {
+      showBanner('Community pets stay on the Community layer with an approximate area — they are not listed as adoptable.');
+      setVisOpen(false);
+      return;
+    }
     const { error } = await supabase.from('pets').update({
       is_public: makePublic,
       listing_type: makePublic ? 'adoptable' : 'private',
@@ -3600,7 +3617,7 @@ export default function PetRecordScreen() {
                 <Text style={styles.editBtnTxt}>Edit</Text>
               </TouchableOpacity>
             ) : null}
-            {canEdit ? (
+            {canEdit && pet.listing_type !== 'community' ? (
               <TouchableOpacity
                 style={[styles.visPill, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visPillOn : styles.visPillOff]}
                 onPress={() => setVisOpen(true)}
@@ -3610,6 +3627,10 @@ export default function PetRecordScreen() {
                   {(pet.is_public && pet.listing_type === 'adoptable') ? 'PUBLIC · adoptable' : 'NOT PUBLIC'}
                 </Text>
               </TouchableOpacity>
+            ) : pet.listing_type === 'community' ? (
+              <View style={[styles.visPill, styles.visPillOn]}>
+                <Text style={[styles.visTxt, styles.visTxtOn]}>COMMUNITY</Text>
+              </View>
             ) : (
               <View style={[styles.visPill, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visPillOn : styles.visPillOff]}>
                 <Text style={[styles.visTxt, (pet.is_public && pet.listing_type === 'adoptable') ? styles.visTxtOn : styles.visTxtOff]}>
@@ -3652,6 +3673,30 @@ export default function PetRecordScreen() {
                 ) : null}
               </View>
             </View>
+            {pendingTransfer ? (
+              <View style={styles.confirmCard}>
+                <Text style={styles.docTitle}>Transfer pending</Text>
+                <Text style={styles.confirmLine}>
+                  {pendingTransfer.from_user === user?.id
+                    ? `Waiting for ${pendingTransfer.invited_email || 'the recipient'} to accept ownership.`
+                    : 'This pet is being transferred to you. Accept from Me → My Pets.'}
+                </Text>
+                {pendingTransfer.to_user === user?.id ? (
+                  <TouchableOpacity onPress={() => router.push('/(tabs)/profile')} style={{ paddingVertical: 8 }} activeOpacity={0.85}>
+                    <Text style={styles.linkTxt}>Open My Pets</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            ) : null}
+            {pet.listing_type === 'community' ? (
+              <View style={styles.confirmCard}>
+                <Text style={styles.docTitle}>Community pet · you are the caretaker</Text>
+                {pet.territory ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Territory  </Text>{pet.territory}</Text> : null}
+                {pet.feeding_schedule ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Feeding  </Text>{pet.feeding_schedule}</Text> : null}
+                <Text style={styles.confirmLine}><Text style={styles.confirmK}>TNR  </Text>{pet.tnr_status === 'done' ? 'Done · ear-tip' : pet.tnr_status === 'scheduled' ? 'Scheduled' : 'Unknown'}</Text>
+                <Text style={styles.ovFoot}>Approximate area only (geohash-5). Exact coordinates are never stored.</Text>
+              </View>
+            ) : null}
             <VetExamCard
               exam={lastExam}
               exams={petExams}
@@ -5290,7 +5335,7 @@ export default function PetRecordScreen() {
         </Modal>
       )}
       {shareOpen && petId ? (
-        <SharePetSheet visible petId={petId} petName={pet.name || 'this pet'} onClose={() => setShareOpen(false)} />
+        <SharePetSheet visible petId={petId} petName={pet.name || 'this pet'} listingType={pet.listing_type} onClose={() => setShareOpen(false)} />
       ) : null}
       <Modal visible={visOpen} animationType="fade" transparent onRequestClose={() => setVisOpen(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setVisOpen(false)}>

@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 
 const TOKEN_KEY = 'ra_share_invite_token';
+const TRANSFER_KEY = 'ra_transfer_token';
 const NEXT_KEY = 'ra_auth_next';
 
 function store(key: string, value: string) {
@@ -28,12 +29,17 @@ function drop(key: string) {
   } catch { /* */ }
 }
 
+function originUrl() {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') return window.location.origin;
+  return 'https://rescue-army.com';
+}
+
 export function publicShareUrl(token: string) {
-  const q = encodeURIComponent(token);
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    return `${window.location.origin}/share-accept?token=${q}`;
-  }
-  return `https://rescue-army.com/share-accept?token=${q}`;
+  return `${originUrl()}/share-accept?token=${encodeURIComponent(token)}`;
+}
+
+export function publicTransferUrl(token: string) {
+  return `${originUrl()}/share-accept?token=${encodeURIComponent(token)}&kind=transfer`;
 }
 
 export function rememberShareToken(token: string) {
@@ -42,12 +48,26 @@ export function rememberShareToken(token: string) {
   store(NEXT_KEY, `/share-accept?token=${encodeURIComponent(token)}`);
 }
 
+export function rememberTransferToken(token: string) {
+  if (!token) return;
+  store(TRANSFER_KEY, token);
+  store(NEXT_KEY, `/share-accept?token=${encodeURIComponent(token)}&kind=transfer`);
+}
+
 export function readShareToken(): string | null {
   return read(TOKEN_KEY);
 }
 
+export function readTransferToken(): string | null {
+  return read(TRANSFER_KEY);
+}
+
 export function clearShareToken() {
   drop(TOKEN_KEY);
+}
+
+export function clearTransferToken() {
+  drop(TRANSFER_KEY);
 }
 
 export function peekAuthNext(): string | null {

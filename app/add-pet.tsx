@@ -12,8 +12,17 @@ import { InlineBanner } from '@/components/InlineBanner';
 import { pickImage } from '@/lib/pick-image';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
+import { geocodePlace, reverseGeocode } from '@/lib/geocode';
+import { encodeGeohash } from '@/lib/geohash';
 
 const SPECIES_OPTIONS = ['Dog', 'Cat', 'Rabbit', 'Bird', 'Other'];
+const TNR = [
+  { key: 'unknown', label: 'Unknown' },
+  { key: 'scheduled', label: 'Scheduled' },
+  { key: 'done', label: 'Done · ear-tip' },
+] as const;
+
+type RelKey = 'owner' | 'foster' | 'sponsor' | 'community';
 
 export default function AddPetScreen() {
   const { user } = useAuth();
@@ -24,7 +33,13 @@ export default function AddPetScreen() {
   const [gender, setGender] = useState('');
   const [description, setDescription] = useState('');
   const [location, setLocation] = useState('');
-  const [relationship, setRelationship] = useState<'owner' | 'foster' | 'sponsor'>('owner');
+  const [relationship, setRelationship] = useState<RelKey>('owner');
+  const [territory, setTerritory] = useState('');
+  const [feeding, setFeeding] = useState('');
+  const [tnr, setTnr] = useState<'unknown' | 'scheduled' | 'done'>('unknown');
+  const [colonyName, setColonyName] = useState('');
+  const [geoHash, setGeoHash] = useState<string | null>(null);
+  const [locating, setLocating] = useState(false);
   const [ai, setAi] = useState<any>(null);
   const [photoFile, setPhotoFile] = useState<any>(null);
   const [photoPath, setPhotoPath] = useState<string | null>(null);
@@ -32,6 +47,7 @@ export default function AddPetScreen() {
   const [loading, setLoading] = useState(false);
   const [banner, setBanner] = useState<{ message: string; kind: 'error' | 'success' | 'info' } | null>(null);
 
+  const isCommunity = relationship === 'community';
 
   const pickPhoto = async () => {
     if (!user) { setBanner({ message: 'Please sign in to add a pet.', kind: 'error' }); return; }
@@ -58,28 +74,84 @@ export default function AddPetScreen() {
     setAnalyzing(false);
   };
 
+  const hashFromQuery = async (q: string) => {
+    const loc = await geocodePlace(q);
+    if (!loc) return null;
+    return encodeGeohash(loc.lat, loc.lng, 5);
+  };
+
+  const useMyArea = async () => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setBanner({ message: 'Location is not available in this browser.', kind: 'error' });
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const hash = encodeGeohash(pos.coords.latitude, pos.coords.longitude, 5);
+        setGeoHash(hash);
+        const rev = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+        const label = [rev?.city, rev?.stateCode || rev?.state].filter(Boolean).join(', ');
+        if (label) setTerritory(label);
+        setLocating(false);
+      },
+      () => {
+        setBanner({ message: 'Could not read your area. Type a neighborhood instead.', kind: 'error' });
+        setLocating(false);
+      },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 120000 },
+    );
+  };
+
   const handleSubmit = async () => {
     if (!name.trim()) { setBanner({ message: 'Pet name is required.', kind: 'error' }); return; }
     if (!user) { setBanner({ message: 'Please sign in to add a pet.', kind: 'error' }); return; }
+    if (isCommunity && !territory.trim()) {
+      setBanner({ message: 'Community pets need an approximate territory (neighborhood or city — never an exact pin).', kind: 'error' });
+      return;
+    }
     setLoading(true);
     setBanner(null);
     try {
-      const { data, error } = await supabase.from('pets').insert({
+      let hash = geoHash;
+      const area = (isCommunity ? territory : location).trim();
+      if (isCommunity && !hash && area) hash = await hashFromQuery(area);
+
+      let colonyId: string | null = null;
+      if (isCommunity && colonyName.trim()) {
+        const { data: col } = await supabase.from('pet_colonies').insert({
+          name: colonyName.trim(),
+          territory: area || null,
+          geohash: hash,
+          created_by: user.id,
+        }).select('id').maybeSingle();
+        colonyId = col?.id || null;
+      }
+
+      const row: any = {
         name: name.trim(),
         species: species.toLowerCase(),
         breed: breed.trim() || null,
         age_text: ageText.trim() || null,
         gender: gender.trim() || null,
         description: description.trim() || null,
-        location: location.trim() || null,
+        location: isCommunity ? null : (location.trim() || null),
         is_public: false,
         availability: relationship === 'foster' ? 'foster' : 'none',
-        status: 'private',
-        listing_type: 'private',
+        status: isCommunity ? 'community' : 'private',
+        listing_type: isCommunity ? 'community' : 'private',
         owner_id: user.id,
         main_photo_url: photoPath,
         ai_traits: ai ? { ...ai, confirmed: true } : null,
-      }).select('id').single();
+      };
+      if (isCommunity) {
+        row.territory = territory.trim();
+        row.geohash = hash;
+        row.feeding_schedule = feeding.trim() || null;
+        row.tnr_status = tnr;
+        row.colony_id = colonyId;
+      }
+      const { data, error } = await supabase.from('pets').insert(row).select('id').single();
       if (error) throw error;
       if (photoPath) {
         const dest = `${data.id}/${Date.now()}.jpg`;
@@ -102,7 +174,7 @@ export default function AddPetScreen() {
       await supabase.from('pet_relationships').insert({
         pet_id: data.id,
         user_id: user.id,
-        relationship,
+        relationship: isCommunity ? 'caretaker' : relationship,
         started_on: new Date().toISOString().slice(0, 10),
       });
       router.replace(`/pet-record?petId=${data.id}`);
@@ -119,12 +191,23 @@ export default function AddPetScreen() {
         <Page>
           <Text style={styles.sectionLabel}>Relationship</Text>
           <View style={styles.speciesRow}>
-            {([['owner','My pet'],['foster','Foster pet'],['sponsor','Sponsored pet']] as const).map(([k,l]) => (
-              <TouchableOpacity key={k} style={[styles.speciesPill, relationship === k && styles.speciesPillActive]} onPress={() => setRelationship(k)} activeOpacity={0.75}>
+            {([['owner', 'My pet'], ['foster', 'Foster pet'], ['sponsor', 'Sponsored pet'], ['community', 'Community pet I care for']] as const).map(([k, l]) => (
+              <TouchableOpacity
+                key={k}
+                style={[styles.speciesPill, relationship === k && styles.speciesPillActive]}
+                onPress={() => {
+                  setRelationship(k);
+                  if (k === 'community' && species === 'Dog') setSpecies('Cat');
+                }}
+                activeOpacity={0.75}
+              >
                 <Text style={[styles.speciesPillText, relationship === k && styles.speciesPillTextActive]}>{l}</Text>
               </TouchableOpacity>
             ))}
           </View>
+          {isCommunity ? (
+            <Text style={styles.hint}>You are the caretaker. Location is stored as a geohash-5 area — never an exact pin. Medical records work the same as owned pets.</Text>
+          ) : null}
 
           <Text style={styles.sectionLabel}>Photo · AI guess</Text>
           <TouchableOpacity style={styles.photoBtn} onPress={pickPhoto} disabled={analyzing} activeOpacity={0.85}>
@@ -167,11 +250,45 @@ export default function AddPetScreen() {
           <Text style={styles.sectionLabel}>Description</Text>
           <TextInput style={[styles.input, styles.textArea]} value={description} onChangeText={setDescription} placeholder="Tell us about this pet's personality, needs, and history..." placeholderTextColor={Colors.textTertiary} multiline numberOfLines={4} textAlignVertical="top" />
 
-          <Text style={styles.sectionLabel}>Location</Text>
-          <TextInput style={styles.input} value={location} onChangeText={setLocation} placeholder="City or area" placeholderTextColor={Colors.textTertiary} />
+          {isCommunity ? (
+            <>
+              <Text style={styles.sectionLabel}>Territory · approximate *</Text>
+              <TextInput
+                style={styles.input}
+                value={territory}
+                onChangeText={(v) => { setTerritory(v); setGeoHash(null); }}
+                placeholder="Neighborhood or city — never a street address"
+                placeholderTextColor={Colors.textTertiary}
+              />
+              <TouchableOpacity style={styles.secondary} onPress={useMyArea} disabled={locating} activeOpacity={0.85}>
+                {locating ? <ActivityIndicator color={Colors.navy} /> : <Text style={styles.secondaryTxt}>Use my approximate area</Text>}
+              </TouchableOpacity>
+              {geoHash ? <Text style={styles.hint}>Area saved as geohash {geoHash} (about 5 km). Exact coordinates are discarded.</Text> : null}
+
+              <Text style={styles.sectionLabel}>Feeding schedule</Text>
+              <TextInput style={styles.input} value={feeding} onChangeText={setFeeding} placeholder="e.g. evenings near the park gate" placeholderTextColor={Colors.textTertiary} />
+
+              <Text style={styles.sectionLabel}>TNR · ear-tip</Text>
+              <View style={styles.speciesRow}>
+                {TNR.map((t) => (
+                  <TouchableOpacity key={t.key} style={[styles.speciesPill, tnr === t.key && styles.speciesPillActive]} onPress={() => setTnr(t.key)} activeOpacity={0.75}>
+                    <Text style={[styles.speciesPillText, tnr === t.key && styles.speciesPillTextActive]}>{t.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={styles.sectionLabel}>Colony (optional)</Text>
+              <TextInput style={styles.input} value={colonyName} onChangeText={setColonyName} placeholder="Group name if several cats share this territory" placeholderTextColor={Colors.textTertiary} />
+            </>
+          ) : (
+            <>
+              <Text style={styles.sectionLabel}>Location</Text>
+              <TextInput style={styles.input} value={location} onChangeText={setLocation} placeholder="City or area" placeholderTextColor={Colors.textTertiary} />
+            </>
+          )}
 
           <TouchableOpacity style={[styles.submitBtn, loading && styles.btnDisabled]} onPress={handleSubmit} disabled={loading} activeOpacity={0.85}>
-            {loading ? <ActivityIndicator color={Colors.white} size="small" /> : <Text style={styles.submitText}>Add Pet</Text>}
+            {loading ? <ActivityIndicator color={Colors.white} size="small" /> : <Text style={styles.submitText}>{isCommunity ? 'Add community pet' : 'Add Pet'}</Text>}
           </TouchableOpacity>
         </Page>
       </KeyboardAvoidingView>
@@ -182,10 +299,6 @@ export default function AddPetScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.screen },
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  topBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
-  topTitle: { flex: 1, fontSize: FontSizes.xl, fontFamily: Fonts.bold, color: Colors.text, textAlign: 'center' },
-  scrollContent: { paddingHorizontal: 20, paddingVertical: 16, paddingBottom: 60 },
   sectionLabel: { fontSize: FontSizes.sm, fontFamily: Fonts.bold, color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8, marginTop: 16 },
   input: { borderWidth: 1, borderColor: Colors.borderInput, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 14, fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.text, backgroundColor: Colors.white, marginBottom: 10 },
   textArea: { minHeight: 100, paddingTop: 14 },
@@ -194,13 +307,6 @@ const styles = StyleSheet.create({
   speciesPillActive: { borderColor: Colors.coral, backgroundColor: Colors.coralBg },
   speciesPillText: { fontSize: FontSizes.sm, fontFamily: Fonts.medium, color: Colors.textSecondary },
   speciesPillTextActive: { color: Colors.coral, fontFamily: Fonts.bold },
-  availRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
-  availPill: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999, backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.border },
-  availPillActive: { borderColor: Colors.coral, backgroundColor: Colors.coralBg },
-  availPillText: { fontSize: FontSizes.sm, fontFamily: Fonts.medium, color: Colors.textSecondary },
-  availPillTextActive: { color: Colors.coral, fontFamily: Fonts.bold },
-  switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12 },
-  switchLabel: { fontSize: FontSizes.md, fontFamily: Fonts.regular, color: Colors.textBody },
   submitBtn: { backgroundColor: Colors.coral, borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 16 },
   submitText: { fontSize: FontSizes.md, fontFamily: Fonts.bold, color: Colors.white },
   btnDisabled: { opacity: 0.6 },
@@ -211,4 +317,7 @@ const styles = StyleSheet.create({
   aiChipTeal: { borderColor: Colors.teal, backgroundColor: Colors.white },
   aiChipTxt: { fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.navy },
   aiChipTealTxt: { fontSize: FontSizes.sm, fontFamily: Fonts.semibold, color: Colors.teal },
+  hint: { fontSize: 12, fontFamily: Fonts.regular, color: Colors.textSecondary, lineHeight: 18, marginBottom: 8 },
+  secondary: { borderWidth: 1, borderColor: Colors.border, borderRadius: 12, paddingVertical: 12, alignItems: 'center', marginBottom: 8, backgroundColor: Colors.white },
+  secondaryTxt: { fontFamily: Fonts.bold, color: Colors.navy, fontSize: 13 },
 });

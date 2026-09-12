@@ -64,8 +64,8 @@ export default function NearbyMap(props: NearbyMapProps) {
               anchor={{ x: 0.5, y: 1 }}
             >
               <View style={styles.dropWrap}>
-                <View style={[styles.drop, { backgroundColor: pin.color }]}>
-                  <Text style={styles.dropTxt}>{glyphOf(pin)}</Text>
+              <View style={[styles.drop, { backgroundColor: pin.outline ? '#fff' : pin.color, borderColor: pin.outline ? pin.color : '#fff', borderWidth: pin.outline ? 3 : 2.5 }]}>
+                  <Text style={[styles.dropTxt, pin.outline ? { color: pin.color } : null]}>{glyphOf(pin)}</Text>
                 </View>
               </View>
             </Marker>

@@ -82,6 +82,7 @@ export const SUBS: Record<string, { key: string; label: string }[]> = {
   pets: [
     { key: 'own', label: 'I Own' },
     { key: 'foster', label: 'Pets I Foster' },
+    { key: 'community', label: 'Community' },
     { key: 'manage', label: 'I Manage' },
     { key: 'shared', label: 'Shared with me' },
   ],
@@ -165,3 +166,4 @@ export function dashAction(tab: string): { label: string; href: string } {
     default: return { label: 'Continue', href: '/(tabs)' };
   }
 }
+

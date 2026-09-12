@@ -7,7 +7,10 @@ import { Fonts, FontSizes } from '@/constants/Fonts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/context/AuthContext';
 import { SHARE_LEVELS } from '@/lib/admin-access';
-import { rememberShareToken, readShareToken, clearShareToken } from '@/lib/share-invite';
+import {
+  rememberShareToken, readShareToken, clearShareToken,
+  rememberTransferToken, readTransferToken, clearTransferToken,
+} from '@/lib/share-invite';
 import AppHeader from '@/components/AppHeader';
 import { Page } from '@/components/Page';
 
@@ -19,6 +22,8 @@ type Peek = {
   pet_name?: string;
   pet_photo?: string | null;
   level?: string;
+  kind?: string;
+  note?: string;
 };
 
 function oneParam(v?: string | string[]) {
@@ -34,21 +39,26 @@ function levelLabel(level?: string) {
 }
 
 export default function ShareAcceptScreen() {
-  const params = useLocalSearchParams<{ token?: string | string[] }>();
+  const params = useLocalSearchParams<{ token?: string | string[]; kind?: string | string[] }>();
+  const kindParam = oneParam(params.kind);
   const token = useMemo(() => {
     const fromRoute = oneParam(params.token);
     if (fromRoute) return fromRoute;
-    return readShareToken() || '';
-  }, [params.token]);
+    if (kindParam === 'transfer') return readTransferToken() || '';
+    return readShareToken() || readTransferToken() || '';
+  }, [params.token, kindParam]);
   const { user, loading } = useAuth();
   const router = useRouter();
   const [peek, setPeek] = useState<Peek | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const isTransfer = kindParam === 'transfer' || peek?.kind === 'transfer';
 
   useEffect(() => {
-    if (token) rememberShareToken(token);
-  }, [token]);
+    if (!token) return;
+    if (kindParam === 'transfer') rememberTransferToken(token);
+    else rememberShareToken(token);
+  }, [token, kindParam]);
 
   const loadPeek = useCallback(async () => {
     if (!token) {
@@ -56,27 +66,36 @@ export default function ShareAcceptScreen() {
       return;
     }
     setErr(null);
-    const { data, error } = await supabase.rpc('peek_pet_share', { tok: token });
-    const payload = (data || {}) as Peek;
-    if (error) {
-      const m = (error.message || '').toLowerCase();
-      if (m.includes('peek_pet_share') || m.includes('schema cache') || m.includes('does not exist')) {
-        setPeek({ ok: true });
-        return;
+    const tryTransfer = kindParam === 'transfer';
+    const rpcName = tryTransfer ? 'peek_pet_transfer' : 'peek_pet_share';
+    const first = await supabase.rpc(rpcName, { tok: token });
+    let payload = (first.data || {}) as Peek;
+    if ((!payload?.ok && tryTransfer === false) || first.error) {
+      const second = await supabase.rpc('peek_pet_transfer', { tok: token });
+      if (second.data && (second.data as Peek).ok) payload = second.data as Peek;
+      else if (!first.error && payload) { /* keep */ }
+      else if (first.error) {
+        const m = (first.error.message || '').toLowerCase();
+        if (m.includes('schema cache') || m.includes('does not exist')) {
+          setPeek({ ok: true });
+          return;
+        }
+        if (!second.data) {
+          setErr(first.error.message);
+          return;
+        }
       }
-      setErr(error.message);
-      return;
     }
     if (!payload?.ok) {
       const code = payload?.error || payload?.status || 'invalid_or_expired';
       if (code === 'accepted') setErr('This invite was already accepted.');
-      else if (code === 'revoked' || code === 'expired') setErr('This invite is no longer valid.');
+      else if (code === 'revoked' || code === 'expired' || code === 'cancelled' || code === 'declined') setErr('This invite is no longer valid.');
       else setErr('Invite is invalid or expired.');
       setPeek(payload);
       return;
     }
     setPeek(payload);
-  }, [token]);
+  }, [token, kindParam]);
 
   useEffect(() => {
     if (loading) return;
@@ -84,8 +103,13 @@ export default function ShareAcceptScreen() {
   }, [loading, loadPeek]);
 
   const goSignIn = () => {
-    if (token) rememberShareToken(token);
-    const next = `/share-accept?token=${encodeURIComponent(token)}`;
+    if (token) {
+      if (isTransfer) rememberTransferToken(token);
+      else rememberShareToken(token);
+    }
+    const next = isTransfer
+      ? `/share-accept?token=${encodeURIComponent(token)}&kind=transfer`
+      : `/share-accept?token=${encodeURIComponent(token)}`;
     router.replace(`/auth?next=${encodeURIComponent(next)}`);
   };
 
@@ -97,7 +121,8 @@ export default function ShareAcceptScreen() {
     }
     setBusy(true);
     setErr(null);
-    const { data, error } = await supabase.rpc('accept_pet_share', { tok: token });
+    const rpc = isTransfer ? 'accept_pet_transfer' : 'accept_pet_share';
+    const { data, error } = await supabase.rpc(rpc, { tok: token });
     const payload = (data || {}) as { ok?: boolean; error?: string; pet_id?: string };
     setBusy(false);
     if (error || !payload?.ok) {
@@ -110,15 +135,18 @@ export default function ShareAcceptScreen() {
       return;
     }
     clearShareToken();
+    clearTransferToken();
     router.replace(`/pet-record?petId=${payload.pet_id}`);
   };
 
-  const title = peek?.pet_name ? `Join ${peek.pet_name}` : 'Pet invite';
-  const role = levelLabel(peek?.level);
+  const title = peek?.pet_name
+    ? (isTransfer ? `Take ownership of ${peek.pet_name}` : `Join ${peek.pet_name}`)
+    : (isTransfer ? 'Ownership transfer' : 'Pet invite');
+  const role = isTransfer ? 'new owner' : levelLabel(peek?.level);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors.screen }} edges={['top']}>
-      <AppHeader title="Pet invite" showBack />
+      <AppHeader title={isTransfer ? 'Transfer' : 'Pet invite'} showBack />
       <Page>
         <View style={styles.card}>
           {peek?.pet_photo ? (
@@ -129,7 +157,9 @@ export default function ShareAcceptScreen() {
           <Text style={styles.title}>{title}</Text>
           {peek?.ok ? (
             <Text style={styles.body}>
-              You’ve been invited as <Text style={styles.em}>{role}</Text>. Accept to add this pet to your account. Nothing is shared until you accept.
+              {isTransfer
+                ? <>You will become the owner of this pet. The previous owner keeps read access for 30 days. Co-owners, caretakers, and vets stay on the record.</>
+                : <>You’ve been invited as <Text style={styles.em}>{role}</Text>. Accept to add this pet to your account. Nothing is shared until you accept.</>}
             </Text>
           ) : err ? (
             <Text style={styles.err}>{err}</Text>
@@ -139,12 +169,13 @@ export default function ShareAcceptScreen() {
               <Text style={styles.body}>Opening invite…</Text>
             </>
           )}
+          {peek?.note ? <Text style={styles.body}>{peek.note}</Text> : null}
           {peek?.ok && err ? <Text style={styles.err}>{err}</Text> : null}
 
           {peek?.ok ? (
             user ? (
               <TouchableOpacity style={[styles.primary, busy && { opacity: 0.6 }]} onPress={accept} disabled={busy} activeOpacity={0.85}>
-                {busy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.primaryT}>Accept</Text>}
+                {busy ? <ActivityIndicator color={Colors.white} /> : <Text style={styles.primaryT}>{isTransfer ? 'Accept ownership' : 'Accept'}</Text>}
               </TouchableOpacity>
             ) : (
               <TouchableOpacity style={styles.primary} onPress={goSignIn} activeOpacity={0.85}>

@@ -683,7 +683,7 @@ export function coalesceConditionOnset(conditions) {
   return [...byName.values()];
 }
 
-const PASSING_CLINIC_LINE = /(?:copy\s*to|cc\s*:|referr(?:ed|al)|ordered\s+by|prior\s+history|previously\s+(?:seen|treated)|outside\s+(?:records?|lab))/i;
+const PASSING_CLINIC_LINE = /(?:copy\s*to|cc\s*:|primary\s+rdvm|referring\s+(?:vet|veterinarian|dvm)|rdvm\s*:|referr(?:ed|al)|ordered\s+by|prior\s+history|previously\s+(?:seen|treated)|outside\s+(?:records?|lab))/i;
 const KNOWN_CLINIC_RE = /\b(BondVet|Bond\s+Vet(?:\s+Hell'?s Kitchen)?|At[- ]Home(?:\s+Veterinary)?|VEG(?:\s+Chelsea)?|VCA[^\n,]{0,40}|Banfield|BluePearl|ASPCA|Animal Medical|Dutch(?:\.com)?|InstaVet|Instavet)\b/i;
 
 function cleanClinicName(s) {
@@ -717,6 +717,8 @@ function stripPassingMentions(s) {
 /** Letterhead / logo / Medical Chart title / footer. */
 export function detectExportingPractice(text) {
   const src = String(text || '');
+  // Brand on the invoice page beats a refund-receipt letterhead (At Home).
+  if (/VEG\s*[|/I]?\s*ER\s+for\s+Pets/i.test(src)) return 'VEG ER for Pets';
   const firstService = src.search(/Service on\s+\d{1,2}\/\d{1,2}/i);
   let preamble = '';
   if (firstService > 0) preamble = src.slice(0, firstService);
@@ -1068,13 +1070,15 @@ export function latestVisit(visits) {
 }
 
 export function inferVisitType(visit, blob) {
-  if (visit?.visit_type === 'telehealth' || visit?.visit_type === 'house_call' || visit?.visit_type === 'in_person') {
+  if (visit?.visit_type === 'telehealth' || visit?.visit_type === 'house_call' || visit?.visit_type === 'in_person' || visit?.visit_type === 'ER') {
     return visit.visit_type;
   }
-  const text = `${visit?.clinic || ''} ${visit?.reason || ''} ${visit?.title || ''} ${blob || ''}`.toLowerCase();
+  const clinic = `${visit?.clinic || ''}`;
+  const text = `${clinic} ${visit?.reason || ''} ${visit?.title || ''} ${blob || ''}`.toLowerCase();
   if (/\bdutch\b|telehealth|tele-health|telemedicine|online visit|virtual (consult|visit|appointment)|video visit/.test(text)) {
     return 'telehealth';
   }
+  if (/\bveg\b|\ber for pets\b|\bemergency\b/.test(clinic.toLowerCase())) return 'ER';
   if (/house\s*call|at[- ]home veterinary|in-home visit/.test(text)) return 'house_call';
   return 'in_person';
 }
@@ -1156,16 +1160,16 @@ export function preferInvoiceOverDiet(out) {
 export function classifyInvoiceCategory(desc) {
   const s = String(desc || '').toLowerCase();
   if (/\b(rabies|fvrcp|felv|vaccine|vaccin|purevax|bordetella|dhpp|lepto|booster)\b/.test(s)) return 'vaccines';
-  if (/\b(lab|idexx|cbc|chemistry|fecal|urinalys|t4|blood|snap|pcr|panel)\b/.test(s)) return 'labs';
+  if (/\b(lab|idexx|cbc|chemistry|fecal|urinalys|t4|blood|snap|pcr|panel|radiograph|x-?ray)\b/.test(s)) return 'labs';
   if (/\b(sx|surg|spay|neuter|dental|anesthes|mass remov)\b/.test(s)) return 'surgery';
   if (/\b(board|hospitaliz|kennel)\b/.test(s)) return 'boarding';
-  if (/\b(rx|medicat|antibiotic|prescription|tablet|capsule|convenia|onsior|rimadyl|pain)\b/.test(s)) return 'meds';
-  if (/\b(exam|office visit|consultation|wellness|office call|physical|office)\b/.test(s)) return 'exam';
+  if (/\b(rx|medicat|antibiotic|prescription|tablet|capsule|convenia|onsior|rimadyl|pain|inj)\b/.test(s)) return 'meds';
+  if (/\b(exam|office visit|consultation|wellness|office call|physical|office|emergency examination)\b/.test(s)) return 'exam';
   return 'other';
 }
 
 function parseMoney(s) {
-  const n = parseFloat(String(s || '').replace(/[$,]/g, ''));
+  const n = parseFloat(String(s || '').replace(/[$,]/g, '').trim());
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
 }
 
@@ -1174,7 +1178,311 @@ function labeledMoney(text, re) {
   return m ? parseMoney(m[1]) : null;
 }
 
-/** Invoice / bill block: Invoice #, $ line items, subtotal / tax / total, Paid. */
+function isMoneyToken(tok) {
+  const raw = String(tok || '').trim();
+  if (!raw) return false;
+  const hadDollar = raw.startsWith('$');
+  const t = raw.replace(/^\$/, '').replace(/,/g, '');
+  if (/^-?\d+\.\d{2}$/.test(t)) return true;
+  if (hadDollar && /^-?\d+$/.test(t)) return true;
+  if (/^\d{1,3}(?:,\d{3})+(?:\.\d{2})?$/.test(raw.replace(/^\$/, ''))) return true;
+  return false;
+}
+
+function isQtyToken(tok) {
+  const t = String(tok || '').replace(/,/g, '');
+  if (!/^\d+(?:\.\d+)?$/.test(t)) return false;
+  const n = parseFloat(t);
+  return n > 0 && n <= 48;
+}
+
+const INVOICE_SECTION_HEADERS = [
+  { re: /^general\s+services\s*$/i, label: 'General Services' },
+  { re: /^diagnostics\s*$/i, label: 'Diagnostics' },
+  { re: /^external\s+labs?\s*$/i, label: 'External Labs' },
+  { re: /^medications?\s*$/i, label: 'Medications' },
+  { re: /^tasks?\s*$/i, label: 'Tasks' },
+  { re: /^inventory\s*$/i, label: 'Inventory' },
+  { re: /^procedures?\s*$/i, label: 'Procedures' },
+];
+
+const INVOICE_TOTALS_LINE =
+  /^(?:grand\s+)?total(?:\s+due)?$|^subtotal$|^discount$|^(?:sales\s*)?tax$|^payments?$|^payment\s+total$|^refund\s+due$|^balance(?:\s+due)?$|^amount\s+due$|^change\s+due$/i;
+
+const INVOICE_TABLE_HEADER = /^(?:order|description|qty|quantity|cost|unit(?:\s*cost)?|adj(?:ustment)?|total|amount|#)\b/i;
+
+const PAY_METHODS =
+  /\b(american express|amex|mastercard|visa|discover|carecredit|apple pay|google pay|debit|credit card|cash|check)\b/i;
+
+function collectLineMoney(text, label) {
+  const out = [];
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const t = raw.trim();
+    if (!t) continue;
+    const m = t.match(label);
+    if (!m || (m.index ?? 0) !== 0) continue;
+    const rest = t.slice(m[0].length).trim();
+    const money = rest.match(/\$?\s*(-?\d{1,3}(?:,\d{3})*(?:\.\d{2})|-?\d+\.\d{2})\s*$/);
+    if (!money) continue;
+    const n = parseMoney(money[1]);
+    if (n != null) out.push(n);
+  }
+  return out;
+}
+
+function lineMoneyLast(text, label) {
+  const all = collectLineMoney(text, label);
+  return all.length ? all[all.length - 1] : null;
+}
+
+function pickInvoiceTotal(totals, sub, discount, tax, refund) {
+  if (!totals.length) return null;
+  const expected = sub != null ? Math.round(((sub || 0) - (discount || 0) + (tax || 0)) * 100) / 100 : null;
+  const notRefund = totals.filter((n) => refund == null || Math.abs(n - refund) > 0.02);
+  const pool = notRefund.length ? notRefund : totals;
+  if (expected != null) {
+    const hit = pool.find((n) => Math.abs(n - expected) <= 0.02);
+    if (hit != null) return hit;
+  }
+  return Math.max(...pool);
+}
+
+function pickInvoiceTax(taxes) {
+  if (!taxes.length) return null;
+  const nonzero = taxes.filter((n) => n !== 0);
+  return nonzero.length ? nonzero[nonzero.length - 1] : taxes[taxes.length - 1];
+}
+
+function maskReferringBlocks(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (PASSING_CLINIC_LINE.test(lines[i])) {
+      out.push('');
+      if (i + 1 < lines.length) {
+        out.push('');
+        i += 1;
+      }
+      continue;
+    }
+    out.push(lines[i]);
+  }
+  return out.join('\n');
+}
+
+export function detectInvoiceVisitClinic(text) {
+  const src = maskReferringBlocks(text);
+  const vegLoc = src.match(/\bVEG\s+Chelsea\b/i);
+  if (vegLoc) return 'VEG Chelsea';
+  const loc = src.match(/\b(Bond\s+Vet(?:\s+Hell'?s Kitchen)?)\b/i);
+  return loc ? loc[1].replace(/\s+/g, ' ').trim() : null;
+}
+
+function cleanPersonName(s) {
+  return String(s || '')
+    .replace(/\s*,?\s*(?:D\.?V\.?M\.?|VMD)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function detectReferringVet(text) {
+  const src = String(text || '');
+  const labeled = src.match(
+    /(?:primary\s+rdvm|referring\s+(?:veterinarian|vet|dvm))\s*[:.][ \t]*(?:Dr\.?[ \t]+)?([A-Z][a-z]+(?:[ \t]+[A-Z][a-z']+){0,2})/i,
+  );
+  if (labeled) return cleanPersonName(labeled[1]);
+  const lines = src.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (!/(?:primary\s+rdvm|referring\s+(?:veterinarian|vet|dvm)|^\s*rdvm\s*$)/i.test(lines[i])) continue;
+    const afterColon = lines[i].includes(':') ? lines[i].slice(lines[i].indexOf(':') + 1) : '';
+    const tryLine = (s) => {
+      const n = String(s || '').match(/(?:Dr\.?[ \t]+)?([A-Z][a-z]+(?:[ \t]+[A-Z][a-z']+){0,2})/);
+      if (!n) return null;
+      if (/primary|referring|rdvm|copy|^vet$/i.test(n[1])) return null;
+      return cleanPersonName(n[1]);
+    };
+    const fromLabel = tryLine(afterColon);
+    if (fromLabel) return fromLabel;
+    if (i + 1 < lines.length) {
+      const next = tryLine(lines[i + 1]);
+      if (next) return next;
+    }
+  }
+  return null;
+}
+
+export function detectTreatingVet(text) {
+  const src = maskReferringBlocks(text);
+  const labeled = src.match(
+    /(?:^|\n)[ \t]*(?:Doctor|Veterinarian|Attending(?:[ \t]+(?:Veterinarian|DVM))?|Treating(?:[ \t]+(?:Veterinarian|DVM))?|Clinician)[ \t]*[:.][ \t]*(Dr\.?[ \t]+[A-Z][a-z]+(?:[ \t]+[A-Z][a-z']+){0,2}|[A-Z][a-z]+(?:[ \t]+[A-Z][a-z']+){0,2}[ \t]*,?[ \t]*DVM)/,
+  );
+  if (labeled) {
+    const raw = labeled[1].replace(/\s*,?\s*DVM\b/i, '').replace(/[ \t]+/g, ' ').trim();
+    return /^dr\.?\s+/i.test(raw) ? raw.replace(/^dr\.?\s+/i, 'Dr. ') : `Dr. ${raw}`;
+  }
+  const dr = src.match(/\bDr\.?[ \t]+([A-Z][a-z]+(?:[ \t]+[A-Z][a-z'\-]+){0,2})/);
+  if (dr) return `Dr. ${dr[1].replace(/[ \t]+/g, ' ').trim()}`;
+  return detectVet(src);
+}
+
+function formatPayMethod(raw, last4) {
+  let m = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (/american\s*express|^amex$/i.test(m)) m = 'Amex';
+  else m = m.replace(/\b\w/g, (c) => c.toUpperCase());
+  if (last4) m = `${m} \u2026${last4}`;
+  return m;
+}
+
+/** Payment method comes only from the Payments table — never guessed. */
+export function parseInvoicePayments(text) {
+  const src = String(text || '');
+  const out = [];
+  const seen = new Set();
+  const lines = src.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (!t) continue;
+    if (/^payments?\s*[:.]?\s*\$?\s*[\d,.]+$/i.test(t)) continue;
+    const window = [i > 0 ? lines[i - 1].trim() : '', t, i + 1 < lines.length ? lines[i + 1].trim() : ''].join(' ');
+    const methodHit = t.match(PAY_METHODS) || window.match(PAY_METHODS);
+    if (!methodHit) continue;
+    const dateHit = t.match(/\b(\d{1,2}\/\d{1,2}\/\d{2,4})\b/) || window.match(/\b(\d{1,2}\/\d{1,2}\/\d{2,4})\b/);
+    const last4Hit = t.match(/(?:\.{2,}|\*{2,}|\u2026|x{2,}|ending in\s*)(\d{4})\b/i)
+      || window.match(/(?:\.{2,}|\*{2,}|\u2026|x{2,}|ending in\s*)(\d{4})\b/i);
+    const moneyHit = t.match(/\$?\s*(-?\d{1,3}(?:,\d{3})*(?:\.\d{2})|-?\d+\.\d{2})\s*$/);
+    const amount = moneyHit ? parseMoney(moneyHit[1]) : null;
+    if (amount == null || amount <= 0) continue;
+    const date = dateHit ? toIso(dateHit[1]) : null;
+    const last4 = last4Hit ? last4Hit[1] : null;
+    const method = formatPayMethod(methodHit[1], last4);
+    const key = `${method.toLowerCase()}|${date}|${amount}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ method, last4, date, amount });
+  }
+  return out;
+}
+
+function skipInvoiceItemLine(t) {
+  if (!t) return true;
+  if (INVOICE_TOTALS_LINE.test(t)) return true;
+  if (INVOICE_TABLE_HEADER.test(t) && t.split(/\s+/).length <= 6) return true;
+  if (/^(invoice|date|due|patient|owner|page|client|visit date|invoice date|doctor|primary rdvm|referring|copy to|payment receipt)\b/i.test(t)) {
+    return true;
+  }
+  if (PASSING_CLINIC_LINE.test(t)) return true;
+  if (PAY_METHODS.test(t)) return true;
+  if (/,\s*[A-Z]{2}\s+\d{5}\b/.test(t) || /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*[A-Z]{2}\b/.test(t)) return true;
+  if (/^(?:grand\s+)?total\b|^subtotal\b|^discount\b|^(?:sales\s*)?tax\b|^payments?\b|^refund\b|^balance\b|^amount\s+due\b|\bsales\s*tax\b/i.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+function parseInvoiceItemRow(raw, category) {
+  const t = raw.trim();
+  if (!t || skipInvoiceItemLine(t)) return null;
+  if (INVOICE_SECTION_HEADERS.some((s) => s.re.test(t))) return null;
+
+  const tokens = t.split(/\s+/);
+  if (!tokens.length) return null;
+  const nums = [];
+  while (tokens.length && isMoneyToken(tokens[tokens.length - 1])) {
+    nums.unshift(tokens.pop());
+    if (nums.length >= 4) break;
+  }
+  if (tokens.length && nums.length && nums.length < 4 && isQtyToken(tokens[tokens.length - 1])) {
+    nums.unshift(tokens.pop());
+  }
+  const desc = tokens.join(' ').replace(/^[\-\*\d.)\s]+/, '').replace(/\s{2,}/g, ' ').trim();
+  if (!desc || desc.length < 2) return null;
+  if (/^(invoice|date|due|patient|owner|page|qty|quantity|#|order)\b/i.test(desc)) return null;
+  if (INVOICE_TOTALS_LINE.test(desc)) return null;
+
+  const parsed = nums.map((n) => parseMoney(n)).filter((n) => n != null);
+  if (!parsed.length) return null;
+
+  let qty = 1;
+  let unit_cost = null;
+  let adjustment = null;
+  let total;
+
+  if (parsed.length === 1) {
+    total = parsed[0];
+  } else if (parsed.length === 2) {
+    if (parsed[0] > 0 && parsed[0] <= 48 && Number.isInteger(parsed[0])) {
+      qty = parsed[0];
+      total = parsed[1];
+      unit_cost = total;
+    } else {
+      unit_cost = parsed[0];
+      total = parsed[1];
+    }
+  } else if (parsed.length === 3) {
+    qty = parsed[0] > 0 && parsed[0] <= 48 ? parsed[0] : 1;
+    unit_cost = parsed[1];
+    total = parsed[2];
+  } else {
+    qty = parsed[0] > 0 && parsed[0] <= 48 ? parsed[0] : 1;
+    unit_cost = parsed[1];
+    adjustment = parsed[2];
+    total = parsed[3];
+  }
+
+  if (total <= 0) return null;
+  const cat = category || classifyInvoiceCategory(desc);
+  return { description: desc, qty, unit_cost, adjustment, total, amount: total, category: cat };
+}
+
+function parseInvoiceLineItems(text) {
+  const items = [];
+  let category = '';
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const t = raw.trim();
+    if (!t) continue;
+    const header = INVOICE_SECTION_HEADERS.find((s) => s.re.test(t));
+    if (header) {
+      category = header.label;
+      continue;
+    }
+    const row = parseInvoiceItemRow(t, category);
+    if (row) items.push(row);
+  }
+  return items;
+}
+
+function invoicePageCount(text) {
+  const src = String(text || '');
+  const of = src.match(/page\s+\d+\s+of\s+(\d+)/i);
+  if (of) return parseInt(of[1], 10) || 1;
+  const pages = src.match(/^\s*page\s+\d+/gim);
+  if (pages && pages.length > 1) return pages.length;
+  return 1;
+}
+
+function drugNameFromDesc(desc) {
+  const cleaned = desc.replace(/\([^)]+\)/g, ' ').replace(/\s+/g, ' ').trim();
+  const hit = cleaned.match(/^([A-Z][a-z]+(?:[a-z]+)?)/);
+  return hit ? hit[1] : cleaned.split(/\s+/)[0];
+}
+
+function medicationsGivenFromItems(items, date) {
+  const meds = items.filter((i) => /medication/i.test(i.category) || i.category === 'meds');
+  const out = [];
+  const seen = new Set();
+  for (const m of meds) {
+    const name = drugNameFromDesc(m.description);
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name, description: m.description, given_on: date });
+  }
+  return out;
+}
+
+/** Invoice / bill block: Invoice #, $ line items, subtotal / tax / total, Paid.
+ *  2-page VEG bills print a refund receipt first (At Home / $79.42) then the invoice.
+ *  TOTAL is subtotal − discount + tax — never the refund. Payments[] come only from the Payments table. */
 export function parseInvoice(src, fallbackDate, fallbackClinic, opts = {}) {
   const text = String(src || '');
   const forced = Boolean(opts.forced);
@@ -1182,43 +1490,49 @@ export function parseInvoice(src, fallbackDate, fallbackClinic, opts = {}) {
 
   const invoice_no = (text.match(/invoice\s*(?:number|no\.?|#)\s*[:.]?\s*([A-Z0-9\-]{3,})/i) || [])[1]
     || (text.match(/#\s*(\d{3,8})\b/) || [])[1]
-    || (forced ? ((text.match(/\b(\d{4,6})\b/) || [])[1] || null) : null);
+    || (forced ? ((text.match(/\b(\d{4,8})\b/) || [])[1] || null) : null);
 
+  const visitDate = text.match(/(?:visit|service)\s*date\s*[:.]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4})/i);
   const service = text.match(/service\s*(?:date|on)\s*[:.]?\s*([A-Za-z0-9,/\s]+?\d{4})/i);
-  const invDate = text.match(/invoice\s*date\s*[:.]?\s*([A-Za-z0-9,/\s]+?\d{4})/i);
+  const invDate = text.match(/invoice\s*date\s*[:.]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4})/i);
   const due = text.match(/(?:due(?:\s+date)?)\s*[:.]?\s*([A-Za-z0-9,/\s]+?\d{4})/i);
-  const invoice_date = toIso((service && service[1]) || '')
+  const invoice_date = toIso((visitDate && visitDate[1]) || '')
+    || toIso((service && service[1]) || '')
     || toIso((invDate && invDate[1]) || '')
     || fallbackDate
     || detectDocumentDate(text)
     || toIso((due && due[1]) || '')
     || null;
-
-  let subtotal = labeledMoney(text, /subtotal\s*[:.]?\s*\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})|\d+\.\d{2})/i);
-  let tax = labeledMoney(text, /(?:sales\s*)?tax\s*[:.]?\s*\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})|\d+\.\d{2})/i);
-  let total = labeledMoney(text, /(?:^|\n)\s*(?:amount\s+due|balance(?:\s+due)?|(?<!sub)total(?:\s+due)?)\s*[:.]?\s*\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})|\d+\.\d{2})/im);
   const due_date = toIso((due && due[1]) || '') || null;
 
-  const line_items = [];
-  const skipLine = (t) => /\bsubtotal\b|\bamount due\b|\btotal due\b|^\s*total\b|\bbalance(\s+due)?\b|\b(?:sales\s*)?tax\b/i.test(t);
-  for (const rawLine of text.split(/\r?\n/)) {
-    const t = rawLine.trim();
-    if (!t || skipLine(t)) continue;
-    const hit = t.match(/^(.*\S)\s+\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2}))\s*$/)
-      || t.match(/^(.*\S)\s+(\d{1,3}(?:,\d{3})*\.\d{2})\s*$/);
-    if (!hit) continue;
-    let desc = hit[1].replace(/^[\-\*\d.)\s]+/, '').replace(/\s{2,}/g, ' ').trim();
-    if (!desc || desc.length < 2) continue;
-    if (/^(invoice|date|due|patient|owner|page|qty|quantity|#)\b/i.test(desc)) continue;
-    const amount = parseMoney(hit[2]);
-    if (amount == null || amount <= 0) continue;
-    const qtyHit = desc.match(/(\d+(?:\.\d+)?)\s*[x×]\b/i);
-    line_items.push({
-      description: desc,
-      qty: qtyHit ? parseFloat(qtyHit[1]) : 1,
-      amount,
-      category: classifyInvoiceCategory(desc),
-    });
+  const subtotal = lineMoneyLast(text, /^(?:subtotal)\b/i)
+    ?? labeledMoney(text, /subtotal\s*[:.]?\s*\$?\s*([\d,]+(?:\.\d{2})?)/i);
+  const discount = lineMoneyLast(text, /^(?:discount)\b/i)
+    ?? labeledMoney(text, /discount\s*[:.]?\s*\$?\s*([\d,]+(?:\.\d{2})?)/i);
+  const tax = pickInvoiceTax([
+    ...collectLineMoney(text, /^(?:sales\s*)?tax\b/i),
+    labeledMoney(text, /(?:sales\s*)?tax\s*[:.]?\s*\$?\s*([\d,]+(?:\.\d{2})?)/i) ?? Number.NaN,
+  ].filter((n) => Number.isFinite(n)));
+  const refund_due = lineMoneyLast(text, /^refund\s+due\b/i)
+    ?? labeledMoney(text, /refund\s+due\s*[:.]?\s*\$?\s*([\d,]+(?:\.\d{2})?)/i);
+  const payments_total = lineMoneyLast(text, /^payments?\b/i)
+    ?? labeledMoney(text, /(?:^|\n)\s*payments?\s*[:.]?\s*\$?\s*([\d,]+(?:\.\d{2})?)/im);
+  const balance = lineMoneyLast(text, /^balance(?:\s+due)?\b/i)
+    ?? labeledMoney(text, /(?:^|\n)\s*balance(?:\s+due)?\s*[:.]?\s*\$?\s*([\d,]+(?:\.\d{2})?)/im);
+
+  let sub = subtotal;
+  const line_items = parseInvoiceLineItems(text);
+  if (sub == null && line_items.length) {
+    sub = Math.round(line_items.reduce((a, x) => a + Number(x.total || x.amount || 0), 0) * 100) / 100;
+  }
+
+  const totalHits = [
+    ...collectLineMoney(text, /^(?:grand\s+)?total(?:\s+due)?\b/i),
+    ...collectLineMoney(text, /^amount\s+due\b/i),
+  ];
+  let tot = pickInvoiceTotal(totalHits, sub, discount ?? 0, tax, refund_due);
+  if (tot == null && (sub != null || tax != null || discount != null)) {
+    tot = Math.round(((sub || 0) - (discount || 0) + (tax || 0)) * 100) / 100;
   }
 
   if (!line_items.length) {
@@ -1228,6 +1542,7 @@ export function parseInvoice(src, fallbackDate, fallbackClinic, opts = {}) {
     while ((m = re.exec(text))) {
       const n = parseMoney(m[1] || m[2]);
       if (n == null || n <= 0 || n > 100000) continue;
+      if (refund_due != null && Math.abs(n - refund_due) < 0.02) continue;
       money.push(n);
     }
     const unique = [];
@@ -1236,46 +1551,90 @@ export function parseInvoice(src, fallbackDate, fallbackClinic, opts = {}) {
     }
     const small = unique.filter((n) => n > 0 && n < 30);
     const large = unique.filter((n) => n >= 30);
-    if (tax == null && small.length) tax = small[0];
-    if (subtotal == null && large.length) subtotal = large[0];
-    if (total == null && large.length) {
-      const withTax = Math.round(((large[0] + (tax || 0)) * 100)) / 100;
-      total = unique.includes(withTax) ? withTax : large[large.length - 1];
+    const taxVal = tax != null ? tax : (small.length ? small[0] : null);
+    if (sub == null && large.length) sub = large[0];
+    if (tot == null && large.length) {
+      const withTax = Math.round(((large[0] + (taxVal || 0)) * 100)) / 100;
+      tot = unique.includes(withTax) ? withTax : large[large.length - 1];
     }
     if (large.length) {
       line_items.push({
         description: 'Services',
         qty: 1,
         amount: large[0],
+        total: large[0],
+        unit_cost: large[0],
+        adjustment: null,
         category: 'exam',
       });
     }
   }
 
-  if (subtotal == null && line_items.length) {
-    subtotal = Math.round(line_items.reduce((a, x) => a + Number(x.amount || 0), 0) * 100) / 100;
+  if (sub == null && line_items.length) {
+    sub = Math.round(line_items.reduce((a, x) => a + Number(x.total || x.amount || 0), 0) * 100) / 100;
   }
-  if (total == null && (subtotal != null || tax != null)) {
-    total = Math.round(((subtotal || 0) + (tax || 0)) * 100) / 100;
+  if (tot == null && (sub != null || tax != null || discount != null)) {
+    tot = Math.round(((sub || 0) - (discount || 0) + (tax || 0)) * 100) / 100;
   }
+
+  const expected = Math.round(((sub || 0) - (discount || 0) + (tax || 0)) * 100) / 100;
+  const needs_review = tot != null && Math.abs(tot - expected) > 0.02;
   const paid = /\bpaid\b/i.test(text) && !/\b(unpaid|not paid|balance due)\b/i.test(text);
 
-  if (!invoice_no && !line_items.length && total == null) return [];
+  const issuing = detectExportingPractice(text) || fallbackClinic || null;
+  const location = detectInvoiceVisitClinic(text);
+  const vet = detectTreatingVet(text);
+  const referring_vet = detectReferringVet(text);
+  const patientHit = text.match(/(?:^|\n)\s*patient\s*[:.]?\s*([A-Za-z][^\n,]{1,40})/i);
+  const patient = patientHit ? patientHit[1].replace(/\s+/g, ' ').trim() : null;
+
+  if (!invoice_no && !line_items.length && tot == null) return [];
+
+  const payments = parseInvoicePayments(text);
+  const visit_type = /VEG|\bER\b|emergency/i.test(`${issuing || ''} ${location || ''} ${text.slice(0, 800)}`)
+    ? 'ER'
+    : 'in_person';
+  const visit = (invoice_date || location || vet)
+    ? {
+        visit_type,
+        clinic: location || issuing,
+        vet,
+        date: invoice_date,
+        event_date: invoice_date,
+        invoice_no: invoice_no ? String(invoice_no) : null,
+      }
+    : null;
 
   return [{
-    clinic: fallbackClinic || detectExportingPractice(text) || null,
+    clinic: issuing,
+    issuing_clinic: issuing,
+    location_clinic: location,
+    referring_vet,
+    vet,
     invoice_date,
     due_date,
+    document_date: invoice_date,
     invoice_no: invoice_no ? String(invoice_no) : null,
+    patient,
+    page_count: invoicePageCount(text),
     line_items,
-    subtotal,
+    subtotal: sub,
+    discount: discount ?? 0,
     tax,
-    total,
+    total: tot,
+    payments_total: payments_total ?? (payments.length ? Math.round(payments.reduce((a, p) => a + p.amount, 0) * 100) / 100 : null),
+    refund_due,
+    balance,
+    payments,
     paid,
+    needs_review,
+    visit,
+    medications_given: medicationsGivenFromItems(line_items, invoice_date),
     event_date: invoice_date,
     source: 'ai_extracted',
   }];
 }
+
 
 export const SEGMENT_TYPES = ['visit', 'vitals', 'labs', 'vaccines', 'weights', 'reminders', 'identity', 'invoice', 'narrative'];
 export const TABLE_TYPES = new Set(['weights', 'reminders', 'labs', 'invoice']);
@@ -1310,6 +1669,17 @@ export function classifySegment(seg) {
 export function segment(text) {
   const src = String(text || '');
   const exporting = detectExportingPractice(src);
+  // 2-page bills print Invoice # on the refund receipt AND the invoice. Parse as one document.
+  if (looksLikeInvoice(src) && !/Service on\s+\d{1,2}\/\d{1,2}/i.test(src)) {
+    return [{
+      type: 'invoice',
+      clinic: exporting,
+      vet: detectTreatingVet(src),
+      date: detectVisitDate(src) || detectDocumentDate(src),
+      text: src,
+      start: 0,
+    }];
+  }
   const hits = [];
   for (const marker of SEGMENT_MARKERS) {
     const re = new RegExp(marker.re.source, marker.re.flags);
@@ -1717,11 +2087,11 @@ export function pipelineCode(text) {
   if (!merged.vaccinations.length && harvested.vaccinations.length) merged.vaccinations = harvested.vaccinations;
   if (!merged.visits.length && harvested.visits.length) merged.visits = harvested.visits;
   if (!merged.labs.length && harvested.labs.length) merged.labs = harvested.labs;
-  if (!(merged.invoices || []).length) {
+  {
     const inv = parseInvoice(text, document_date, exporting);
     if (inv.length) merged.invoices = inv;
   }
-  merged.issuing_clinic = exporting || null;
+  merged.issuing_clinic = merged.invoices?.[0]?.issuing_clinic || exporting || null;
   merged.document_date = document_date || merged.identity?.document_date || null;
   if (merged.identity && !merged.identity.document_date) merged.identity.document_date = merged.document_date;
   merged.conditions = coalesceConditionOnset(merged.conditions);
@@ -1827,4 +2197,77 @@ Tax                                           $2.37
 Total                                       $202.37
 Paid
 `;
+
+/** Real VEG #3436605 is 2 pages: refund receipt (At Home / $79.42) then the invoice. */
+export const VEG_INVOICE_3436605 = `Page 1 of 2
+At Home Veterinary
+Payment receipt
+Date: 07/25/2026
+Invoice #3436605
+Patient: Gina
+Primary RDVM: Jonathan Leshanski, DVM
+Copy to: at home veterinary
+
+Amount due                                                $79.42
+Tax                                                        $0.00
+Total                                                     $79.42
+
+Page 2 of 2
+VEG | ER for Pets
+VEG Chelsea
+162 West 22nd Street
+New York, NY 10011
+
+Invoice #3436605
+Visit date: 07/24/2026
+Invoice date: 07/24/2026
+Patient: Gina
+Species: Feline
+
+Primary RDVM: Jonathan Leshanski, DVM
+Referring vet: Jonathan Leshanski
+Copy to: at home veterinary
+
+Doctor: Dr. Adrian Simon
+
+ORDER
+Description                          Qty     Cost      Adj     Total
+
+General Services
+Emergency Examination                1      295.00     0.00    295.00
+Hospitalization                      1      385.00     0.00    385.00
+IV Catheter Placement                1      125.00     0.00    125.00
+IV Fluid Therapy                     1      185.00     0.00    185.00
+
+Diagnostics
+Complete Blood Count (CBC)           1       98.00     0.00     98.00
+Chemistry Panel                      1      186.00     0.00    186.00
+Abdominal Radiographs (3 views)      1      325.00     0.00    325.00
+FeLV/FIV SNAP                        1       72.00     0.00     72.00
+
+External Labs
+Spec cPL (pancreatic lipase)         1      148.00     0.00    148.00
+
+Medications
+Dexmedetomidine 0.5 mg/mL inj        1       86.00     0.00     86.00
+Methadone 10 mg/mL inj               1       64.00     0.00     64.00
+Maropitant (Cerenia) 10 mg/mL inj    1       78.00     0.00     78.00
+
+Tasks
+Serial monitoring / TPR              1       95.00     0.00     95.00
+Treatment / injection fee            1       45.00     0.00     45.00
+
+Subtotal                                                 2,187.00
+Discount                                                     0.00
+Tax                                                         54.74
+TOTAL                                                    2,241.74
+Payments                                                 2,321.16
+Refund due                                                  79.42
+Balance                                                      0.00
+
+Payments
+Date            Method                         Amount
+07/24/2026      American Express  ...4006      2,321.16
+`;
+
 

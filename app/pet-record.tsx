@@ -2973,12 +2973,27 @@ export default function PetRecordScreen() {
           tax: inv.tax ?? null,
           total: inv.total ?? null,
           paid: typeof inv.paid === 'boolean' ? inv.paid : null,
+          payments: inv.payments || [],
+          refund_due: inv.refund_due ?? null,
+          payments_total: inv.payments_total ?? null,
+          location_clinic: inv.location_clinic || null,
+          vet: inv.vet || null,
+          referring_vet: inv.referring_vet || null,
           source: 'ai_extracted',
           author_id: user.id,
         };
         let invRes = await supabase.from('pet_invoices').insert(payload);
         if (invRes.error && /document_ids/i.test(invRes.error.message || '')) {
           delete payload.document_ids;
+          invRes = await supabase.from('pet_invoices').insert(payload);
+        }
+        if (invRes.error && /payments|refund_due|payments_total|location_clinic|referring_vet|\bvet\b/i.test(invRes.error.message || '')) {
+          delete payload.payments;
+          delete payload.refund_due;
+          delete payload.payments_total;
+          delete payload.location_clinic;
+          delete payload.vet;
+          delete payload.referring_vet;
           invRes = await supabase.from('pet_invoices').insert(payload);
         }
         if (invRes.error && /duplicate|unique/i.test(invRes.error.message || '')) invRes = { error: null } as any;
@@ -5453,13 +5468,26 @@ export default function PetRecordScreen() {
                       {inv.paid ? ' · Paid' : ''}
                     </Text>
                     {inv.clinic ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Clinic  </Text>{inv.clinic}</Text> : null}
+                    {inv.location_clinic ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Location  </Text>{inv.location_clinic}</Text> : null}
+                    {inv.vet ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Vet  </Text>{inv.vet}</Text> : null}
+                    {inv.referring_vet ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>RDVM  </Text>{inv.referring_vet}</Text> : null}
                     {inv.invoice_date ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Date  </Text>{inv.invoice_date}</Text> : null}
                     {(inv.line_items || []).map((li: any, j: number) => (
-                      <Text key={j} style={styles.confirmLine}>{li.description || li.category}  {formatUsd(li.amount)}</Text>
+                      <Text key={j} style={styles.confirmLine}>{li.description || li.category}  {formatUsd(li.amount ?? li.total)}</Text>
                     ))}
                     {inv.subtotal != null ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Subtotal  </Text>{formatUsd(inv.subtotal)}</Text> : null}
                     {inv.tax != null ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Tax  </Text>{formatUsd(inv.tax)}</Text> : null}
                     {inv.total != null ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Total  </Text>{formatUsd(inv.total)}</Text> : null}
+                    {(inv.payments || []).map((p: any, j: number) => (
+                      <Text key={`pay-${j}`} style={styles.confirmLine}>
+                        <Text style={styles.confirmK}>Payment  </Text>
+                        {p.method}{p.date ? `  ${p.date}` : ''}  {formatUsd(p.amount)}
+                      </Text>
+                    ))}
+                    {inv.payments_total != null && !(inv.payments || []).length ? (
+                      <Text style={styles.confirmLine}><Text style={styles.confirmK}>Payments  </Text>{formatUsd(inv.payments_total)}</Text>
+                    ) : null}
+                    {inv.refund_due != null ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Refund due  </Text>{formatUsd(inv.refund_due)}</Text> : null}
                   </View>
                 ))}
                 {lifestyleHasFields(extractionReview.lifestyle) ? (() => {
@@ -5508,6 +5536,20 @@ export default function PetRecordScreen() {
                       {ident.patient_id ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Patient ID  </Text>{ident.patient_id}</Text> : null}
                       {extractionReview.issuingClinic ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Issuing clinic  </Text>{extractionReview.issuingClinic}</Text> : null}
                       {extractionReview.documentDate ? <Text style={styles.confirmLine}><Text style={styles.confirmK}>Document date  </Text>{extractionReview.documentDate}</Text> : null}
+                      {(extractionReview.invoices || []).map((inv: any, i: number) => (
+                        inv?.visit ? (
+                          <Text key={`vis-${i}`} style={styles.confirmLine}>
+                            <Text style={styles.confirmK}>Visit  </Text>
+                            {[inv.visit.visit_type, inv.visit.clinic, inv.visit.vet].filter(Boolean).join(' · ')}
+                          </Text>
+                        ) : null
+                      ))}
+                      {(extractionReview.invoices || []).flatMap((inv: any) => inv.medications_given || []).length ? (
+                        <Text style={styles.confirmLine}>
+                          <Text style={styles.confirmK}>Meds given  </Text>
+                          {(extractionReview.invoices || []).flatMap((inv: any) => (inv.medications_given || []).map((m: any) => m.name)).join(', ')}
+                        </Text>
+                      ) : null}
                     </View>
                   );
                 })()}

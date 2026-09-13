@@ -32,10 +32,15 @@ import {
   stampVisitTypes,
   looksLikeInvoice,
   parseInvoice,
+  parseInvoicePayments,
   classifyInvoiceCategory,
   harvestLifestyle,
   lifestyleHasFields,
   BONDVET_INVOICE_FIXTURE,
+  VEG_INVOICE_3436605,
+  detectTreatingVet,
+  detectReferringVet,
+  detectInvoiceVisitClinic,
 } from './clinic-export.js';
 
 
@@ -602,5 +607,96 @@ Royal Canin Gastrointestinal                        $36.50
     assert.equal(lifestyleHasFields(foodOut.lifestyle), false);
     const desc = (foodOut.invoices[0].line_items || []).map((l) => l.description).join(' ');
     assert.match(desc, /Diet|Canin|exam|Office/i);
+  });
+});
+
+describe('pipeline — VEG invoice #3436605 (2-page refund + invoice)', () => {
+  const out = pipelineCode(VEG_INVOICE_3436605);
+  const inv = (out.invoices || [])[0];
+
+  it('is one invoice, not two (refund page + bill)', () => {
+    assert.equal(looksLikeInvoice(VEG_INVOICE_3436605), true);
+    assert.equal((out.invoices || []).length, 1, JSON.stringify(out.invoices));
+    const types = segment(VEG_INVOICE_3436605).map((s) => s.type);
+    assert.deepEqual(types, ['invoice']);
+  });
+
+  it('letterhead is VEG ER for Pets — never RDVM / copy-to / At Home', () => {
+    assert.equal(detectExportingPractice(VEG_INVOICE_3436605), 'VEG ER for Pets');
+    assert.equal(inv.clinic, 'VEG ER for Pets');
+    assert.equal(inv.issuing_clinic, 'VEG ER for Pets');
+    assert.equal(out.issuing_clinic, 'VEG ER for Pets');
+    assert.equal(/home/i.test(String(inv.clinic)), false);
+    assert.equal(detectInvoiceVisitClinic(VEG_INVOICE_3436605), 'VEG Chelsea');
+    assert.equal(inv.location_clinic, 'VEG Chelsea');
+  });
+
+  it('stores RDVM separately from the treating vet', () => {
+    assert.match(String(detectReferringVet(VEG_INVOICE_3436605)), /Leshanski/);
+    assert.match(String(inv.referring_vet), /Leshanski/);
+    assert.match(String(detectTreatingVet(VEG_INVOICE_3436605)), /Adrian Simon/);
+    assert.match(String(inv.vet), /Adrian Simon/);
+    assert.doesNotMatch(String(inv.vet), /Leshanski/);
+  });
+
+  it('total is TOTAL $2,241.74 — not the $79.42 refund on page 1', () => {
+    assert.equal(inv.invoice_no, '3436605');
+    assert.equal(inv.invoice_date, '2026-07-24');
+    assert.equal(inv.page_count, 2);
+    assert.equal(inv.subtotal, 2187);
+    assert.equal(inv.discount, 0);
+    assert.equal(inv.tax, 54.74);
+    assert.equal(inv.total, 2241.74);
+    assert.equal(inv.refund_due, 79.42);
+    assert.equal(inv.payments_total, 2321.16);
+    assert.equal(inv.balance, 0);
+    assert.equal(inv.needs_review, false);
+    assert.notEqual(inv.total, 79.42);
+    assert.notEqual(inv.total, inv.refund_due);
+    assert.notEqual(inv.total, inv.payments_total);
+  });
+
+  it('captures 14 ORDER rows — not a single Services $79.42 fallback', () => {
+    assert.equal(inv.line_items.length, 14, JSON.stringify(inv.line_items.map((l) => l.description)));
+    assert.equal(
+      inv.line_items.some((l) => l.description === 'Services' && Number(l.amount) === 79.42),
+      false,
+    );
+    const cats = new Set(inv.line_items.map((l) => l.category));
+    for (const c of ['General Services', 'Diagnostics', 'External Labs', 'Medications', 'Tasks']) {
+      assert.ok(cats.has(c), `missing ${c}`);
+    }
+    const names = inv.line_items.map((l) => l.description).join(' ');
+    assert.doesNotMatch(names, /Refund|Payments|Balance|Subtotal|TOTAL|Amount due/i);
+    const sum = Math.round(inv.line_items.reduce((a, l) => a + Number(l.total || l.amount || 0), 0) * 100) / 100;
+    assert.equal(sum, 2187);
+  });
+
+  it('payment method comes from the Payments table (Amex …4006) — never guessed Visa', () => {
+    const pays = parseInvoicePayments(VEG_INVOICE_3436605);
+    assert.equal(pays.length, 1, JSON.stringify(pays));
+    assert.match(pays[0].method, /Amex/i);
+    assert.match(pays[0].method, /4006/);
+    assert.doesNotMatch(pays[0].method, /Visa/i);
+    assert.equal(pays[0].last4, '4006');
+    assert.equal(pays[0].date, '2026-07-24');
+    assert.equal(pays[0].amount, 2321.16);
+    assert.equal(inv.payments.length, 1);
+    assert.match(inv.payments[0].method, /Amex/i);
+    assert.match(inv.payments[0].method, /4006/);
+    assert.doesNotMatch(JSON.stringify(inv.payments), /Visa/i);
+  });
+
+  it('links an ER visit at VEG Chelsea with Dr. Adrian Simon and the three meds given', () => {
+    assert.ok(inv.visit);
+    assert.equal(inv.visit.visit_type, 'ER');
+    assert.equal(inv.visit.clinic, 'VEG Chelsea');
+    assert.match(String(inv.visit.vet), /Adrian Simon/);
+    assert.equal(inv.visit.date, '2026-07-24');
+    const meds = (inv.medications_given || []).map((m) => m.name);
+    assert.ok(meds.some((n) => /Dexmedetomidine/i.test(n)));
+    assert.ok(meds.some((n) => /Methadone/i.test(n)));
+    assert.ok(meds.some((n) => /Maropitant/i.test(n)));
+    assert.equal(inv.medications_given.length, 3);
   });
 });

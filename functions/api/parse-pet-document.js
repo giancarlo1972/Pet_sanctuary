@@ -129,7 +129,7 @@ const SCHEMA_PARTS = {
   medications: `"medications": [{"name": "", "dose": null, "route": null, "given_on": null, "status": "active|completed"}]`,
   imaging: `"diagnostics": [{"kind": "imaging|pcr|other", "name": "", "result": null, "date": null}]`,
   insurance: `"kind": "insurance"`,
-  invoice: `"invoices": [{"clinic": null, "invoice_date": "YYYY-MM-DD or null", "invoice_no": null, "line_items": [{"description": "", "qty": 1, "amount": 0, "category": "exam|labs|vaccines|meds|surgery|boarding|other"}], "subtotal": null, "tax": null, "total": null, "paid": false}]`,
+  invoice: `"invoices": [{"clinic": null, "issuing_clinic": null, "location_clinic": null, "vet": null, "referring_vet": null, "invoice_date": "YYYY-MM-DD or null", "invoice_no": null, "line_items": [{"description": "", "qty": 1, "amount": 0, "category": "exam|labs|vaccines|meds|surgery|boarding|other"}], "subtotal": null, "discount": null, "tax": null, "total": null, "payments_total": null, "refund_due": null, "balance": null, "payments": [{"method": "from Payments table only, include last4", "date": "YYYY-MM-DD or null", "amount": 0}], "paid": false}]`,
   other: `"kind": "other"`,
 };
 
@@ -141,7 +141,7 @@ const RULE_PARTS = {
   medications: '- medications: every drug administered or prescribed (name, dose, route PO/SC/IV, date, active vs completed).',
   imaging: '- diagnostics: imaging (x-ray, ultrasound) and PCR/Idexx panels with the printed result text.',
   insurance: '- insurance: extract policy/carrier name into title and clinic; date = policy or letter date.',
-  invoice: '- invoices: Invoice #, line items with $ amounts, subtotal, tax, total, Paid. Classify each line as exam, labs, vaccines, meds, surgery, boarding, or other. Do not dump dollar amounts into labs or vaccines.',
+  invoice: '- invoices: 2-page bills print a refund receipt first (Amount due $79.42 / At Home) then the invoice. TOTAL is subtotal − discount + tax, never the refund. Clinic is letterhead (VEG | ER for Pets), never Copy to / Primary RDVM / At Home. Line items are ORDER rows (qty/cost/adj/total). Payments[] come ONLY from the Payments table (method + last4 + date + amount) — never guess Visa. Refund due and payment total are not line items.',
   other: '- other: capture leftover labeled facts in ai_note only.',
 };
 
@@ -921,11 +921,11 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
   if (!merged.vaccinations.length && harvested.vaccinations.length) merged.vaccinations = harvested.vaccinations;
   if (!merged.visits.length && harvested.visits.length) merged.visits = harvested.visits;
   if (!merged.labs.length && harvested.labs.length) merged.labs = harvested.labs;
-  if (!(merged.invoices || []).length) {
-    const inv = parseInvoice(text, document_date, exporting, { forced: forceInvoice });
+  {
+    const inv = parseInvoice(text, document_date, exporting, { forced: forceInvoice || looksLikeInvoice(text) });
     if (inv.length) merged.invoices = inv;
   }
-  merged.issuing_clinic = exporting || null;
+  merged.issuing_clinic = merged.invoices?.[0]?.issuing_clinic || exporting || null;
   merged.document_date = document_date;
   merged.conditions = coalesceConditionOnset(merged.conditions);
   stampEventDates(merged, document_date);
@@ -1038,7 +1038,7 @@ async function parseClinicExport(env, key, documentId, text, pageCount, kinds) {
     classifier_confidence: lowConfidence ? 'low' : 'high',
     segment_stats: stats,
     parse_log: logLine,
-    parse_build: process.env.CF_PAGES_COMMIT_SHA || 'invoice-beats-diet',
+    parse_build: process.env.CF_PAGES_COMMIT_SHA || 'veg-invoice-3436605',
   };
   applyKinds(out, kinds);
   if (documentId) {
@@ -1258,7 +1258,7 @@ export async function onRequestPost(context) {
       if (extractedText) {
         const harvested = harvestKnownFacts(extractedText);
         const invForced = requestedKinds(kinds)[0] === 'invoice' || looksLikeInvoice(extractedText);
-        const inv = parseInvoice(extractedText, harvested.date, harvested.clinic, { forced: invForced });
+        const inv = parseInvoice(extractedText, harvested.date, detectExportingPractice(extractedText) || harvested.clinic, { forced: invForced });
         shaped = shapeParsed(mergeParsedArrays(shaped, {
           vaccinations: harvested.vaccinations.map(normalizeVax),
           labs: harvested.labs.map(normalizeLab),
@@ -1266,11 +1266,17 @@ export async function onRequestPost(context) {
           visits: harvested.visits.map(normalizeVisit).filter(Boolean),
           lifestyle: inv.length ? null : harvested.lifestyle,
           identity: harvested.identity,
-          invoices: inv,
+          invoices: [],
           date: harvested.date,
           clinic: harvested.clinic,
           undated: [],
         }));
+        if (inv.length) {
+          shaped.invoices = inv;
+          shaped.lifestyle = null;
+          shaped.issuing_clinic = inv[0].issuing_clinic || shaped.issuing_clinic;
+          shaped.clinic = inv[0].clinic || shaped.clinic;
+        }
       }
       preferInvoiceOverDiet(shaped);
       const summaryForGaps = `${shaped.ai_note || ''}\n${extractedText ? extractedText.slice(0, 6000) : ''}`;
@@ -1342,6 +1348,8 @@ export async function onRequestPost(context) {
         page_count: pageCountIn || incomingImages.length || null,
         char_count: extractedText.length,
         parse_mode: mode,
+        parse_build: process.env.CF_PAGES_COMMIT_SHA || 'veg-invoice-3436605',
+        issuing_clinic: inv0?.issuing_clinic || shaped.issuing_clinic || null,
       }, kinds);
       if (documentId) {
         await updateDoc(env, documentId, {
@@ -1357,7 +1365,7 @@ export async function onRequestPost(context) {
     console.log('[parse-pet-document] FAIL model_error', lastErr);
     if (extractedText && extractedText.length > 80) {
       const harvested = harvestKnownFacts(extractedText);
-      const inv = parseInvoice(extractedText, harvested.date, harvested.clinic, { forced: looksLikeInvoice(extractedText) });
+      const inv = parseInvoice(extractedText, harvested.date, detectExportingPractice(extractedText) || harvested.clinic, { forced: looksLikeInvoice(extractedText) });
       const shaped = shapeParsed({
         ai_note: `Structured model failed (${lastErr}). Harvested printed facts.`,
         vaccinations: harvested.vaccinations,
@@ -1368,7 +1376,8 @@ export async function onRequestPost(context) {
         identity: harvested.identity,
         invoices: inv,
         date: harvested.date,
-        clinic: harvested.clinic,
+        clinic: inv[0]?.clinic || harvested.clinic,
+        issuing_clinic: inv[0]?.issuing_clinic || detectExportingPractice(extractedText),
         undated: [],
       });
       const logLine = logExtraction({
@@ -1402,6 +1411,8 @@ export async function onRequestPost(context) {
         page_count: pageCountIn,
         char_count: extractedText.length,
         parse_mode: mode,
+        parse_build: process.env.CF_PAGES_COMMIT_SHA || 'veg-invoice-3436605',
+        issuing_clinic: shaped.issuing_clinic || (shaped.invoices && shaped.invoices[0]?.issuing_clinic) || null,
       }, kinds);
       if (documentId) await updateDoc(env, documentId, { ai_status: 'partial', ai_summary: out });
       return Response.json(out, { headers });

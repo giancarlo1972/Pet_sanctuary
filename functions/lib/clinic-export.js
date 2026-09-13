@@ -2112,9 +2112,17 @@ export function pipelineCode(text) {
     merged.lifestyle = null;
   }
   preferInvoiceOverDiet(merged);
-  merged.date = latest?.event_date || latest?.date || harvested.date || segs[0]?.date || merged.invoices?.[0]?.invoice_date || null;
-  merged.clinic = latest?.clinic || (datedVisits.length <= 1 ? (harvested.clinic || segs[0]?.clinic || merged.invoices?.[0]?.clinic || null) : null);
-  merged.vet = latest?.vet || null;
+  if ((merged.invoices || []).length) {
+    const inv0 = merged.invoices[0];
+    merged.clinic = inv0.clinic || merged.issuing_clinic || merged.clinic;
+    merged.date = inv0.invoice_date || merged.date;
+    merged.document_date = inv0.document_date || inv0.invoice_date || merged.document_date;
+    merged.vet = inv0.vet || merged.vet;
+  } else {
+    merged.date = latest?.event_date || latest?.date || harvested.date || segs[0]?.date || merged.invoices?.[0]?.invoice_date || null;
+    merged.clinic = latest?.clinic || (datedVisits.length <= 1 ? (harvested.clinic || segs[0]?.clinic || merged.invoices?.[0]?.clinic || null) : null);
+  }
+  if (!(merged.invoices || []).length) merged.vet = latest?.vet || null;
   if (merged.identity) {
     attachDerivedAge(merged.identity, merged.document_date || latest?.event_date || latest?.date || merged.date);
   }

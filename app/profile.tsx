@@ -34,6 +34,7 @@ import { useMeChrome } from '@/lib/context/MeChromeContext';
 import { loadMeView, type MeVisualRole } from '@/lib/me-chrome';
 import MyReportRow from '@/components/MyReportRow';
 import { type MyReport, loadMyReports } from '@/lib/my-reports';
+import { campaignType, campaignTypeLabel, formatCount } from '@/lib/campaigns';
 
 type PetRel = {
   id: string; pet_id: string; pet_name: string; pet_photo: string | null;
@@ -110,7 +111,8 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
 
   const [pets, setPets] = useState<PetRel[]>([]);
   const [apps, setApps] = useState<{ id: string; pet_name: string; application_type: string; status: string }[]>([]);
-  const [campaigns, setCampaigns] = useState<{ id: string; title: string; kind: string; status: string; goal_amount?: number | null; raised_amount?: number | null }[]>([]);
+  const [campaigns, setCampaigns] = useState<{ id: string; title: string; kind: string; type?: string | null; status: string; goal_amount?: number | null; raised_amount?: number | null; signature_count?: number | null; goal_count?: number | null }[]>([]);
+  const [signedCamps, setSignedCamps] = useState<{ id: string; title: string; kind: string; type?: string | null; status: string; goal_amount?: number | null; raised_amount?: number | null; signature_count?: number | null; goal_count?: number | null }[]>([]);
   const [bookings, setBookings] = useState<any[]>([]);
   const [reviews, setReviews] = useState<any[]>([]);
   const [orgPets, setOrgPets] = useState<PetRel[]>([]);
@@ -287,8 +289,21 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
       id: a.id, application_type: a.application_type, status: a.status, pet_name: nmap[a.pet_id] || 'Pet',
     })));
 
-    const { data: camps } = await supabase.from('campaigns').select('id, title, kind, status, goal_amount, raised_amount').or(`manager_id.eq.${userId}`).order('created_at', { ascending: false }).limit(40);
-    setCampaigns((camps as any[]) || []);
+    const { data: camps, error: campErr } = await supabase.from('campaigns').select('id, title, kind, type, status, goal_amount, raised_amount, signature_count, goal_count').or(`manager_id.eq.${userId}`).order('created_at', { ascending: false }).limit(40);
+    if (campErr) {
+      const retry = await supabase.from('campaigns').select('id, title, kind, status, goal_amount, raised_amount').or(`manager_id.eq.${userId}`).order('created_at', { ascending: false }).limit(40);
+      setCampaigns((retry.data as any[]) || []);
+    } else {
+      setCampaigns((camps as any[]) || []);
+    }
+    const { data: sigs } = await supabase.from('petition_signatures').select('campaign_id').eq('user_id', userId).eq('verified', true);
+    const signedIds = [...new Set(((sigs || []) as any[]).map((s) => s.campaign_id).filter(Boolean))];
+    if (signedIds.length) {
+      const { data: signedRows } = await supabase.from('campaigns').select('id, title, kind, type, status, goal_amount, raised_amount, signature_count, goal_count').in('id', signedIds);
+      setSignedCamps((signedRows as any[]) || []);
+    } else {
+      setSignedCamps([]);
+    }
 
     const { data: bks } = await supabase.from('service_bookings').select('*').or(`provider_id.eq.${userId},client_id.eq.${userId}`).order('starts_at', { ascending: false }).limit(40);
     setBookings((bks as any[]) || []);
@@ -415,7 +430,7 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
     if (sub === 'foster') return a.application_type === 'foster';
     return a.application_type === 'volunteer';
   });
-  const campRows = campaigns.filter((c) => c.status === sub);
+  const campRows = sub === 'signed' ? signedCamps : campaigns.filter((c) => c.status === sub);
   const now = Date.now();
   const bookingRows = bookings.filter((b) => {
     const start = new Date(b.starts_at).getTime();
@@ -443,7 +458,9 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
         if (k.key === 'foster') return a.application_type === 'foster';
         return a.application_type === 'volunteer';
       }).length;
-      else if (tabKey === 'campaigns') out[k.key] = campaigns.filter((c) => c.status === k.key).length;
+      else if (tabKey === 'campaigns') out[k.key] = k.key === 'signed'
+        ? signedCamps.length
+        : campaigns.filter((c) => c.status === k.key).length;
       else if (tabKey === 'bookings') out[k.key] = bookings.filter((b) => {
         const start = new Date(b.starts_at).getTime();
         if (k.key === 'requests') return b.status === 'requested' && b.provider_id === userId;
@@ -470,7 +487,7 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
     }
     return out;
   };
-  const counts = useMemo(() => countsFor(tab), [tab, pets, apps, campaigns, bookings, orgPets, shared, provider, duty, helpReqs, orgMembers, orgs, userId]);
+  const counts = useMemo(() => countsFor(tab), [tab, pets, apps, campaigns, signedCamps, bookings, orgPets, shared, provider, duty, helpReqs, orgMembers, orgs, userId]);
 
   const year = since ? new Date(since).getFullYear() : null;
   const action = dashAction(tab);
@@ -519,8 +536,12 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
       key: a.id, title: a.pet_name, sub: a.application_type, status: a.status, href: '/(tabs)/pets', color: Colors.navy,
     }));
     if (tab === 'campaigns') return campRows.map((c) => ({
-      key: c.id, title: c.title, sub: `${c.kind}${c.goal_amount ? ` · $${c.raised_amount || 0} / $${c.goal_amount}` : ''}`,
-      status: c.status, href: '/campaign-new', color: '#8A5A00',
+      key: c.id, title: c.title,
+      sub: campaignType(c) === 'petition'
+        ? `${formatCount(c.signature_count || 0)} of ${formatCount(c.goal_count || 0)}`
+        : `${campaignTypeLabel(c)}${c.goal_amount ? ` · $${c.raised_amount || 0} / $${c.goal_amount}` : ''}`,
+      status: sub === 'signed' ? 'Signed' : c.status,
+      href: `/campaign-details?id=${c.id}`, color: '#8A5A00',
     }));
     if (tab === 'bookings') return bookingRows.map((b) => ({
       key: b.id, title: PROVIDER_SERVICES.find((x) => x.key === b.service)?.label || b.service,
@@ -563,8 +584,8 @@ function Me({ userId, email, signOut, actingIsPlatform }: {
       status: o.status || 'draft', href: '/org-admin', color: Colors.navy,
     }));
     if (tab === 'orgservices') return [];
-    if (tab === 'donors') return campaigns.filter((c) => c.kind === 'fundraising').map((c) => ({
-      key: c.id, title: c.title, sub: `$${c.raised_amount || 0} raised`, status: c.status, href: '/campaign-new', color: '#8A5A00',
+    if (tab === 'donors') return campaigns.filter((c) => campaignType(c) === 'fundraiser').map((c) => ({
+      key: c.id, title: c.title, sub: `$${c.raised_amount || 0} raised`, status: c.status, href: `/campaign-details?id=${c.id}`, color: '#8A5A00',
     }));
     return [];
   })();

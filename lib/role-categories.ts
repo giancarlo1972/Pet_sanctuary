@@ -40,7 +40,7 @@ export const ROLE_CARDS: {
     key: 'campaign',
     title: 'Campaign Manager',
     description: 'Run fundraising, adoption events and awareness campaigns for organizations.',
-    chips: ['Fundraising', 'Events', 'Awareness'],
+    chips: ['Petitions', 'Fundraising', 'Events', 'Awareness'],
     color: '#8A5A00',
     tile: '#FCF4DF',
     mark: '▲',
@@ -100,6 +100,7 @@ export const SUBS: Record<string, { key: string; label: string }[]> = {
   campaigns: [
     { key: 'active', label: 'Active' },
     { key: 'draft', label: 'Draft' },
+    { key: 'signed', label: 'Signed' },
     { key: 'ended', label: 'Ended' },
   ],
   bookings: [

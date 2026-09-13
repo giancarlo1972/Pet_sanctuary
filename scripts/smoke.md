@@ -9,7 +9,7 @@ It cannot sign in as `giancarlo.pereira@gmail.com` — no password in this
 environment.
 
 **You** run **4 (signed-out submit)** after the matching migration is
-applied, plus **6–11** and **13–15** signed in on hub-preview. Reply with PASS/FAIL
+applied, plus **6–11**, **13–15**, and **18** signed in on hub-preview. Reply with PASS/FAIL
 and the value seen, one line each. Grok pushes only after those lines
 are PASS.
 
@@ -31,6 +31,7 @@ are PASS.
 14. **Add community pet** → appears in Me → My Pets → Community, and on Nearby → Community (teal outline pin).
 15. **Transfer Nina** to a test account → accept → Nina under the new owner, Gina unaffected.
 16. **Community → Orgs:** open 3 random org cards → each detail loads (not “Organization not found”). Cards link by `organizations.id` uuid.
+18. **Sign White Coat petition** → count increments, appears in Me → My Campaigns → Signed.
 
 ## Database
 

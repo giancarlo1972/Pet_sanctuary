@@ -39,8 +39,11 @@ import SignedImage from '@/components/SignedImage';
 import { PROVIDER_SERVICES } from '@/lib/role-categories';
 import { orgSection, ORG_TILE, ORG_TYPE_LABEL, orgVerifyBadge } from '@/lib/org-type';
 import type { Story } from '@/types';
+import {
+  CAMPAIGN_SELECT, campaignType, campaignTypeLabel, formatCount, progressPct, isRemoteUrl, type Campaign,
+} from '@/lib/campaigns';
 
-type Segment = 'orgs' | 'fosters' | 'stories' | 'services';
+type Segment = 'orgs' | 'fosters' | 'stories' | 'campaigns' | 'services';
 
 interface OrgRow {
   id: string;
@@ -237,7 +240,11 @@ function PulseDot() {
 export default function CommunityScreen() {
   const { user } = useAuth();
   const params = useLocalSearchParams<{ seg?: string }>();
-  const [activeSegment, setActiveSegment] = useState<Segment>(params.seg === 'services' ? 'services' : 'orgs');
+  const [activeSegment, setActiveSegment] = useState<Segment>(
+    params.seg === 'fosters' || params.seg === 'stories' || params.seg === 'campaigns' || params.seg === 'services'
+      ? params.seg
+      : 'orgs'
+  );
   const [orgQuery, setOrgQuery] = useState('');
   const [orgs, setOrgs] = useState<OrgRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -257,9 +264,15 @@ export default function CommunityScreen() {
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [providersLoading, setProvidersLoading] = useState(false);
   const [providersError, setProvidersError] = useState(false);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [campaignsLoading, setCampaignsLoading] = useState(false);
+  const [campChip, setCampChip] = useState<'all' | 'petition' | 'fundraiser' | 'event'>('all');
+  const [signedIds, setSignedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    if (params.seg === 'services') setActiveSegment('services');
+    if (params.seg === 'fosters' || params.seg === 'stories' || params.seg === 'campaigns' || params.seg === 'services') {
+      setActiveSegment(params.seg);
+    }
   }, [params.seg]);
 
   const loadFosters = useCallback(async () => {
@@ -448,6 +461,30 @@ export default function CommunityScreen() {
     }
   }, [user?.id]);
 
+  const loadCampaigns = useCallback(async () => {
+    setCampaignsLoading(true);
+    const { data, error } = await supabase
+      .from('campaigns')
+      .select(CAMPAIGN_SELECT)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(40);
+    if (!error && data) {
+      setCampaigns((data as any[]).map((r) => ({
+        ...r,
+        org: Array.isArray(r.organizations) ? r.organizations[0] : r.organizations,
+      })));
+    } else if (error) {
+      const retry = await supabase.from('campaigns').select('id, title, kind, status, org_id, body, goal_amount, raised_amount').eq('status', 'active').limit(40);
+      setCampaigns((retry.data as any[]) || []);
+    }
+    if (user) {
+      const { data: mine } = await supabase.from('petition_signatures').select('campaign_id').eq('user_id', user.id).eq('verified', true);
+      setSignedIds(new Set(((mine || []) as any[]).map((r) => r.campaign_id)));
+    }
+    setCampaignsLoading(false);
+  }, [user]);
+
   useEffect(() => {
     let live = true;
     readOrgCache().then((cached) => {
@@ -458,7 +495,7 @@ export default function CommunityScreen() {
     return () => { live = false; };
   }, []);
 
-  useEffect(() => { loadFosters(); loadStories(); loadProviders(); }, [loadFosters, loadStories, loadProviders]);
+  useEffect(() => { loadFosters(); loadStories(); loadProviders(); loadCampaigns(); }, [loadFosters, loadStories, loadProviders, loadCampaigns]);
   useFocusEffect(useCallback(() => { loadOrgs(); }, [loadOrgs]));
 
   const getSection = (org: OrgRow) => orgSection(org.org_type);
@@ -488,6 +525,75 @@ export default function CommunityScreen() {
     }
     const n = org.pets_count || 0;
     return `${typeLabel} · ${n} pets listed`;
+  };
+
+  const filteredCampaigns = campaigns.filter((c) => {
+    if (campChip === 'all') return true;
+    return campaignType(c) === campChip;
+  });
+
+  const renderCampaignCard = (c: Campaign) => {
+    const t = campaignType(c);
+    const isPetition = t === 'petition';
+    const already = signedIds.has(c.id);
+    const count = c.signature_count || 0;
+    const goal = c.goal_count || 0;
+    const pct = progressPct(count, goal);
+    const org = c.org;
+    const badge = org ? orgVerifyBadge(org) : null;
+    return (
+      <TouchableOpacity
+        key={c.id}
+        style={styles.campCard}
+        onPress={() => router.push(`/campaign-details?id=${c.id}`)}
+        activeOpacity={0.88}
+      >
+        {c.cover_url ? (
+          isRemoteUrl(c.cover_url)
+            ? <Image source={{ uri: c.cover_url }} style={styles.campCover} />
+            : <SignedImage path={c.cover_url} style={styles.campCover} />
+        ) : (
+          <View style={styles.campCoverFallback}>
+            <Text style={styles.campCoverKicker}>{campaignTypeLabel(c).toUpperCase()}</Text>
+          </View>
+        )}
+        <View style={styles.campBody}>
+          <Text style={styles.campTitle} numberOfLines={2}>{c.title}</Text>
+          {org?.name ? (
+            <View style={styles.campOrgRow}>
+              <Text style={styles.campOrg} numberOfLines={1}>{org.name}</Text>
+              {badge?.teal ? <ShieldCheck color={Colors.teal} size={13} /> : null}
+            </View>
+          ) : null}
+          {isPetition ? (
+            <>
+              <View style={styles.campTrack}><View style={[styles.campFill, { width: `${pct}%` as any }]} /></View>
+              <Text style={styles.campCount}>{formatCount(count)} of {formatCount(goal || 0)}</Text>
+            </>
+          ) : t === 'fundraiser' ? (
+            <Text style={styles.campCount}>${formatCount(c.raised_amount || 0)} of ${formatCount(c.goal_amount || 0)}</Text>
+          ) : null}
+          {(c.tags || []).length ? (
+            <View style={styles.campTags}>
+              {(c.tags || []).slice(0, 3).map((tag) => (
+                <Text key={tag} style={styles.campTag}>#{String(tag).replace(/^#/, '')}</Text>
+              ))}
+            </View>
+          ) : null}
+          {isPetition ? (
+            <TouchableOpacity
+              style={[styles.campSign, already && styles.campSigned]}
+              onPress={() => router.push(`/campaign-details?id=${c.id}`)}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.campSignTxt}>{already ? 'Signed ✓' : 'Sign'}</Text>
+            </TouchableOpacity>
+          ) : (
+            <Text style={styles.campMore}>View →</Text>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
   };
 
   const renderOrgRow = (org: OrgRow) => {
@@ -680,6 +786,7 @@ export default function CommunityScreen() {
             loadStories();
             loadFosters();
             loadProviders();
+            loadCampaigns();
           }} />
         }
       >
@@ -689,7 +796,7 @@ export default function CommunityScreen() {
           { key: 'orgs', label: 'Orgs' },
           { key: 'fosters', label: 'Fosters' },
           { key: 'stories', label: 'Stories' },
-          { key: 'services', label: 'Services' },
+          { key: 'campaigns', label: 'Campaigns' },
         ]}
         value={activeSegment}
         onChange={setActiveSegment}
@@ -805,6 +912,52 @@ export default function CommunityScreen() {
                 </View>
               ) : (
                 stories.map(renderStoryCard)
+              )}
+            </>
+          )}
+          {activeSegment === 'campaigns' && (
+            <>
+              <View style={{ marginBottom: 16 }}>
+                <FilterChips
+                  items={[
+                    { key: 'all', label: 'All' },
+                    { key: 'petition', label: 'Petitions' },
+                    { key: 'fundraiser', label: 'Fundraisers' },
+                    { key: 'event', label: 'Events' },
+                  ]}
+                  value={campChip}
+                  onChange={setCampChip}
+                  accent="coral"
+                />
+              </View>
+              {user ? (
+                <TouchableOpacity
+                  style={styles.shareStoryCTA}
+                  onPress={() => router.push('/campaign-new')}
+                  activeOpacity={0.85}
+                >
+                  <View style={styles.shareStoryIcon}>
+                    <Plus color={Colors.coral} size={20} />
+                  </View>
+                  <View style={styles.shareStoryInfo}>
+                    <Text style={styles.shareStoryTitle}>Start a campaign</Text>
+                    <Text style={styles.shareStorySub}>Petition, fundraiser, or event — delivered to the target</Text>
+                  </View>
+                  <ChevronRight color={Colors.coral} size={18} />
+                </TouchableOpacity>
+              ) : null}
+              {campaignsLoading ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator size="large" color={Colors.coral} />
+                </View>
+              ) : filteredCampaigns.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <Sparkles color={Colors.textTertiary} size={40} />
+                  <Text style={styles.emptyTitle}>No campaigns yet</Text>
+                  <Text style={styles.emptyDesc}>Petitions, fundraisers, and events from verified orgs will show here.</Text>
+                </View>
+              ) : (
+                filteredCampaigns.map(renderCampaignCard)
               )}
             </>
           )}
@@ -1151,4 +1304,31 @@ const styles = StyleSheet.create({
     borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,
   },
   bookBtnTxt: { fontFamily: Fonts.bold, fontSize: 12, color: Colors.white },
+  campCard: {
+    backgroundColor: Colors.white, borderRadius: 14, marginBottom: 16,
+    overflow: 'hidden', borderWidth: 1, borderColor: Colors.border,
+  },
+  campCover: { width: '100%', height: 168, backgroundColor: Colors.navy },
+  campCoverFallback: {
+    width: '100%', height: 112, backgroundColor: Colors.navy,
+    justifyContent: 'flex-end', paddingHorizontal: 16, paddingBottom: 14,
+  },
+  campCoverKicker: {
+    fontFamily: INTEREB, fontWeight: '800', fontSize: 12, letterSpacing: 0.8, color: Colors.white,
+  },
+  campBody: { padding: 14, gap: 6 },
+  campTitle: { fontSize: 17, fontFamily: INTEREB, fontWeight: '800', color: Colors.navy, lineHeight: 22 },
+  campOrgRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  campOrg: { fontFamily: INTERB, fontWeight: '700', fontSize: 13, color: Colors.navy, flexShrink: 1 },
+  campTrack: { height: 8, borderRadius: 999, backgroundColor: Colors.surface, overflow: 'hidden', marginTop: 4 },
+  campFill: { height: 8, borderRadius: 999, backgroundColor: Colors.coral },
+  campCount: { fontFamily: INTERB, fontWeight: '700', fontSize: 13, color: Colors.navy },
+  campTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 2 },
+  campTag: { fontFamily: INTERB, fontWeight: '700', fontSize: 12, color: Colors.coral },
+  campSign: {
+    marginTop: 8, backgroundColor: Colors.coral, borderRadius: 12, paddingVertical: 12, alignItems: 'center',
+  },
+  campSigned: { backgroundColor: Colors.teal },
+  campSignTxt: { fontFamily: INTERB, fontWeight: '700', fontSize: 15, color: Colors.white },
+  campMore: { fontFamily: INTERB, fontWeight: '700', fontSize: 13, color: Colors.coral, marginTop: 4 },
 });

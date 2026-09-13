@@ -36,6 +36,9 @@ import { Page } from '@/components/Page';
 import SignedImage from '@/components/SignedImage';
 import HelpersNearby from '@/components/HelpersNearby';
 import { Card } from '@/components/Card';
+import {
+  CAMPAIGN_SELECT, campaignType, formatCount, progressPct, isRemoteUrl, type Campaign,
+} from '@/lib/campaigns';
 
 const FEATURED_WIDTH = 170;
 const FEATURED_HEIGHT = 210;
@@ -247,6 +250,7 @@ export default function HomeScreen() {
   const [duty, setDuty] = useState<DutyStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [homeStories, setHomeStories] = useState<HomeStory[]>([]);
+  const [trendingPetition, setTrendingPetition] = useState<Campaign | null>(null);
   const locationRef = useRef<{ lat: number; lng: number } | null>(null);
 
   const loadFeatured = useCallback(async () => {
@@ -412,10 +416,35 @@ export default function HomeScreen() {
     } catch { /* ignore */ }
   }, []);
 
+  const loadTrendingPetition = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('campaigns')
+        .select(CAMPAIGN_SELECT)
+        .eq('status', 'active')
+        .limit(20);
+      if (error || !data) { setTrendingPetition(null); return; }
+      const petitions = (data as any[])
+        .map((r) => ({ ...r, org: Array.isArray(r.organizations) ? r.organizations[0] : r.organizations }))
+        .filter((c) => campaignType(c) === 'petition');
+      if (!petitions.length) { setTrendingPetition(null); return; }
+      petitions.sort((a, b) => {
+        const pa = progressPct(a.signature_count, a.goal_count);
+        const pb = progressPct(b.signature_count, b.goal_count);
+        const nearA = pa >= 100 ? -1 : pa;
+        const nearB = pb >= 100 ? -1 : pb;
+        return nearB - nearA;
+      });
+      setTrendingPetition(petitions[0]);
+    } catch {
+      setTrendingPetition(null);
+    }
+  }, []);
+
   const loadAll = useCallback(async () => {
-    await Promise.all([loadFeatured(), loadAlerts(), loadNeeds(), loadDuty(), loadStories()]);
+    await Promise.all([loadFeatured(), loadAlerts(), loadNeeds(), loadDuty(), loadStories(), loadTrendingPetition()]);
     setLoading(false);
-  }, [loadFeatured, loadAlerts, loadNeeds, loadDuty, loadStories]);
+  }, [loadFeatured, loadAlerts, loadNeeds, loadDuty, loadStories, loadTrendingPetition]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -590,9 +619,46 @@ export default function HomeScreen() {
             )}
           </View>
 
-          {needs.length > 0 ? (
+          {needs.length > 0 || trendingPetition ? (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Trending now</Text>
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.sectionTitle}>Trending now</Text>
+                <TouchableOpacity onPress={() => router.push('/(tabs)/community?seg=campaigns')} activeOpacity={0.7}>
+                  <Text style={styles.viewAllLink}>See all</Text>
+                </TouchableOpacity>
+              </View>
+              {trendingPetition ? (
+                <TouchableOpacity
+                  style={styles.trendPet}
+                  onPress={() => router.push(`/campaign-details?id=${trendingPetition.id}`)}
+                  activeOpacity={0.88}
+                >
+                  {trendingPetition.cover_url ? (
+                    isRemoteUrl(trendingPetition.cover_url)
+                      ? <Image source={{ uri: trendingPetition.cover_url }} style={styles.trendCover} />
+                      : <SignedImage path={trendingPetition.cover_url} style={styles.trendCover} />
+                  ) : (
+                    <View style={[styles.trendCover, { backgroundColor: Colors.navy, justifyContent: 'flex-end', padding: 14 }]}>
+                      <Text style={styles.trendKicker}>PETITION</Text>
+                    </View>
+                  )}
+                  <View style={styles.trendBody}>
+                    <Text style={styles.trendKicker}>PETITION</Text>
+                    <Text style={styles.trendTitle} numberOfLines={2}>{trendingPetition.title}</Text>
+                    {trendingPetition.org?.name ? <Text style={styles.trendOrg} numberOfLines={1}>{trendingPetition.org.name}</Text> : null}
+                    <View style={styles.trendTrack}>
+                      <View style={[styles.trendFill, { width: `${progressPct(trendingPetition.signature_count, trendingPetition.goal_count)}%` as any }]} />
+                    </View>
+                    <View style={styles.trendFooter}>
+                      <Text style={styles.trendCount}>
+                        {formatCount(trendingPetition.signature_count || 0)} of {formatCount(trendingPetition.goal_count || 0)}
+                      </Text>
+                      <Text style={styles.needCta}>Sign →</Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              ) : null}
+              {needs.length > 0 ? (
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -621,6 +687,7 @@ export default function HomeScreen() {
                   );
                 })}
               </ScrollView>
+              ) : null}
             </View>
           ) : null}
 
@@ -786,6 +853,20 @@ const styles = StyleSheet.create({
   needFooter: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8, marginTop: 'auto' as const },
   needMeta: { flex: 1, fontSize: 11.5, fontFamily: Fonts.regular, color: Colors.textSecondary },
   needCta: { fontSize: 12, fontFamily: Fonts.bold, fontWeight: '700', color: Colors.coral },
+
+  trendPet: {
+    borderRadius: 16, overflow: 'hidden', backgroundColor: Colors.white,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  trendCover: { width: '100%', height: 148, backgroundColor: Colors.navy },
+  trendBody: { padding: 14, gap: 6 },
+  trendKicker: { fontSize: 11, fontFamily: Fonts.extrabold, fontWeight: '800', letterSpacing: 0.7, color: Colors.coral },
+  trendTitle: { fontSize: 17, fontFamily: Fonts.extrabold, fontWeight: '800', color: Colors.navy, lineHeight: 22 },
+  trendOrg: { fontSize: 13, fontFamily: Fonts.bold, fontWeight: '700', color: Colors.navy },
+  trendTrack: { height: 8, borderRadius: 999, backgroundColor: Colors.surface, overflow: 'hidden', marginTop: 4 },
+  trendFill: { height: 8, borderRadius: 999, backgroundColor: Colors.coral },
+  trendFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  trendCount: { fontSize: 13, fontFamily: Fonts.bold, fontWeight: '700', color: Colors.navy },
 
   featuredRow: { gap: 12, paddingRight: 8 },
   featuredCard: {
